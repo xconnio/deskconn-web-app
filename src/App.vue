@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { RouterView } from 'vue-router'
+import { RouterView, useRouter } from 'vue-router'
+import { useAuthStore } from './stores/auth'
+
+const router = useRouter()
+const authStore = useAuthStore()
+
+const handleLogout = () => {
+  authStore.logout()
+  router.push('/login')
+}
 </script>
 
 <template>
@@ -8,6 +17,13 @@ import { RouterView } from 'vue-router'
     <header class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
       <div class="container-fluid">
         <span class="navbar-brand mb-0 h1 fw-bold ps-3">Deskconn</span>
+
+        <div class="d-flex text-white align-items-center me-3" v-if="authStore.isAuthenticated">
+          <span class="me-3">Hello, {{ authStore.user?.name || authStore.user?.username }}</span>
+          <a href="#" class="text-white text-decoration-none" @click.prevent="handleLogout"
+            >Logout</a
+          >
+        </div>
       </div>
     </header>
 

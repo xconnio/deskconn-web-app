@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { Modal } from 'bootstrap'
+import { useAuthStore } from '../stores/auth'
 
+const router = useRouter()
+const authStore = useAuthStore()
 const loginSuccessModal = ref<HTMLElement | null>(null)
 let modalInstance: Modal | null = null
 
@@ -15,6 +19,12 @@ const error = ref('')
 onMounted(() => {
   if (loginSuccessModal.value) {
     modalInstance = new Modal(loginSuccessModal.value)
+    // Optional: Redirect when modal is closed via keyboard or backdrop
+    loginSuccessModal.value.addEventListener('hidden.bs.modal', () => {
+      if (authStore.isAuthenticated) {
+        router.push('/')
+      }
+    })
   }
 })
 
@@ -28,10 +38,16 @@ const handleLogin = () => {
 
   if (user) {
     error.value = ''
+    authStore.login(user)
     modalInstance?.show()
   } else {
     error.value = 'Invalid username or password'
   }
+}
+
+const handleSuccessConfirm = () => {
+  modalInstance?.hide()
+  router.push('/')
 }
 </script>
 
@@ -100,7 +116,7 @@ const handleLogin = () => {
         </div>
         <div class="modal-body">Login Successful!</div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-primary" @click="handleSuccessConfirm">Okay</button>
         </div>
       </div>
     </div>
