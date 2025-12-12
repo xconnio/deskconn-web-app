@@ -14,13 +14,17 @@ const handleLogout = () => {
 <template>
   <div class="min-vh-100 d-flex flex-column bg-light">
     <!-- Header -->
-    <header class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+    <header class="navbar navbar-expand-lg header-theme">
       <div class="container-fluid">
-        <span class="navbar-brand mb-0 h1 fw-bold ps-3">Deskconn</span>
+        <router-link to="/" class="navbar-brand mb-0 h1 fw-bold ps-3 text-dark text-decoration-none"
+          >Deskconn</router-link
+        >
 
-        <div class="d-flex text-white align-items-center me-3" v-if="authStore.isAuthenticated">
-          <span class="me-3">Hello, {{ authStore.user?.name || authStore.user?.username }}</span>
-          <a href="#" class="text-white text-decoration-none" @click.prevent="handleLogout"
+        <div class="d-flex align-items-center me-3" v-if="authStore.isAuthenticated">
+          <span class="me-3 text-dark"
+            >Hello, {{ authStore.user?.name || authStore.user?.username }}</span
+          >
+          <a href="#" class="text-danger text-decoration-none" @click.prevent="handleLogout"
             >Logout</a
           >
         </div>

@@ -1,0 +1,63 @@
+/* Custom Theme Variables overriding Bootstrap defaults */
+:root {
+  /* Image Colors */
+  --theme-yellow: #ffb800; /* Main Action */
+  --theme-dark: #2c2e33; /* Secondary Action */
+  --theme-bg: #eef0f4; /* Background */
+  --theme-border: #dde0e5; /* Separator line */
+
+  /* Bootstrap Overrides */
+  --bs-primary: var(--theme-yellow);
+  --bs-primary-rgb: 255, 184, 0;
+
+  --bs-secondary: var(--theme-dark);
+  --bs-secondary-rgb: 44, 46, 51;
+
+  --bs-body-bg: var(--theme-bg);
+}
+
+/* Global Styles */
+body {
+  background-color: var(--theme-bg) !important;
+  color: var(--theme-dark);
+}
+
+/* Header Styling */
+.header-theme {
+  background-color: var(--theme-bg) !important;
+  border-bottom: 1px solid #d1d5db; /* Light grey line separator */
+}
+
+/* Button Styling specific overrides for better contrast on yellow */
+.btn-primary {
+  background-color: var(--theme-yellow);
+  border-color: var(--theme-yellow);
+  color: #000; /* Yellow needs dark text for contrast */
+  font-weight: 500;
+}
+
+.btn-primary:hover {
+  background-color: #e5a500;
+  border-color: #e5a500;
+  color: #000;
+}
+
+.btn-secondary {
+  background-color: var(--theme-dark);
+  border-color: var(--theme-dark);
+  color: #fff;
+}
+
+.btn-secondary:hover {
+  background-color: #1a1b1e;
+  border-color: #1a1b1e;
+  color: #fff;
+}
+
+/* Card Styling */
+.card {
+  border: none;
+  border-radius: 12px;
+  /* Ensure card stands out from the light grey bg */
+  background-color: #ffffff;
+}

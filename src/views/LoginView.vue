@@ -84,7 +84,7 @@ const handleSuccessConfirm = () => {
           />
         </div>
         <div class="d-grid gap-2">
-          <button type="submit" class="btn btn-success">Login</button>
+          <button type="submit" class="btn btn-primary">Login</button>
         </div>
         <div class="text-center mt-3">
           <small
