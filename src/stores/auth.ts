@@ -96,6 +96,33 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function resendOtp() {
+    const username = pendingUsername.value
+    if (!username) {
+      throw new Error('No pending registration found.')
+    }
+
+    let s = session.value
+    if (!s) {
+      console.log('Restoring registrar session for resend OTP...')
+      s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
+    }
+
+    try {
+      const result = await s.call('io.xconn.deskconn.account.otp.resend', [username])
+      console.dir(result)
+      return result
+    } finally {
+      // We keep the session open for the verification input that follows?
+      // Actually verifyAccount creates a session if needed.
+      // Reuse logic: if we created a new session just for this call, we might want to close it or keep it for verify.
+      // Since user will verify right after, putting it in session.value is good.
+      if (!session.value) {
+        session.value = s
+      }
+    }
+  }
+
   async function login(username: string, password: string) {
     // 1. Connect via CRA
     const s = await wampService.connectWithCRA(username, password)
@@ -182,6 +209,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     register,
     verifyAccount,
+    resendOtp,
     autoLogin,
     logout,
   }
