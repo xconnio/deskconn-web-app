@@ -1,14 +1,65 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { RouterView, useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import { connectCryptosign } from 'xconn'
+import { WAMP_URL, WAMP_REALM } from './config'
 
 const router = useRouter()
 const authStore = useAuthStore()
 
 const handleLogout = () => {
   authStore.logout()
+  // Only clear the "last active" pointer, but keep the device credentials
+  // so we can reuse them if this specific user logs in again.
+  localStorage.removeItem('last_active_user')
   router.push('/login')
 }
+
+onMounted(async () => {
+  const lastUserId = localStorage.getItem('last_active_user')
+  const storedUserStr = localStorage.getItem('currentUser')
+
+  if (lastUserId && storedUserStr) {
+    const storageKey = `device_credentials_${lastUserId}`
+    const storedCredsStr = localStorage.getItem(storageKey)
+    const storedUser = JSON.parse(storedUserStr)
+    const authId = storedUser.username || storedUser.email
+
+    if (storedCredsStr && authId) {
+      const { privateKey } = JSON.parse(storedCredsStr)
+
+      try {
+        console.log('Attempting auto-login with username and persistent device key...')
+        console.log('AuthID:', authId)
+
+        const session = await connectCryptosign(WAMP_URL, WAMP_REALM, authId, privateKey)
+
+        console.log('Session connected. Fetching account details...')
+        const result = await session.call('io.xconn.deskconn.account.get')
+        const userDetails = result.args?.[0] || result
+
+        console.dir(userDetails)
+        authStore.login(userDetails)
+
+        if (
+          router.currentRoute.value.path === '/login' ||
+          router.currentRoute.value.path === '/register'
+        ) {
+          router.push('/')
+        }
+      } catch (err) {
+        console.error('Auto-login failed', err)
+        authStore.logout()
+        // If auto-login fails, maybe clear the last active user so we don't loop?
+        localStorage.removeItem('last_active_user')
+        if (router.currentRoute.value.path !== '/login') {
+          router.push('/login')
+        }
+      }
+    }
+  }
+})
 </script>
 
 <template>

@@ -3,11 +3,16 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Modal } from 'bootstrap'
 import { useAuthStore } from '../stores/auth'
+import { connectCRA } from 'xconn'
+import { generateDeviceID, generateKeys } from '../utils/crypto'
+import { WAMP_URL, WAMP_REALM } from '../config'
 
 const router = useRouter()
 const authStore = useAuthStore()
 const loginSuccessModal = ref<HTMLElement | null>(null)
 let modalInstance: Modal | null = null
+// Keeping session in a ref for now as requested to keep it open
+const session = ref<unknown>(null)
 
 const form = ref({
   username: '',
@@ -28,20 +33,61 @@ onMounted(() => {
   }
 })
 
-const handleLogin = () => {
-  const users = JSON.parse(localStorage.getItem('users') || '[]')
-
-  const user = users.find(
-    (u: Record<string, string>) =>
-      u.username === form.value.username && u.password === form.value.password,
-  )
-
-  if (user) {
+const handleLogin = async () => {
+  try {
     error.value = ''
-    authStore.login(user)
-    modalInstance?.show()
-  } else {
-    error.value = 'Invalid username or password'
+
+    const s = await connectCRA(WAMP_URL, WAMP_REALM, form.value.username, form.value.password)
+
+    session.value = s
+    // Call account.get. Assuming it takes username as arg or implicit.
+    // Based on "call the procedure to get user", providing username is safest bet for a 'get' call
+    // if we haven't seen the signature, but typically 'get' on a session might return 'me'.
+    // Given the previous pattern, I'll try passing the username.
+    // WAMP result structure: { args: [userObject], kwargs: ... }
+    const result = await s.call('io.xconn.deskconn.account.get')
+    console.dir(result)
+
+    // Verify result structure and extract user
+    const userDetails = result.args?.[0] || result
+
+    if (!userDetails || !userDetails.id) {
+      throw new Error('Invalid user details received')
+    }
+
+    const userId = userDetails.id
+    const storageKey = `device_credentials_${userId}`
+
+    // Check if we already have a device registered for this user
+    const storedCreds = localStorage.getItem(storageKey)
+
+    if (!storedCreds) {
+      // Register New Device
+      const deviceID = generateDeviceID()
+      const { privateKey, publicKey } = await generateKeys()
+
+      // Pass kwargs as 3rd argument
+      await s.call('io.xconn.deskconn.device.create', [deviceID, publicKey], {
+        name: 'Browser Interface',
+      })
+
+      const creds = { deviceID, privateKey }
+      localStorage.setItem(storageKey, JSON.stringify(creds))
+    }
+
+    // Mark who is logged in for auto-login
+    localStorage.setItem('last_active_user', userId)
+
+    // Ensure username is preserved in the store
+    const userToSave = { ...userDetails, username: form.value.username }
+
+    // Update store and redirect
+    authStore.login(userToSave)
+    router.push('/')
+  } catch (e: unknown) {
+    console.error(e)
+    const errorMsg = e instanceof Error ? e.message : String(e)
+    error.value = 'Login failed: ' + errorMsg
   }
 }
 

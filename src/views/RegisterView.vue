@@ -1,29 +1,48 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { connectCryptosign } from 'xconn'
+import { WAMP_URL, WAMP_REALM, REGISTRATION_AUTHID, REGISTRATION_SECRET } from '../config'
 
 const router = useRouter()
-
 const form = ref({
   username: '',
   name: '',
   password: '',
 })
 
-const handleRegister = () => {
-  const users = JSON.parse(localStorage.getItem('users') || '[]')
+const handleRegister = async () => {
+  try {
+    const session = await connectCryptosign(
+      WAMP_URL,
+      WAMP_REALM,
+      REGISTRATION_AUTHID,
+      REGISTRATION_SECRET,
+    )
 
-  // Check if user already exists
-  const existingUser = users.find((u: Record<string, string>) => u.username === form.value.username)
-  if (existingUser) {
-    alert('Username already exists!')
-    return
+    const result = await session.call('io.xconn.deskconn.account.create', [
+      form.value.username,
+      form.value.name,
+      'user',
+      form.value.password,
+    ])
+
+    await session.close()
+
+    console.dir(result)
+    // Keeping the redirect for now, though user only asked to print response.
+    // I won't redirect immediately to allow user to see console if they want,
+    // or arguably I should redirect on success.
+    // The user said: "once we get response please print it using console.dir so then I can guide you further what we want to acheive next"
+    // So I will comment out the redirect to pause here.
+    // router.push('/login')
+    // alert('Registration request sent. Check console for response.')
+    // Redirecting to login as per user request
+    router.push('/login')
+  } catch (err) {
+    console.error('Registration failed', err)
+    alert('Registration failed: ' + err)
   }
-
-  users.push(form.value)
-  localStorage.setItem('users', JSON.stringify(users))
-
-  router.push('/login')
 }
 </script>
 
