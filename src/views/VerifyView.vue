@@ -113,54 +113,65 @@ const handleOnChange = () => {
 </script>
 
 <template>
-  <div class="card shadow-sm">
-    <div class="card-body p-4 text-center">
-      <h3 class="card-title mb-3">Verify Your Account</h3>
-      <p class="text-muted mb-4">
-        Enter the 6-digit code sent to your email/device for user
-        <strong>{{ authStore.pendingUsername }}</strong>
-      </p>
+  <div class="row justify-content-center align-items-center flex-grow-1 w-100 m-0">
+    <div class="col-md-6 col-lg-4">
+      <div class="card shadow-lg border-0 fade-in-up">
+        <div class="card-body p-5 text-center">
+          <h3 class="card-title fw-bold mb-3">Verify Your Account</h3>
+          <p class="text-muted mb-4">
+            Enter the 6-digit code sent to your email/device for user
+            <strong class="text-dark">{{ authStore.pendingUsername }}</strong>
+          </p>
 
-      <div v-if="error" class="alert alert-danger" role="alert">
-        {{ error }}
-      </div>
-
-      <div class="d-flex justify-content-center mb-4">
-        <v-otp-input
-          ref="otpInput"
-          input-classes="otp-input form-control text-center mx-1"
-          separator=""
-          :num-inputs="6"
-          :should-auto-focus="true"
-          :is-input-num="true"
-          :conditionalClass="['one', 'two', 'three', 'four', 'five', 'six']"
-          @on-change="handleOnChange"
-          @on-complete="handleOnComplete"
-        />
-      </div>
-
-      <div v-if="isLoading" class="spinner-border text-primary" role="status">
-        <span class="visually-hidden">Verifying...</span>
-      </div>
-
-      <div class="mt-3">
-        <small class="text-muted">
-          Didn't receive the code?
-          <a
-            href="#"
-            @click.prevent="handleResend"
-            :class="{ 'disabled text-muted': !canResend }"
-            :style="{ pointerEvents: !canResend ? 'none' : 'auto' }"
+          <div
+            v-if="error"
+            class="alert alert-danger d-flex align-items-center justify-content-center"
+            role="alert"
           >
-            Resend Code
-          </a>
-          <span v-if="!canResend" class="ms-1">({{ timeLeft }}s)</span>
-          <span v-if="resendSuccess" class="text-success ms-2 fw-bold">Sent!</span>
-        </small>
-        <div class="mt-2">
-          <small class="text-muted"
-            ><a href="#" @click.prevent="router.push('/register')">Register again</a></small
-          >
+            <span class="text-break">{{ error }}</span>
+          </div>
+
+          <div class="d-flex justify-content-center mb-4">
+            <v-otp-input
+              ref="otpInput"
+              input-classes="otp-input form-control text-center mx-1 fs-4 fw-bold"
+              separator=""
+              :num-inputs="6"
+              :should-auto-focus="true"
+              :is-input-num="true"
+              :conditionalClass="['one', 'two', 'three', 'four', 'five', 'six']"
+              @on-change="handleOnChange"
+              @on-complete="handleOnComplete"
+            />
+          </div>
+
+          <div v-if="isLoading" class="spinner-border text-primary mb-3" role="status">
+            <span class="visually-hidden">Verifying...</span>
+          </div>
+
+          <div class="mt-3">
+            <small class="text-muted d-block mb-2">
+              Didn't receive the code?
+              <a
+                href="#"
+                @click.prevent="handleResend"
+                class="fw-bold"
+                :class="{ 'disabled text-muted': !canResend, 'text-primary': canResend }"
+                :style="{ pointerEvents: !canResend ? 'none' : 'auto' }"
+              >
+                Resend Code
+              </a>
+              <span v-if="timeLeft > 0" class="ms-1">({{ timeLeft }}s)</span>
+              <span v-if="resendSuccess" class="text-success ms-2 fw-bold">Sent!</span>
+            </small>
+
+            <small class="text-muted">
+              Wrong username?
+              <a href="#" @click.prevent="router.push('/register')" class="fw-bold"
+                >Register again</a
+              >
+            </small>
+          </div>
         </div>
       </div>
     </div>
@@ -169,19 +180,24 @@ const handleOnChange = () => {
 
 <style scoped>
 .otp-input {
-  width: 40px;
-  height: 40px;
-  padding: 5px;
-  margin: 0 5px;
-  font-size: 20px;
-  border-radius: 4px;
-  border: 1px solid rgba(0, 0, 0, 0.3);
+  width: 50px;
+  height: 60px;
+  padding: 0;
+  margin: 0 4px; /* Slightly reduced margin to fit 6 inputs in col-lg-4 */
+  font-size: 1.5rem;
+  line-height: 60px;
+  font-weight: 700;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
   text-align: center;
+  background-color: #fff;
+  transition: all 0.2s ease;
 }
 /* Focus style handled by bootstrap form-control mostly, but we can enhance */
 .otp-input:focus {
   border-color: var(--bs-primary);
-  box-shadow: 0 0 0 0.25rem rgba(var(--bs-primary-rgb), 0.25);
+  box-shadow: 0 0 0 4px rgba(255, 184, 0, 0.25);
+  transform: translateY(-2px);
   outline: 0;
 }
 </style>

@@ -57,15 +57,9 @@ onMounted(async () => {
     </header>
 
     <!-- Main Content -->
-    <main class="flex-grow-1 d-flex align-items-center justify-content-center py-4">
-      <div class="container">
-        <div class="row justify-content-center">
-          <div class="col-12 col-md-6 col-lg-5 col-xl-4">
-            <!-- Views render the Card content -->
-            <RouterView />
-          </div>
-        </div>
-      </div>
+    <main class="flex-grow-1 d-flex flex-column">
+      <!-- Views are now responsible for their own layout (containers, centering, etc) -->
+      <RouterView />
     </main>
   </div>
 </template>

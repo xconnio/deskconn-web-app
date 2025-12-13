@@ -11,11 +11,19 @@ let modalInstance: Modal | null = null
 
 // Form State
 const form = ref({
-  username: '',
+  email: '',
   password: '',
 })
 
 const error = ref('')
+
+const validateEmail = (email: string) => {
+  return String(email)
+    .toLowerCase()
+    .match(
+      /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/,
+    )
+}
 
 onMounted(() => {
   if (loginSuccessModal.value) {
@@ -32,8 +40,18 @@ const handleLogin = async () => {
   try {
     error.value = ''
 
+    if (!form.value.email || !validateEmail(form.value.email)) {
+      error.value = 'Please enter a valid email address.'
+      return
+    }
+
+    if (!form.value.password) {
+      error.value = 'Password is required.'
+      return
+    }
+
     // Call store action
-    await authStore.login(form.value.username, form.value.password)
+    await authStore.login(form.value.email, form.value.password)
 
     // Show modal or redirect? Project says "if login succeed don't show any alert and redirect to root path"
     // So I will just redirect. The modal was from previous iteration but might be removable now.
@@ -53,46 +71,65 @@ const handleSuccessConfirm = () => {
 </script>
 
 <template>
-  <div class="card shadow-sm">
-    <div class="card-body p-4">
-      <h3 class="card-title text-center mb-4">Login</h3>
+  <div class="row justify-content-center align-items-center flex-grow-1 w-100 m-0">
+    <div class="col-md-6 col-lg-4">
+      <div class="card shadow-lg border-0 fade-in-up">
+        <div class="card-body p-5">
+          <div class="text-center mb-5">
+            <h3 class="card-title fw-bold">Welcome Back</h3>
+            <p class="text-muted text-sm">Login to your account</p>
+          </div>
 
-      <div v-if="error" class="alert alert-danger" role="alert">
-        {{ error }}
+          <div v-if="error" class="alert alert-danger d-flex align-items-center" role="alert">
+            <span>{{ error }}</span>
+          </div>
+
+          <form @submit.prevent="handleLogin">
+            <div class="mb-4">
+              <label for="email" class="form-label">Email</label>
+              <input
+                type="email"
+                class="form-control form-control-lg"
+                id="email"
+                v-model="form.email"
+                required
+                placeholder="name@example.com"
+                autocomplete="email"
+              />
+            </div>
+            <div class="mb-4">
+              <label for="password" class="form-label">Password</label>
+              <input
+                type="password"
+                class="form-control form-control-lg"
+                id="password"
+                v-model="form.password"
+                required
+                placeholder="••••••••"
+                autocomplete="current-password"
+              />
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center mb-4">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="rememberMe" />
+                <label class="form-check-label text-muted" for="rememberMe"> Remember me </label>
+              </div>
+              <a href="#" class="text-primary text-decoration-none small fw-bold"
+                >Forgot password?</a
+              >
+            </div>
+
+            <div class="d-grid gap-2 mt-4">
+              <button type="submit" class="btn btn-primary btn-lg">Login</button>
+            </div>
+            <div class="text-center mt-4">
+              <span class="text-muted">Don't have an account? </span>
+              <router-link to="/register" class="fw-bold">Sign up</router-link>
+            </div>
+          </form>
+        </div>
       </div>
-
-      <form @submit.prevent="handleLogin">
-        <div class="mb-3">
-          <label for="username" class="form-label">Username</label>
-          <input
-            type="text"
-            class="form-control"
-            id="username"
-            v-model="form.username"
-            required
-            placeholder="Enter your username"
-          />
-        </div>
-        <div class="mb-3">
-          <label for="password" class="form-label">Password</label>
-          <input
-            type="password"
-            class="form-control"
-            id="password"
-            v-model="form.password"
-            required
-            placeholder="Enter your password"
-          />
-        </div>
-        <div class="d-grid gap-2">
-          <button type="submit" class="btn btn-primary">Login</button>
-        </div>
-        <div class="text-center mt-3">
-          <small
-            >Don't have an account? <router-link to="/register">Register here</router-link></small
-          >
-        </div>
-      </form>
     </div>
   </div>
 

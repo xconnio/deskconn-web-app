@@ -1,8 +1,8 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { wampService, type WampSession } from '../services/wamp'
+import { type WampSession } from '../services/wamp'
+import { authService } from '../services/authService'
 import { generateDeviceID, generateKeys } from '../utils/crypto'
-import { REGISTRATION_AUTHID, REGISTRATION_SECRET } from '../config'
 
 export interface User {
   id: string
@@ -35,16 +35,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Actions
   async function register(form: { username: string; name: string; password: string }) {
-    // Connect with registrar credentials
-    const s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
-
     try {
-      const result = await s.call('io.xconn.deskconn.account.create', [
-        form.username,
-        form.name,
-        'user',
-        form.password,
-      ])
+      const { result, session: s } = await authService.register(form)
       console.dir(result)
 
       // Store session and username for verification step
@@ -54,9 +46,7 @@ export const useAuthStore = defineStore('auth', () => {
 
       return result
     } catch (err) {
-      // Close session on failure
       session.value = null
-      await s.close().catch(console.error)
       throw err
     }
   }
@@ -67,30 +57,36 @@ export const useAuthStore = defineStore('auth', () => {
       throw new Error('No pending registration found.')
     }
 
-    // Ensure we have a valid registrar session
     let s = session.value
 
+    // If no session, the service helper inside won't work exactly as the store did
+    // because the store logic was "if !s, connect, then call, then close".
+    // We will handle the connection logic here by checking session.value.
+
+    let createdNewSession = false
     if (!s) {
       console.log('Restoring registrar session for verification...')
-      s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
+      s = await authService.getRegistrarSession()
+      createdNewSession = true
     }
 
     try {
+      // Direct call using the session
       const result = await s.call('io.xconn.deskconn.account.verify', [username, code])
       console.dir(result)
 
       // Verification successful
-      // Clear pending state
       pendingUsername.value = null
       localStorage.removeItem('pending_verification_user')
 
       return result
     } finally {
-      // Close the registrar session
       if (s) {
+        // If we created a temporary session, or if we want to clean up anyway:
+        // The original logic closed it.
         await s.close().catch(console.error)
       }
-      if (session.value === s) {
+      if (session.value === s || createdNewSession) {
         session.value = null
       }
     }
@@ -102,44 +98,28 @@ export const useAuthStore = defineStore('auth', () => {
       throw new Error('No pending registration found.')
     }
 
-    let s = session.value
-    if (!s) {
-      console.log('Restoring registrar session for resend OTP...')
-      s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
-    }
-
     try {
-      const result = await s.call('io.xconn.deskconn.account.otp.resend', [username])
+      const { result, session: s } = await authService.resendOtp(session.value, username)
       console.dir(result)
-      return result
-    } finally {
-      // We keep the session open for the verification input that follows?
-      // Actually verifyAccount creates a session if needed.
-      // Reuse logic: if we created a new session just for this call, we might want to close it or keep it for verify.
-      // Since user will verify right after, putting it in session.value is good.
+
+      // Update session if it was restored/created
       if (!session.value) {
         session.value = s
       }
+      return result
+    } catch (err) {
+      throw err
     }
   }
 
   async function login(username: string, password: string) {
-    // 1. Connect via CRA
-    const s = await wampService.connectWithCRA(username, password)
+    // 1. Connect via CRA & Get Account
+    const { session: s, userDetails } = await authService.login(username, password)
     session.value = s
 
-    // 2. Get Account Details
-    const result = await s.call('io.xconn.deskconn.account.get')
-    console.dir(result)
+    console.dir(userDetails)
 
-    // Verify result structure and extract user
-    const userDetails = result.args?.[0] || result
-
-    if (!userDetails || !userDetails.id) {
-      throw new Error('Invalid user details received')
-    }
-
-    // 3. Device Check & Registration
+    // 2. Device Check & Registration
     const userId = userDetails.id
     const storageKey = `device_credentials_${userId}`
     const storedCredsStr = localStorage.getItem(storageKey)
@@ -149,17 +129,15 @@ export const useAuthStore = defineStore('auth', () => {
       const deviceID = generateDeviceID()
       const { privateKey, publicKey } = await generateKeys()
 
-      await s.call('io.xconn.deskconn.device.create', [deviceID, publicKey], {
-        name: 'Browser Interface',
-      })
+      await authService.registerDevice(s, deviceID, publicKey)
 
       const creds = { deviceID, privateKey }
       localStorage.setItem(storageKey, JSON.stringify(creds))
     }
 
-    // 4. Update State
+    // 3. Update State
     localStorage.setItem('last_active_user', userId)
-    const userToSave = { ...userDetails, username } // Ensure username is preserved
+    const userToSave = { ...userDetails, username }
     setUser(userToSave)
   }
 
@@ -178,20 +156,21 @@ export const useAuthStore = defineStore('auth', () => {
 
     const { privateKey } = JSON.parse(storedCredsStr)
 
-    // Connect with stored credentials
-    const s = await wampService.connectWithCryptosign(authId, privateKey)
-    session.value = s
+    try {
+      // Connect with stored credentials
+      const { session: s, userDetails } = await authService.autoLogin(authId, privateKey)
+      session.value = s
 
-    // Fetch fresh details
-    const result = await s.call('io.xconn.deskconn.account.get')
-    const userDetails = result.args?.[0] || result
+      console.dir(userDetails)
+      // Update local user state in case details changed on server
+      const userToSave = { ...userDetails, username: authId }
+      setUser(userToSave)
 
-    console.dir(userDetails)
-    // Update local user state in case details changed on server
-    const userToSave = { ...userDetails, username: authId }
-    setUser(userToSave)
-
-    return true
+      return true
+    } catch (e) {
+      console.error('Auto-login failed', e)
+      return false
+    }
   }
 
   function logout() {
