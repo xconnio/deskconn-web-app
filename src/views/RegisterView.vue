@@ -17,8 +17,8 @@ const handleRegister = async () => {
     // Call store action
     await authStore.register(form.value)
 
-    // Redirecting to login as per user request
-    router.push('/login')
+    // Redirecting to verify as per new flow
+    router.push('/verify')
   } catch (err) {
     console.error('Registration failed', err)
     alert('Registration failed: ' + err)

@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
+import VerifyView from '../views/VerifyView.vue'
 import HomeView from '../views/HomeView.vue'
 import { useAuthStore } from '../stores/auth'
 
@@ -23,6 +24,12 @@ const router = createRouter({
       path: '/register',
       name: 'register',
       component: RegisterView,
+      meta: { requiresGuest: true },
+    },
+    {
+      path: '/verify',
+      name: 'verify',
+      component: VerifyView,
       meta: { requiresGuest: true },
     },
   ],

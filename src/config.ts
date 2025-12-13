@@ -1,4 +1,4 @@
-export const WAMP_URL = 'ws://localhost:8080/ws'
+export const WAMP_URL = 'ws://192.168.0.176:8080/ws'
 export const WAMP_REALM = 'io.xconn.deskconn'
 
 // Registration specific credentials

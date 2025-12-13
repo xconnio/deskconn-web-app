@@ -18,6 +18,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   const user = ref<User | null>(JSON.parse(localStorage.getItem('currentUser') || 'null'))
   const session = ref<WampSession | null>(null)
+  const pendingUsername = ref<string | null>(localStorage.getItem('pending_verification_user'))
 
   // Getters
   const isAuthenticated = computed(() => !!user.value)
@@ -34,7 +35,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Actions
   async function register(form: { username: string; name: string; password: string }) {
+    // Connect with registrar credentials
     const s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
+
     try {
       const result = await s.call('io.xconn.deskconn.account.create', [
         form.username,
@@ -43,9 +46,53 @@ export const useAuthStore = defineStore('auth', () => {
         form.password,
       ])
       console.dir(result)
+
+      // Store session and username for verification step
+      session.value = s
+      pendingUsername.value = form.username
+      localStorage.setItem('pending_verification_user', form.username)
+
+      return result
+    } catch (err) {
+      // Close session on failure
+      session.value = null
+      await s.close().catch(console.error)
+      throw err
+    }
+  }
+
+  async function verifyAccount(code: string) {
+    const username = pendingUsername.value
+    if (!username) {
+      throw new Error('No pending registration found.')
+    }
+
+    // Ensure we have a valid registrar session
+    let s = session.value
+
+    if (!s) {
+      console.log('Restoring registrar session for verification...')
+      s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
+    }
+
+    try {
+      const result = await s.call('io.xconn.deskconn.account.verify', [username, code])
+      console.dir(result)
+
+      // Verification successful
+      // Clear pending state
+      pendingUsername.value = null
+      localStorage.removeItem('pending_verification_user')
+
       return result
     } finally {
-      await s.close()
+      // Close the registrar session
+      if (s) {
+        await s.close().catch(console.error)
+      }
+      if (session.value === s) {
+        session.value = null
+      }
     }
   }
 
@@ -130,9 +177,11 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     user,
     isAuthenticated,
+    pendingUsername,
     session,
     login,
     register,
+    verifyAccount,
     autoLogin,
     logout,
   }

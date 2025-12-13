@@ -2829,7 +2829,14 @@ vue-tsc@^3.1.5:
     "@volar/typescript" "2.4.26"
     "@vue/language-core" "3.1.8"
 
-vue@^3.5.25:
+vue3-otp-input@^0.5.40:
+  version "0.5.40"
+  resolved "https://registry.yarnpkg.com/vue3-otp-input/-/vue3-otp-input-0.5.40.tgz#fdb2d1e9c9595c9371e96b2356a2c9482fb30db0"
+  integrity sha512-3AMYHqNz9ZDa9y7ICwcEcsJG7XdZGaLAr6IRLIl3whvseFE95F5Duc9q963HcqEbu8CeMWilkmbAt/0eZOZxow==
+  dependencies:
+    vue "^3.4.27"
+
+vue@^3.4.27, vue@^3.5.25:
   version "3.5.25"
   resolved "https://registry.yarnpkg.com/vue/-/vue-3.5.25.tgz#b68b5092b617c57a0a36e8e640fd2c09aa2a374d"
   integrity sha512-YLVdgv2K13WJ6n+kD5owehKtEXwdwXuj2TTyJMsO7pSeKw2bfRNZGjhB7YzrpbMYj5b5QsUebHpOqR3R3ziy/g==
