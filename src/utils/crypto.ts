@@ -7,10 +7,15 @@ export function toHex(bytes: Uint8Array): string {
 }
 
 export function generateDeviceID(): string {
-  return 'device-' + Math.random().toString(36).substr(2, 9) + '-' + Date.now().toString(36)
+  return 'device-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now().toString(36)
 }
 
-export async function generateKeys() {
+export interface KeyPair {
+  privateKey: string
+  publicKey: string
+}
+
+export async function generateKeys(): Promise<KeyPair> {
   const privateKey = ed.utils.randomSecretKey()
   const publicKey = await ed.getPublicKeyAsync(privateKey)
   return {
