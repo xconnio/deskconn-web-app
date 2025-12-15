@@ -112,6 +112,39 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function forgotPassword(email: string) {
+    try {
+      const { result, session: s, error } = await authService.forgotPassword(email)
+      if (error) throw error
+
+      session.value = s
+      return result
+    } catch (err) {
+      session.value = null
+      throw err
+    }
+  }
+
+  async function resetPassword(email: string, password: string, otp: string) {
+    const s = session.value
+    try {
+      const { result, session: newSession } = await authService.resetPassword(
+        s,
+        email,
+        password,
+        otp,
+      )
+
+      if (newSession) {
+        await newSession.close().catch(console.error)
+      }
+      session.value = null
+      return result
+    } catch (err) {
+      throw err
+    }
+  }
+
   async function login(username: string, password: string) {
     // 1. Connect via CRA & Get Account
     const { session: s, userDetails } = await authService.login(username, password)
@@ -190,6 +223,8 @@ export const useAuthStore = defineStore('auth', () => {
     verifyAccount,
     resendOtp,
     autoLogin,
+    forgotPassword,
+    resetPassword,
     logout,
   }
 })

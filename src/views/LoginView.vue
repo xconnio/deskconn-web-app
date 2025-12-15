@@ -115,8 +115,10 @@ const handleSuccessConfirm = () => {
                 <input class="form-check-input" type="checkbox" id="rememberMe" />
                 <label class="form-check-label text-muted" for="rememberMe"> Remember me </label>
               </div>
-              <a href="#" class="text-primary text-decoration-none small fw-bold"
-                >Forgot password?</a
+              <router-link
+                to="/forgot-password"
+                class="text-primary text-decoration-none small fw-bold"
+                >Forgot password?</router-link
               >
             </div>
 

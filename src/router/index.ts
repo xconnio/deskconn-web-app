@@ -32,6 +32,12 @@ const router = createRouter({
       component: VerifyView,
       meta: { requiresGuest: true },
     },
+    {
+      path: '/forgot-password',
+      name: 'forgot-password',
+      component: () => import('../views/ForgotPasswordView.vue'),
+      meta: { requiresGuest: true },
+    },
   ],
 })
 

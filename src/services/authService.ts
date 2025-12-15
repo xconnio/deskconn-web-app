@@ -67,6 +67,31 @@ export const authService = {
     return { session: s, userDetails }
   },
 
+  async forgotPassword(email: string) {
+    const s = await this.getRegistrarSession()
+    try {
+      const result = await s.call('io.xconn.deskconn.account.password.forget', [email])
+      return { result, session: s }
+    } catch (err) {
+      // Close session if it was just for this call?
+      // Typically we might want to keep it if we expect a follow up, but forgot -> reset flow usually is stateless or uses a new session.
+      // However, the user said "this will be the same session".
+      // Let's return it.
+      return { result: null, session: s, error: err }
+    }
+  },
+
+  async resetPassword(session: WampSession | null, email: string, password: string, otp: string) {
+    let s = session
+    if (!s) {
+      s = await this.getRegistrarSession()
+    }
+    const args = [email, password, otp]
+
+    const result = await s.call('io.xconn.deskconn.account.password.reset', args)
+    return { result, session: s }
+  },
+
   async registerDevice(session: WampSession, deviceID: string, publicKey: string) {
     return session.call('io.xconn.deskconn.device.create', [deviceID, publicKey], {
       name: 'Browser Interface',
