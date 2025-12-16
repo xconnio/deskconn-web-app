@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { type WampSession } from '../services/wamp'
 import { authService } from '../services/authService'
+import { SecureStorage } from '../services/storageService'
 import { generateDeviceID, generateKeys } from '../utils/crypto'
 
 export interface User {
@@ -178,7 +179,7 @@ export const useAuthStore = defineStore('auth', () => {
     // 2. Device Check & Registration
     const userId = userDetails.id
     const storageKey = `device_credentials_${userId}`
-    const storedCredsStr = localStorage.getItem(storageKey)
+    const storedCredsStr = await SecureStorage.getItem(storageKey)
 
     if (!storedCredsStr) {
       console.log('Registering new device for user', userId)
@@ -188,7 +189,7 @@ export const useAuthStore = defineStore('auth', () => {
       await authService.registerDevice(s, deviceID, publicKey)
 
       const creds = { deviceID, privateKey }
-      localStorage.setItem(storageKey, JSON.stringify(creds))
+      await SecureStorage.setItem(storageKey, JSON.stringify(creds))
     }
 
     // 3. Update State
@@ -204,7 +205,9 @@ export const useAuthStore = defineStore('auth', () => {
     if (!lastUserId || !storedUserStr) return false
 
     const storageKey = `device_credentials_${lastUserId}`
-    const storedCredsStr = localStorage.getItem(storageKey)
+    // Direct SecureStorage access (No migration)
+    const storedCredsStr = await SecureStorage.getItem(storageKey)
+
     const storedUser = JSON.parse(storedUserStr)
     const authId = storedUser.username || storedUser.email
 
