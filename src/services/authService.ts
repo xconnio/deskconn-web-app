@@ -23,6 +23,22 @@ export const authService = {
     }
   },
 
+  async createGuestAccount(username: string, name: string, password: string) {
+    const s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
+    try {
+      const result = await s.call('io.xconn.deskconn.account.create', [
+        username,
+        name,
+        'guest',
+        password,
+      ])
+      return { result, session: s }
+    } catch (err) {
+      await s.close().catch(console.error)
+      throw err
+    }
+  },
+
   async verifyAccount(session: WampSession | null, username: string, code: string) {
     let s = session
 

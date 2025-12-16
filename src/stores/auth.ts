@@ -145,6 +145,29 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function loginAsGuest() {
+    const timestamp = Date.now()
+    const randomSuffix = Math.floor(Math.random() * 10000)
+    const email = `guest_${timestamp}_${randomSuffix}@deskconn.local`
+    // Ensure password meets complexity: 8+ chars, 1 Capital, 1 Symbol
+    const password = `Guest_${timestamp}_${randomSuffix}!`
+    const name = `Guest User ${randomSuffix}`
+
+    try {
+      const { session: regSession } = await authService.createGuestAccount(email, name, password)
+      // Close the registration session as we need to login with new credentials
+      if (regSession) {
+        await regSession.close().catch(console.error)
+      }
+
+      // Perform login
+      await login(email, password)
+    } catch (err) {
+      console.error('Guest login failed', err)
+      throw err
+    }
+  }
+
   async function login(username: string, password: string) {
     // 1. Connect via CRA & Get Account
     const { session: s, userDetails } = await authService.login(username, password)
@@ -225,6 +248,7 @@ export const useAuthStore = defineStore('auth', () => {
     autoLogin,
     forgotPassword,
     resetPassword,
+    loginAsGuest,
     logout,
   }
 })
