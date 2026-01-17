@@ -241,6 +241,18 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('last_active_user')
   }
 
+  async function updateProfile(name: string, password?: string) {
+    if (!session.value) throw new Error('No active session')
+
+    await authService.updateAccount(session.value, name, password)
+
+    // Update local state if successful
+    if (user.value) {
+      const updatedUser = { ...user.value, name }
+      setUser(updatedUser)
+    }
+  }
+
   return {
     user,
     isAuthenticated,
@@ -255,5 +267,6 @@ export const useAuthStore = defineStore('auth', () => {
     resetPassword,
     loginAsGuest,
     logout,
+    updateProfile,
   }
 })

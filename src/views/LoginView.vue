@@ -16,6 +16,7 @@ const form = ref({
 })
 
 const error = ref('')
+const showPassword = ref(false)
 
 const validateEmail = (email: string) => {
   return String(email)
@@ -111,15 +112,25 @@ const handleSuccessConfirm = () => {
             </div>
             <div class="mb-4">
               <label for="password" class="form-label">Password</label>
-              <input
-                type="password"
-                class="form-control form-control-lg"
-                id="password"
-                v-model="form.password"
-                required
-                placeholder="••••••••"
-                autocomplete="current-password"
-              />
+              <div class="input-group-theme">
+                <input
+                  :type="showPassword ? 'text' : 'password'"
+                  class="form-control form-control-lg pe-5"
+                  id="password"
+                  v-model="form.password"
+                  required
+                  placeholder="••••••••"
+                  autocomplete="current-password"
+                />
+                <button 
+                  type="button" 
+                  class="btn btn-password-toggle"
+                  @click="showPassword = !showPassword"
+                  tabindex="-1"
+                >
+                  <i class="bi" :class="showPassword ? 'bi-eye-slash' : 'bi-eye'"></i>
+                </button>
+              </div>
             </div>
 
             <div class="d-flex justify-content-between align-items-center mb-4">
@@ -191,3 +202,29 @@ const handleSuccessConfirm = () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.input-group-theme {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.btn-password-toggle {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  color: #64748b;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease;
+  z-index: 5;
+}
+
+.btn-password-toggle:hover {
+  color: var(--theme-blue);
+}
+</style>
