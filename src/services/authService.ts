@@ -73,14 +73,7 @@ export const authService = {
   async login(username: string, password: string) {
     const s = await wampService.connectWithCRA(username, password)
     const result = await s.call('io.xconn.deskconn.account.get')
-    const userDetails = result.args?.[0] || result
-
-    if (!userDetails || !userDetails.id) {
-      await s.close()
-      throw new Error('Invalid user details received')
-    }
-
-    return { session: s, userDetails }
+    return { session: s, result }
   },
 
   async forgotPassword(email: string) {
@@ -117,8 +110,7 @@ export const authService = {
   async autoLogin(authId: string, privateKey: string) {
     const s = await wampService.connectWithCryptosign(authId, privateKey)
     const result = await s.call('io.xconn.deskconn.account.get')
-    const userDetails = result.args?.[0] || result
-    return { session: s, userDetails }
+    return { session: s, result }
   },
 
   async createOrganization(session: WampSession, name: string) {

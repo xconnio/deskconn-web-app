@@ -171,8 +171,14 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username: string, password: string) {
     // 1. Connect via CRA & Get Account
-    const { session: s, userDetails } = await authService.login(username, password)
+    const { session: s, result } = await authService.login(username, password)
     session.value = s
+
+    const userDetails = result.args[0]
+    if (!userDetails || !userDetails.id) {
+      await s.close()
+      throw new Error('Invalid user details received')
+    }
 
     console.dir(userDetails)
 
@@ -217,8 +223,14 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       // Connect with stored credentials
-      const { session: s, userDetails } = await authService.autoLogin(authId, privateKey)
+      const { session: s, result } = await authService.autoLogin(authId, privateKey)
       session.value = s
+
+      const userDetails = result.args[0]
+      if (!userDetails || !userDetails.id) {
+        await s.close()
+        return false
+      }
 
       console.dir(userDetails)
       // Update local user state in case details changed on server

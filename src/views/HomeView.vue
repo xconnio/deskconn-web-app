@@ -31,8 +31,6 @@ const fetchOrganizations = async () => {
   isLoadingOrgs.value = true
   try {
     const result = await authService.listOrganizations(authStore.session)
-    console.log(result)
-    // The response is { args: [{ id, name }, ...] }
     organizations.value = result.args.map((org: any) => ({
       ...org,
       role: 'Member', // Default role for display
