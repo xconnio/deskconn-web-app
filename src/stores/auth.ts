@@ -4,15 +4,7 @@ import { type WampSession } from '../services/wamp'
 import { authService } from '../services/authService'
 import { SecureStorage } from '../services/storageService'
 import { generateDeviceID, generateKeys } from '../utils/crypto'
-
-export interface User {
-  id: string
-  username: string
-  name?: string
-  email?: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any
-}
+import { type User } from '../types'
 
 export const useAuthStore = defineStore('auth', () => {
   // State
@@ -171,8 +163,14 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function login(username: string, password: string) {
     // 1. Connect via CRA & Get Account
-    const { session: s, userDetails } = await authService.login(username, password)
+    const { session: s, result } = await authService.login(username, password)
     session.value = s
+
+    const userDetails = result.args[0]
+    if (!userDetails || !userDetails.id) {
+      await s.close()
+      throw new Error('Invalid user details received')
+    }
 
     console.dir(userDetails)
 
@@ -194,8 +192,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     // 3. Update State
     localStorage.setItem('last_active_user', userId)
-    const userToSave = { ...userDetails, username }
-    setUser(userToSave)
+    setUser(userDetails)
   }
 
   async function autoLogin() {
@@ -209,7 +206,7 @@ export const useAuthStore = defineStore('auth', () => {
     const storedCredsStr = await SecureStorage.getItem(storageKey)
 
     const storedUser = JSON.parse(storedUserStr)
-    const authId = storedUser.username || storedUser.email
+    const authId = storedUser.email
 
     if (!storedCredsStr || !authId) return false
 
@@ -217,13 +214,18 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       // Connect with stored credentials
-      const { session: s, userDetails } = await authService.autoLogin(authId, privateKey)
+      const { session: s, result } = await authService.autoLogin(authId, privateKey)
       session.value = s
+
+      const userDetails = result.args[0]
+      if (!userDetails || !userDetails.id) {
+        await s.close()
+        return false
+      }
 
       console.dir(userDetails)
       // Update local user state in case details changed on server
-      const userToSave = { ...userDetails, username: authId }
-      setUser(userToSave)
+      setUser(userDetails)
 
       return true
     } catch (e) {
