@@ -120,4 +120,12 @@ export const authService = {
     const userDetails = result.args?.[0] || result
     return { session: s, userDetails }
   },
+
+  async createOrganization(session: WampSession, name: string) {
+    return session.call('io.xconn.deskconn.organization.create', [name])
+  },
+
+  async listOrganizations(session: WampSession) {
+    return session.call('io.xconn.deskconn.organization.list')
+  },
 }
