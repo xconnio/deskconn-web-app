@@ -134,12 +134,12 @@ const handleDeleteOrg = async () => {
 
 <template>
   <div class="container py-5 fade-in-up">
-    <!-- Breadcrumb/Back -->
+    <!-- Breadcrumb -->
     <div class="row mb-4 justify-content-center">
       <div class="col-lg-10">
         <nav aria-label="breadcrumb">
-          <ol class="breadcrumb">
-            <li class="breadcrumb-item"><router-link to="/" class="text-decoration-none">Dashboard</router-link></li>
+          <ol class="breadcrumb mb-0">
+            <li class="breadcrumb-item"><router-link to="/" class="text-decoration-none text-primary opacity-75">Dashboard</router-link></li>
             <li class="breadcrumb-item active" aria-current="page">Organization</li>
           </ol>
         </nav>
@@ -150,9 +150,14 @@ const handleDeleteOrg = async () => {
     <div v-if="organization" class="row mb-5 justify-content-center">
       <div class="col-lg-10">
         <div class="d-flex justify-content-between align-items-center">
-          <div>
-            <h1 class="display-5 fw-bold mb-0">{{ organization.name }}</h1>
-            <p class="text-muted lead mb-0">Organization Management</p>
+          <div class="d-flex align-items-center">
+            <router-link to="/" class="btn btn-link text-decoration-none text-muted p-0 me-3 back-link-circle">
+              <i class="bi bi-arrow-left-short fs-1"></i>
+            </router-link>
+            <div>
+              <h1 class="display-5 fw-bold mb-0">{{ organization.name }}</h1>
+              <p class="text-muted lead mb-0">Organization Management</p>
+            </div>
           </div>
           <div class="d-flex gap-2">
             <button @click="handleOpenEditModal" class="btn btn-primary rounded-pill px-4 py-2 fw-bold shadow-sm">
@@ -343,15 +348,18 @@ const handleDeleteOrg = async () => {
   line-height: 1;
 }
 
-.avatar-sm {
-  font-weight: 600;
-  font-size: 1rem;
+.back-link-circle {
+  transition: all 0.2s ease;
+  color: #64748b !important;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.breadcrumb-item + .breadcrumb-item::before {
-  content: "›";
-  font-size: 1.2rem;
-  line-height: 1;
+.back-link-circle:hover {
+  color: var(--theme-yellow) !important;
+  transform: translateX(-4px);
 }
 
 .avatar-sm {

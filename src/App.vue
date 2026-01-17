@@ -47,7 +47,7 @@ onMounted(async () => {
 
         <div class="d-flex align-items-center me-3" v-if="authStore.isAuthenticated">
           <span class="me-3 text-dark"
-            >Hello, {{ authStore.user?.name || authStore.user?.username }}</span
+            >Hello, {{ authStore.user?.name || authStore.user?.email }}</span
           >
           <a href="#" class="text-danger text-decoration-none" @click.prevent="handleLogout"
             >Logout</a
