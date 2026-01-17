@@ -120,4 +120,16 @@ export const authService = {
   async listOrganizations(session: WampSession) {
     return session.call('io.xconn.deskconn.organization.list')
   },
+
+  async getOrganization(session: WampSession, id: string) {
+    return session.call('io.xconn.deskconn.organization.get', [id])
+  },
+
+  async updateOrganization(session: WampSession, id: string, name: string) {
+    return session.call('io.xconn.deskconn.organization.update', [id], { name })
+  },
+
+  async deleteOrganization(session: WampSession, id: string) {
+    return session.call('io.xconn.deskconn.organization.delete', [id])
+  },
 }

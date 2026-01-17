@@ -293,17 +293,6 @@ const handleCreateOrg = async () => {
   background-color: var(--theme-yellow) !important; /* Keep yellow even when disabled */
 }
 
-.status-indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.border-dashed {
-  border: 2px dashed #dee2e6;
-}
-
 .badge {
   font-weight: 600;
 }
@@ -312,47 +301,6 @@ const handleCreateOrg = async () => {
 .fs-2 {
   min-width: 40px;
   text-align: center;
-}
-
-/* Modal Styling */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(44, 46, 51, 0.4); /* Darker overlay for better contrast */
-  backdrop-filter: blur(8px);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1050;
-}
-
-.glass-modal {
-  border-radius: 24px !important;
-  background-color: rgba(255, 255, 255, 0.98) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-
-.modal-dialog {
-  width: 100%;
-  max-width: 520px;
-  margin: 1.75rem;
-}
-
-.theme-input {
-  border: 2px solid #edf2f7;
-  padding: 1rem 1.25rem;
-  font-size: 1.1rem;
-  border-radius: 12px;
-  transition: all 0.2s ease;
-}
-
-.theme-input:focus {
-  border-color: var(--theme-yellow);
-  box-shadow: 0 0 0 4px rgba(255, 184, 0, 0.1);
-  outline: none;
 }
 
 .no-underline-hover:hover {
