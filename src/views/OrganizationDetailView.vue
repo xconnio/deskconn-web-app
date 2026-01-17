@@ -134,9 +134,13 @@ const handleDeleteOrg = async () => {
 
 <template>
   <div class="container py-5 fade-in-up">
-    <!-- Breadcrumb -->
+    <!-- Navigation -->
     <div class="row mb-4 justify-content-center">
       <div class="col-lg-10">
+        <router-link to="/" class="btn btn-link text-decoration-none text-muted p-0 d-flex align-items-center back-link mb-3">
+          <i class="bi bi-arrow-left-short fs-2 me-1"></i>
+          <span class="fw-semibold">Back to Dashboard</span>
+        </router-link>
         <nav aria-label="breadcrumb">
           <ol class="breadcrumb mb-0">
             <li class="breadcrumb-item"><router-link to="/" class="text-decoration-none text-primary opacity-75">Dashboard</router-link></li>
@@ -150,14 +154,9 @@ const handleDeleteOrg = async () => {
     <div v-if="organization" class="row mb-5 justify-content-center">
       <div class="col-lg-10">
         <div class="d-flex justify-content-between align-items-center">
-          <div class="d-flex align-items-center">
-            <router-link to="/" class="btn btn-link text-decoration-none text-muted p-0 me-3 back-link-circle">
-              <i class="bi bi-arrow-left-short fs-1"></i>
-            </router-link>
-            <div>
-              <h1 class="display-5 fw-bold mb-0">{{ organization.name }}</h1>
-              <p class="text-muted lead mb-0">Organization Management</p>
-            </div>
+          <div>
+            <h1 class="display-5 fw-bold mb-0">{{ organization.name }}</h1>
+            <p class="text-muted lead mb-0">Organization Management</p>
           </div>
           <div class="d-flex gap-2">
             <button @click="handleOpenEditModal" class="btn btn-primary rounded-pill px-4 py-2 fw-bold shadow-sm">
@@ -348,16 +347,14 @@ const handleDeleteOrg = async () => {
   line-height: 1;
 }
 
-.back-link-circle {
+.back-link {
   transition: all 0.2s ease;
+  opacity: 0.8;
   color: #64748b !important;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
-.back-link-circle:hover {
+.back-link:hover {
+  opacity: 1;
   color: var(--theme-yellow) !important;
   transform: translateX(-4px);
 }

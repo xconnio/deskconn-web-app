@@ -46,10 +46,10 @@ onMounted(async () => {
         >
 
         <div class="d-flex align-items-center me-3" v-if="authStore.isAuthenticated">
-          <span class="me-3 text-dark"
-            >Hello, {{ authStore.user?.name || authStore.user?.email }}</span
-          >
-          <a href="#" class="text-danger text-decoration-none" @click.prevent="handleLogout"
+          <router-link to="/profile" class="text-decoration-none me-3 profile-link">
+            <span class="text-dark">Hello, {{ authStore.user?.name || authStore.user?.email }}</span>
+          </router-link>
+          <a href="#" class="text-danger text-decoration-none fw-semibold" @click.prevent="handleLogout"
             >Logout</a
           >
         </div>

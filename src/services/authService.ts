@@ -130,6 +130,14 @@ export const authService = {
   },
 
   async deleteOrganization(session: WampSession, id: string) {
-    return session.call('io.xconn.deskconn.organization.delete', [id])
+    return await session.call('io.xconn.deskconn.organization.delete', [id])
+  },
+
+  async updateAccount(session: WampSession, name: string, password?: string) {
+    const kwargs: Record<string, unknown> = { name }
+    if (password) {
+      kwargs.password = password
+    }
+    return await session.call('io.xconn.deskconn.account.update', [], kwargs)
   },
 }

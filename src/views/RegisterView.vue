@@ -14,6 +14,7 @@ const form = ref({
 
 const isLoading = ref(false)
 const error = ref('')
+const showPassword = ref(false)
 
 const validateEmail = (email: string) => {
   return String(email)
@@ -113,16 +114,26 @@ const handleRegister = async () => {
             </div>
             <div class="mb-4">
               <label for="password" class="form-label">Password</label>
-              <input
-                type="password"
-                class="form-control form-control-lg"
-                id="password"
-                v-model="form.password"
-                required
-                placeholder="••••••••"
-                autocomplete="new-password"
-                :disabled="isLoading"
-              />
+              <div class="input-group-theme">
+                <input
+                  :type="showPassword ? 'text' : 'password'"
+                  class="form-control form-control-lg pe-5"
+                  id="password"
+                  v-model="form.password"
+                  required
+                  placeholder="••••••••"
+                  autocomplete="new-password"
+                  :disabled="isLoading"
+                />
+                <button 
+                  type="button" 
+                  class="btn btn-password-toggle"
+                  @click="showPassword = !showPassword"
+                  tabindex="-1"
+                >
+                  <i class="bi" :class="showPassword ? 'bi-eye-slash' : 'bi-eye'"></i>
+                </button>
+              </div>
               <div class="form-text text-muted">
                 Must be at least 8 characters, include a capital letter and a symbol.
               </div>
@@ -150,3 +161,29 @@ const handleRegister = async () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.input-group-theme {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.btn-password-toggle {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  color: #64748b;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s ease;
+  z-index: 5;
+}
+
+.btn-password-toggle:hover {
+  color: var(--theme-blue);
+}
+</style>
