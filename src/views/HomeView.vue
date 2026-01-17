@@ -2,15 +2,16 @@
 import { ref, onMounted, watch } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { authService } from '../services/authService'
+import type { Organization, Device } from '../types'
 
 const authStore = useAuthStore()
 
 // State
-const organizations = ref<any[]>([])
+const organizations = ref<Organization[]>([])
 const isLoadingOrgs = ref(true)
 
 // Mock data for Devices
-const devices = ref([
+const devices = ref<Device[]>([
   { id: 'd1', name: 'MacBook Pro M3', type: 'Laptop', status: 'Online', icon: '💻' },
   { id: 'd2', name: 'iPhone 15 Pro', type: 'Mobile', status: 'Offline', icon: '📱' },
   { id: 'd3', name: 'iPad Air', type: 'Tablet', status: 'Online', icon: '平板' },
@@ -31,12 +32,12 @@ const fetchOrganizations = async () => {
   isLoadingOrgs.value = true
   try {
     const result = await authService.listOrganizations(authStore.session)
-    organizations.value = result.args.map((org: any) => ({
+    organizations.value = result.args.map((org: Organization) => ({
       ...org,
       role: 'Member', // Default role for display
       icon: '🏢'       // Default icon
     }))
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Failed to fetch organizations', err)
   } finally {
     isLoadingOrgs.value = false
@@ -90,9 +91,9 @@ const handleCreateOrg = async () => {
     await fetchOrganizations()
 
     handleCancel()
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Failed to create organization', err)
-    errorMessage.value = err.message || 'Failed to create organization'
+    errorMessage.value = err instanceof Error ? err.message : 'Failed to create organization'
   } finally {
     isCreating.value = false
   }
@@ -107,7 +108,7 @@ const handleCreateOrg = async () => {
         <div class="d-flex justify-content-between align-items-end">
           <div>
             <h1 class="display-5 fw-bold mb-0">Dashboard</h1>
-            <p class="text-muted lead">Welcome back, {{ authStore.user?.name || authStore.user?.username }}</p>
+            <p class="text-muted lead">Welcome back, {{ authStore.user?.name || authStore.user?.email }}</p>
           </div>
         </div>
       </div>

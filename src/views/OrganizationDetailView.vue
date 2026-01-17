@@ -3,6 +3,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { authService } from '../services/authService'
+import type { Organization, Device } from '../types'
 
 const route = useRoute()
 const router = useRouter()
@@ -10,12 +11,12 @@ const authStore = useAuthStore()
 const orgId = route.params.id as string
 
 // State
-const organization = ref<any>(null)
+const organization = ref<Organization | null>(null)
 const isLoading = ref(true)
 const errorMessage = ref('')
 
 // Mock data for Devices (same as HomeView)
-const devices = ref([
+const devices = ref<Device[]>([
   { id: 'd1', name: 'MacBook Pro M3', type: 'Laptop', status: 'Online', icon: '💻' },
   { id: 'd2', name: 'iPhone 15 Pro', type: 'Mobile', status: 'Offline', icon: '📱' },
   { id: 'd3', name: 'iPad Air', type: 'Tablet', status: 'Online', icon: '平板' },
@@ -39,10 +40,12 @@ const fetchOrganizationDetails = async () => {
   try {
     const result = await authService.getOrganization(authStore.session, orgId)
     organization.value = result.args[0]
-    editOrgName.value = organization.value.name
-  } catch (err: any) {
+    if (organization.value) {
+      editOrgName.value = organization.value.name
+    }
+  } catch (err: unknown) {
     console.error('Failed to fetch organization details', err)
-    errorMessage.value = err.message || 'Failed to load organization'
+    errorMessage.value = err instanceof Error ? err.message : 'Failed to load organization'
   } finally {
     isLoading.value = false
   }
@@ -62,8 +65,10 @@ onMounted(() => {
 })
 
 const handleOpenEditModal = () => {
-  editOrgName.value = organization.value.name
-  showEditModal.value = true
+  if (organization.value) {
+    editOrgName.value = organization.value.name
+    showEditModal.value = true
+  }
 }
 
 const handleCancelEdit = () => {
@@ -72,7 +77,7 @@ const handleCancelEdit = () => {
 }
 
 const handleUpdateOrg = async () => {
-  if (!editOrgName.value.trim() || editOrgName.value === organization.value.name) {
+  if (!organization.value || !editOrgName.value.trim() || editOrgName.value === organization.value.name) {
     handleCancelEdit()
     return
   }
@@ -86,11 +91,13 @@ const handleUpdateOrg = async () => {
     await authService.updateOrganization(authStore.session, orgId, editOrgName.value)
     
     // Update local state
-    organization.value.name = editOrgName.value
+    if (organization.value) {
+      organization.value.name = editOrgName.value
+    }
     handleCancelEdit()
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Failed to update organization', err)
-    modalErrorMessage.value = err.message || 'Failed to update organization'
+    modalErrorMessage.value = err instanceof Error ? err.message : 'Failed to update organization'
   } finally {
     isUpdating.value = false
   }
@@ -116,9 +123,9 @@ const handleDeleteOrg = async () => {
     
     // Redirect home on success
     router.push('/')
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Failed to delete organization', err)
-    deleteErrorMessage.value = err.message || 'Failed to delete organization'
+    deleteErrorMessage.value = err instanceof Error ? err.message : 'Failed to delete organization'
   } finally {
     isDeleting.value = false
   }
@@ -233,11 +240,11 @@ const handleDeleteOrg = async () => {
             <div v-for="member in organization.members" :key="member.user_id" class="list-group-item border-0 p-3">
               <div class="d-flex align-items-center">
                 <div class="avatar-sm bg-light text-primary rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
-                  {{ member.user.name?.charAt(0) || member.user.email.charAt(0) }}
+                  {{ member.user.name?.charAt(0) || member.user.email?.charAt(0) || '?' }}
                 </div>
                 <div>
                   <h6 class="mb-0">{{ member.user.name || 'Unknown' }}</h6>
-                  <small class="text-muted d-block text-truncate" style="max-width: 150px;">{{ member.user.email }}</small>
+                  <small class="text-muted d-block text-truncate" style="max-width: 150px;">{{ member.user.email || 'No email' }}</small>
                   <span class="badge bg-light text-primary small text-capitalize mt-1">{{ member.role }}</span>
                 </div>
               </div>
@@ -302,7 +309,7 @@ const handleDeleteOrg = async () => {
               <i class="bi bi-exclamation-triangle-fill text-danger display-1 opacity-25"></i>
             </div>
             <h5 class="fw-bold mb-3">Are you absolutely sure?</h5>
-            <p class="text-muted mb-0">
+            <p v-if="organization" class="text-muted mb-0">
               You are about to delete <strong>{{ organization.name }}</strong>. This action cannot be undone and will remove all associated data.
             </p>
             <div v-if="deleteErrorMessage" class="text-danger small mt-4 d-flex align-items-center justify-content-center">

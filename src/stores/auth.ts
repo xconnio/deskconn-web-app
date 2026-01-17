@@ -4,15 +4,7 @@ import { type WampSession } from '../services/wamp'
 import { authService } from '../services/authService'
 import { SecureStorage } from '../services/storageService'
 import { generateDeviceID, generateKeys } from '../utils/crypto'
-
-export interface User {
-  id: string
-  username: string
-  name?: string
-  email?: string
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any
-}
+import { type User } from '../types'
 
 export const useAuthStore = defineStore('auth', () => {
   // State
@@ -200,8 +192,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     // 3. Update State
     localStorage.setItem('last_active_user', userId)
-    const userToSave = { ...userDetails, username }
-    setUser(userToSave)
+    setUser(userDetails)
   }
 
   async function autoLogin() {
@@ -215,7 +206,7 @@ export const useAuthStore = defineStore('auth', () => {
     const storedCredsStr = await SecureStorage.getItem(storageKey)
 
     const storedUser = JSON.parse(storedUserStr)
-    const authId = storedUser.username || storedUser.email
+    const authId = storedUser.email
 
     if (!storedCredsStr || !authId) return false
 
@@ -234,8 +225,7 @@ export const useAuthStore = defineStore('auth', () => {
 
       console.dir(userDetails)
       // Update local user state in case details changed on server
-      const userToSave = { ...userDetails, username: authId }
-      setUser(userToSave)
+      setUser(userDetails)
 
       return true
     } catch (e) {
