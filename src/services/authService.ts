@@ -10,7 +10,6 @@ export const authService = {
       const result = await s.call('io.xconn.deskconn.account.create', [
         form.username,
         form.name,
-        'user',
         form.password,
       ])
       return { result, session: s }
