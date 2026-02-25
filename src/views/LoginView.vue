@@ -65,18 +65,6 @@ const handleLogin = async () => {
   }
 }
 
-const handleGuestLogin = async () => {
-  try {
-    error.value = ''
-    await authStore.loginAsGuest()
-    router.push('/')
-  } catch (e: unknown) {
-    console.error(e)
-    const errorMsg = e instanceof Error ? e.message : String(e)
-    error.value = 'Guest login failed: ' + errorMsg
-  }
-}
-
 const handleSuccessConfirm = () => {
   modalInstance?.hide()
   router.push('/')
@@ -122,8 +110,8 @@ const handleSuccessConfirm = () => {
                   placeholder="••••••••"
                   autocomplete="current-password"
                 />
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   class="btn btn-password-toggle"
                   @click="showPassword = !showPassword"
                   tabindex="-1"
@@ -153,22 +141,6 @@ const handleSuccessConfirm = () => {
               <router-link to="/register" class="fw-bold">Sign up</router-link>
             </div>
 
-            <div class="text-center mt-3">
-              <div class="position-relative">
-                <hr class="text-muted opacity-25" />
-                <span
-                  class="position-absolute top-50 start-50 translate-middle bg-white px-2 text-muted small"
-                  >OR</span
-                >
-              </div>
-              <a
-                href="#"
-                class="text-secondary text-decoration-none small fw-bold mt-3 d-inline-block"
-                @click.prevent="handleGuestLogin"
-              >
-                Login as Guest
-              </a>
-            </div>
           </form>
         </div>
       </div>
