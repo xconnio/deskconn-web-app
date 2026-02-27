@@ -14,4 +14,8 @@ export const wampService = {
   async connectWithCryptosign(authId: string, privateKey: string): Promise<WampSession> {
     return connectCryptosign(WAMP_URL, WAMP_REALM, authId, privateKey)
   },
+
+  async shellWithCryptosign(authId: string, privateKey: string, realm: string): Promise<WampSession> {
+    return connectCryptosign(WAMP_URL, realm, authId, privateKey)
+  },
 }

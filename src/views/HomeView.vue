@@ -227,20 +227,22 @@ const handleCreateOrg = async () => {
 
         <div v-else class="row g-4">
           <div v-for="desktop in desktops" :key="desktop.realm" class="col-md-4">
-            <div class="card h-100 border-0 shadow-sm card-hover">
-              <div class="card-body p-4">
-                <div class="d-flex align-items-center mb-3">
-                  <span class="fs-2 me-3">{{ desktop.icon }}</span>
-                  <div>
-                    <h5 class="card-title mb-0 text-dark">{{ desktop.name }}</h5>
+            <router-link :to="'/desktops/' + desktop.realm" class="text-decoration-none">
+              <div class="card h-100 border-0 shadow-sm card-hover">
+                <div class="card-body p-4">
+                  <div class="d-flex align-items-center mb-3">
+                    <span class="fs-2 me-3">{{ desktop.icon }}</span>
+                    <div>
+                      <h5 class="card-title mb-0 text-dark">{{ desktop.name }}</h5>
+                    </div>
+                  </div>
+                  <div class="mt-auto d-flex justify-content-between align-items-center">
+                    <span class="badge bg-light text-primary rounded-pill">View Details</span>
+                    <i class="bi bi-chevron-right text-muted"></i>
                   </div>
                 </div>
-                <div class="mt-auto d-flex justify-content-between align-items-center">
-                  <span class="badge bg-light text-primary rounded-pill">View Details</span>
-                  <i class="bi bi-chevron-right text-muted"></i>
-                </div>
               </div>
-            </div>
+            </router-link>
           </div>
 
           <!-- Empty State -->
