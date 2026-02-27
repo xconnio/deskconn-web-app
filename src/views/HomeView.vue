@@ -2,13 +2,15 @@
 import { ref, onMounted, watch } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { authService } from '../services/authService'
-import type { Organization, Device } from '../types'
+import type { Organization, Device, Desktop } from '../types'
 
 const authStore = useAuthStore()
 
 // State
 const organizations = ref<Organization[]>([])
+const desktops = ref<Desktop[]>([])
 const isLoadingOrgs = ref(true)
+const isLoadingDesktops = ref(true)
 
 // Mock data for Devices
 const devices = ref<Device[]>([
@@ -28,7 +30,7 @@ const fetchOrganizations = async () => {
     isLoadingOrgs.value = false
     return
   }
-  
+
   isLoadingOrgs.value = true
   try {
     const result = await authService.listOrganizations(authStore.session)
@@ -44,19 +46,46 @@ const fetchOrganizations = async () => {
   }
 }
 
-// Watch for session changes (e.g., after auto-login)
-watch(() => authStore.session, (newSession) => {
-  if (newSession) {
-    fetchOrganizations()
-  } else {
-    isLoadingOrgs.value = false
+const fetchDesktops = async () => {
+  if (!authStore.session) {
+    isLoadingDesktops.value = false
+    return
   }
-}, { immediate: true })
+
+  isLoadingDesktops.value = true
+  try {
+    const result = await authService.listDesktops(authStore.session)
+    desktops.value = result.args.map((desktop: Desktop) => ({
+      ...desktop,
+      icon: '🖥️', // Default icon
+    }))
+  } catch (err: unknown) {
+    console.error('Failed to fetch organizations', err)
+  } finally {
+    isLoadingDesktops.value = false
+  }
+}
+
+// Watch for session changes (e.g., after auto-login)
+watch(
+  () => authStore.session,
+  (newSession) => {
+    if (newSession) {
+      fetchOrganizations()
+      fetchDesktops()
+    } else {
+      isLoadingOrgs.value = false
+      isLoadingDesktops.value = false
+    }
+  },
+  { immediate: true },
+)
 
 onMounted(() => {
   // If session is already present, fetch immediately
   if (authStore.session) {
     fetchOrganizations()
+    fetchDesktops()
   } else {
     // If not, the watcher will handle it, but let's make sure we don't hang forever
     // if auto-login is not even running or fails.
@@ -86,7 +115,7 @@ const handleCreateOrg = async () => {
     }
 
     await authService.createOrganization(authStore.session, newOrgName.value)
-    
+
     // Successfully created, fetch fresh list
     await fetchOrganizations()
 
@@ -128,7 +157,7 @@ const handleCreateOrg = async () => {
             <i class="bi bi-plus-lg me-1"></i> Add New
           </button>
         </div>
-        
+
         <div v-if="isLoadingOrgs" class="row g-4">
           <div v-for="i in 3" :key="i" class="col-md-4">
             <div class="card h-100 border-0 shadow-sm opacity-50">
@@ -140,7 +169,7 @@ const handleCreateOrg = async () => {
             </div>
           </div>
         </div>
-        
+
         <div v-else class="row g-4">
           <div v-for="org in organizations" :key="org.id" class="col-md-4">
             <router-link :to="'/organizations/' + org.id" class="text-decoration-none">
@@ -161,11 +190,63 @@ const handleCreateOrg = async () => {
               </div>
             </router-link>
           </div>
-          
+
           <!-- Empty State -->
           <div v-if="organizations.length === 0" class="col-12">
             <div class="card border-dashed p-5 text-center bg-transparent">
               <p class="text-muted mb-0">No organizations found. Create your first one!</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Desktops Section -->
+    <div class="row justify-content-center mb-5">
+      <div class="col-lg-10">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+          <h3 class="mb-0 d-flex align-items-center">
+            <span class="badge bg-secondary me-3 p-2">
+              <i class="bi bi-pc-display"></i>
+            </span>
+            Desktops
+          </h3>
+        </div>
+
+        <div v-if="isLoadingDesktops" class="row g-4">
+          <div v-for="i in 3" :key="i" class="col-md-4">
+            <div class="card h-100 border-0 shadow-sm opacity-50">
+              <div class="card-body p-4 text-center">
+                <div class="spinner-border text-primary" role="status">
+                  <span class="visually-hidden">Loading...</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="row g-4">
+          <div v-for="desktop in desktops" :key="desktop.realm" class="col-md-4">
+            <div class="card h-100 border-0 shadow-sm card-hover">
+              <div class="card-body p-4">
+                <div class="d-flex align-items-center mb-3">
+                  <span class="fs-2 me-3">{{ desktop.icon }}</span>
+                  <div>
+                    <h5 class="card-title mb-0 text-dark">{{ desktop.name }}</h5>
+                  </div>
+                </div>
+                <div class="mt-auto d-flex justify-content-between align-items-center">
+                  <span class="badge bg-light text-primary rounded-pill">View Details</span>
+                  <i class="bi bi-chevron-right text-muted"></i>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Empty State -->
+          <div v-if="desktops.length === 0" class="col-12">
+            <div class="card border-dashed p-5 text-center bg-transparent">
+              <p class="text-muted mb-0">No desktops found</p>
             </div>
           </div>
         </div>
@@ -196,8 +277,8 @@ const handleCreateOrg = async () => {
                   </div>
                 </div>
                 <div class="d-flex align-items-center">
-                  <span 
-                    class="status-indicator me-2" 
+                  <span
+                    class="status-indicator me-2"
                     :class="device.status === 'Online' ? 'bg-success' : 'bg-danger'"
                   ></span>
                   <small :class="device.status === 'Online' ? 'text-success' : 'text-danger'">
@@ -229,10 +310,10 @@ const handleCreateOrg = async () => {
           <div class="modal-body p-4 py-5">
             <div class="mb-2">
               <label class="form-label mb-2">Organization Name</label>
-              <input 
-                v-model="newOrgName" 
-                type="text" 
-                class="form-control form-control-lg theme-input" 
+              <input
+                v-model="newOrgName"
+                type="text"
+                class="form-control form-control-lg theme-input"
                 placeholder="Enter organization name"
                 @keyup.enter="handleCreateOrg"
                 autofocus
@@ -246,9 +327,9 @@ const handleCreateOrg = async () => {
             <button type="button" class="btn btn-link text-muted text-decoration-none fw-semibold me-auto" @click="handleCancel">
               Cancel
             </button>
-            <button 
-              type="button" 
-              class="btn btn-theme-primary rounded-pill px-5 py-2 fw-bold" 
+            <button
+              type="button"
+              class="btn btn-theme-primary rounded-pill px-5 py-2 fw-bold"
               @click="handleCreateOrg"
               :disabled="!newOrgName.trim() || isCreating"
             >
