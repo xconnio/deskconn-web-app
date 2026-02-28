@@ -16,7 +16,6 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
-    "@esbuild-plugins/node-globals-polyfill": "^0.2.3",
     "@noble/ed25519": "^3.0.0",
     "@popperjs/core": "^2.11.8",
     "@xterm/addon-fit": "^0.11.0",
