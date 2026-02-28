@@ -123,4 +123,11 @@ export const authService = {
     }
     return await session.call('io.xconn.deskconn.account.update', [], kwargs)
   },
+  async listDesktops(session: WampSession) {
+    return session.call('io.xconn.deskconn.desktop.list')
+  },
+
+  async shellDesktop(authId: string, privateKey: string, realm: string) {
+     return await wampService.shellWithCryptosign(authId, privateKey, realm)
+  },
 }

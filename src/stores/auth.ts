@@ -172,7 +172,7 @@ export const useAuthStore = defineStore('auth', () => {
     setUser(userDetails)
   }
 
-  async function autoLogin() {
+  async function getLoggedInUserCreds() {
     const lastUserId = localStorage.getItem('last_active_user')
     const storedUserStr = localStorage.getItem('currentUser')
 
@@ -189,9 +189,23 @@ export const useAuthStore = defineStore('auth', () => {
 
     const { privateKey } = JSON.parse(storedCredsStr)
 
+    return { authId, privateKey }
+  }
+
+  async function shell(realm: string) {
+    const creds = await getLoggedInUserCreds()
+    if (!creds) return false
+
+    return await authService.shellDesktop(creds.authId, creds.privateKey, realm)
+  }
+
+  async function autoLogin() {
+    const creds = await getLoggedInUserCreds()
+    if (!creds) return false
+
     try {
       // Connect with stored credentials
-      const { session: s, result } = await authService.autoLogin(authId, privateKey)
+      const { session: s, result } = await authService.autoLogin(creds.authId, creds.privateKey)
       session.value = s
 
       const userDetails = result.args[0]
@@ -244,5 +258,6 @@ export const useAuthStore = defineStore('auth', () => {
     resetPassword,
     logout,
     updateProfile,
+    shell,
   }
 })

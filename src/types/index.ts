@@ -26,3 +26,10 @@ export interface Device {
     status: 'Online' | 'Offline'
     icon: string
 }
+
+export interface Desktop {
+  id: string
+  name: string
+  realm: string
+  icon: string
+}

@@ -48,9 +48,15 @@ const router = createRouter({
       path: '/profile',
       name: 'profile',
       component: () => import('../views/ProfileView.vue'),
-      meta: { requiresAuth: true }
-    }
-  ]
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/desktops/:realm',
+      name: 'desktop-shell',
+      component: () => import('../views/DesktopShellView.vue'),
+      meta: { requiresAuth: true },
+    },
+  ],
 })
 
 router.beforeEach((to, from, next) => {
