@@ -1,11 +1,11 @@
 setup:
-	yarn install
+	npm install
 
 build:
-	yarn build --base=/app/
+	npm run build
 
 run:
-	yarn dev
+	npm run dev
 
 clean:
 	rm -rf dist/ node_modules/
