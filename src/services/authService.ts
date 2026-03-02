@@ -17,7 +17,7 @@ export const authService = {
       // Close session on failure locally if we created it strictly for this call
       // In the original code, we passed 's' back to the store.
       // We will return the session so the store can manage it (keep it open for verify).
-      await s.close().catch(console.error)
+      await s.leave().catch(console.error)
       throw err
     }
   },
@@ -122,5 +122,12 @@ export const authService = {
       kwargs.password = password
     }
     return await session.call('io.xconn.deskconn.account.update', [], kwargs)
+  },
+  async listDesktops(session: WampSession) {
+    return session.call('io.xconn.deskconn.desktop.list')
+  },
+
+  async shellDesktop(authId: string, privateKey: string, realm: string) {
+     return await wampService.shellWithCryptosign(authId, privateKey, realm)
   },
 }

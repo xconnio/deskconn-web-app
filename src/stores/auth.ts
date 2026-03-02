@@ -77,7 +77,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (s) {
         // If we created a temporary session, or if we want to clean up anyway:
         // The original logic closed it.
-        await s.close().catch(console.error)
+        await s.leave().catch(console.error)
       }
       if (session.value === s || createdNewSession) {
         session.value = null
@@ -129,7 +129,7 @@ export const useAuthStore = defineStore('auth', () => {
       )
 
       if (newSession) {
-        await newSession.close().catch(console.error)
+        await newSession.leave().catch(console.error)
       }
       session.value = null
       return result
@@ -145,7 +145,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     const userDetails = result.args[0]
     if (!userDetails || !userDetails.id) {
-      await s.close()
+      await s.leave()
       throw new Error('Invalid user details received')
     }
 
@@ -172,7 +172,7 @@ export const useAuthStore = defineStore('auth', () => {
     setUser(userDetails)
   }
 
-  async function autoLogin() {
+  async function getLoggedInUserCreds() {
     const lastUserId = localStorage.getItem('last_active_user')
     const storedUserStr = localStorage.getItem('currentUser')
 
@@ -189,14 +189,28 @@ export const useAuthStore = defineStore('auth', () => {
 
     const { privateKey } = JSON.parse(storedCredsStr)
 
+    return { authId, privateKey }
+  }
+
+  async function shell(realm: string) {
+    const creds = await getLoggedInUserCreds()
+    if (!creds) return false
+
+    return await authService.shellDesktop(creds.authId, creds.privateKey, realm)
+  }
+
+  async function autoLogin() {
+    const creds = await getLoggedInUserCreds()
+    if (!creds) return false
+
     try {
       // Connect with stored credentials
-      const { session: s, result } = await authService.autoLogin(authId, privateKey)
+      const { session: s, result } = await authService.autoLogin(creds.authId, creds.privateKey)
       session.value = s
 
       const userDetails = result.args[0]
       if (!userDetails || !userDetails.id) {
-        await s.close()
+        await s.leave()
         return false
       }
 
@@ -212,7 +226,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
-    session.value?.close().catch(console.error)
+    session.value?.leave().catch(console.error)
     session.value = null
     setUser(null)
     localStorage.removeItem('last_active_user')
@@ -244,5 +258,6 @@ export const useAuthStore = defineStore('auth', () => {
     resetPassword,
     logout,
     updateProfile,
+    shell,
   }
 })
