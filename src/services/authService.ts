@@ -17,7 +17,7 @@ export const authService = {
       // Close session on failure locally if we created it strictly for this call
       // In the original code, we passed 's' back to the store.
       // We will return the session so the store can manage it (keep it open for verify).
-      await s.close().catch(console.error)
+      await s.leave().catch(console.error)
       throw err
     }
   },
