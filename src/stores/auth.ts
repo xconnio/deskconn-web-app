@@ -199,6 +199,13 @@ export const useAuthStore = defineStore('auth', () => {
     return await authService.shellDesktop(creds.authId, creds.privateKey, realm)
   }
 
+  async function shellWebRTC(realm: string) {
+    const creds = await getLoggedInUserCreds()
+    if (!creds) return false
+
+    return await authService.shellWebRTCDesktop(creds.authId, creds.privateKey, realm)
+  }
+
   async function autoLogin() {
     const creds = await getLoggedInUserCreds()
     if (!creds) return false
@@ -259,5 +266,6 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     updateProfile,
     shell,
+    shellWebRTC,
   }
 })
