@@ -138,7 +138,7 @@ onMounted(async () => {
   term.writeln('Starting shell ...')
 
   try {
-    session = await authStore.shell(realm)
+    session = await authStore.shellWebRTC(realm)
   } catch (err) {
     console.error(err)
     term.writeln('Connection failed.')

@@ -1,5 +1,8 @@
+import { ClientConfig } from 'xconn-webrtc-js'
+import { CBORSerializer, connectCryptosign, CryptoSignAuthenticator } from 'xconn'
+
 import { wampService, type WampSession } from './wamp'
-import { REGISTRATION_AUTHID, REGISTRATION_SECRET } from '../config'
+import { REGISTRATION_AUTHID, REGISTRATION_SECRET, WAMP_URL } from '../config'
 
 export const authService = {
   async register(form: { username: string; name: string; password: string }) {
@@ -129,5 +132,24 @@ export const authService = {
 
   async shellDesktop(authId: string, privateKey: string, realm: string) {
      return await wampService.shellWithCryptosign(authId, privateKey, realm)
+  },
+
+  async shellWebRTCDesktop(authID: string, privateKey: string, realm: string) {
+    const procedureWebRTCOffer = 'io.xconn.webrtc.offer'
+    const topicAnswererOnCandidate = 'io.xconn.webrtc.answerer.on_candidate'
+    const topicOffererOnCandidate = 'io.xconn.webrtc.offerer.on_candidate'
+    const session = await connectCryptosign(WAMP_URL, realm, authID, privateKey)
+    const config = new ClientConfig(
+      realm,
+      procedureWebRTCOffer,
+      topicAnswererOnCandidate,
+      topicOffererOnCandidate,
+      new CBORSerializer(),
+      new CryptoSignAuthenticator(authID, privateKey, {}),
+      session,
+      [{ urls: ['stun:stun.l.google.com:19302'] }],
+    )
+
+    return await wampService.shellWithWebRTC(config)
   },
 }

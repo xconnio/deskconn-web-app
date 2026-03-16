@@ -27,7 +27,8 @@
     "vue": "^3.5.25",
     "vue-router": "^4.6.3",
     "vue3-otp-input": "^0.5.40",
-    "xconn": "https://github.com/xconnio/xconn-js.git#43cdab303a730559ded527bb062583eedc49673e"
+    "xconn": "https://github.com/xconnio/xconn-js.git#1ac1bf928da9a910e6c8f5632e3980ce55d5a037",
+    "xconn-webrtc-js": "https://github.com/xconnio/xconn-webrtc-js.git#2e9fa8965ebf529de1ebcd32029165b8362b72cb"
   },
   "devDependencies": {
     "@tsconfig/node24": "^24.0.3",
