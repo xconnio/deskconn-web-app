@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { RouterView, useRouter } from 'vue-router'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const handleLogout = () => {
@@ -39,7 +40,7 @@ onMounted(async () => {
 <template>
   <div class="min-vh-100 d-flex flex-column bg-light">
     <!-- Header -->
-    <header class="navbar navbar-expand-lg header-theme">
+    <header v-if="!route.meta.hideNavbar" class="navbar navbar-expand-lg header-theme">
       <div class="container-fluid">
         <router-link to="/" class="navbar-brand mb-0 h1 fw-bold ps-3 text-dark text-decoration-none"
           >Deskconn</router-link

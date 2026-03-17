@@ -65,29 +65,17 @@ const handleTerminalInput = (data: string) => {
   channel.push(new Progress([data], {}, { progress: true }))
 }
 
-const closeShell = async (reason?: string) => {
+const closeShell = async () => {
   if (closed) return
   closed = true
 
-  try {
-    // Stop sender loop safely
-    channel?.push(new Progress([], {}, {}))
-  } catch {}
-
   window.removeEventListener('resize', handleResize)
 
-  try {
-    await session?.leave()
-  } catch (err) {
-    console.error('Error leaving session:', err)
-  }
+  session = null
 
-  if (term) {
-    if (reason) {
-      term.writeln(`\r\n${reason}`)
-    }
-    term.writeln('\r\nSession closed.')
-  }
+  term?.dispose()
+
+  window.close()
 }
 
 const startShell = async () => {
@@ -102,8 +90,8 @@ const startShell = async () => {
         if (args && args.length > 0 && term) {
           term.write(args[0])
         } else {
-          channel!.push(new Progress([], {}, {}))
-          await closeShell('Remote shell ended.')
+          channel?.push(new Progress([], {}, {}))
+          await closeShell()
         }
       },
     )
@@ -123,8 +111,9 @@ onMounted(async () => {
 
   term = new Terminal({
     cursorBlink: true,
+    cursorStyle: "block",
     convertEol: true,
-    scrollback: 5000,
+    scrollback: 10000,
     fontSize: 15,
     theme: { background: '#1e1e1e' },
   })
@@ -134,8 +123,7 @@ onMounted(async () => {
 
   term.open(terminalRef.value)
   fitAddon.fit()
-
-  term.writeln('Starting shell ...')
+  term.focus()
 
   try {
     session = await authStore.shellWebRTC(realm)

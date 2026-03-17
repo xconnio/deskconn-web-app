@@ -54,7 +54,7 @@ const router = createRouter({
       path: '/desktops/:realm',
       name: 'desktop-shell',
       component: () => import('../views/DesktopShellView.vue'),
-      meta: { requiresAuth: true },
+      meta: { requiresAuth: true, hideNavbar: true },
     },
   ],
 })

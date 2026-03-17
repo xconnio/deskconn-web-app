@@ -1,10 +1,29 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
+
 import { useAuthStore } from '../stores/auth'
 import { authService } from '../services/authService'
 import type { Organization, Desktop } from '../types'
 
 const authStore = useAuthStore()
+const router = useRouter()
+
+function openDesktop(realm: string) {
+  const url = router.resolve(`/desktops/${realm}`).href
+
+  const width = 1000
+  const height = 700
+
+  const left = window.screenX + (window.outerWidth - width) / 2
+  const top = window.screenY + (window.outerHeight - height) / 2
+
+  window.open(
+    url,
+    '_blank',
+    `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
+  )
+}
 
 // State
 const organizations = ref<Organization[]>([])
@@ -162,28 +181,32 @@ const handleCreateOrg = async () => {
 
         <div v-else class="row g-4">
           <div v-for="desktop in desktops" :key="desktop.realm" class="col-md-4">
-            <router-link :to="'/desktops/' + desktop.realm" class="text-decoration-none">
-              <div class="card h-100 border-0 shadow-sm card-hover">
-                <div class="card-body p-4">
-                  <div class="d-flex align-items-center mb-3">
-                    <span class="fs-2 me-3">{{ desktop.icon }}</span>
-                    <div>
-                      <h5 class="card-title mb-0 text-dark">{{ desktop.name }}</h5>
-                    </div>
-                  </div>
-                  <div class="mt-auto d-flex justify-content-between align-items-center">
-                    <span class="badge bg-light text-primary rounded-pill">View Details</span>
-                    <i class="bi bi-chevron-right text-muted"></i>
+            <div class="card h-100 border-0 shadow-sm">
+              <div class="card-body p-4 d-flex flex-column">
+                <div class="d-flex align-items-center mb-3">
+                  <span class="fs-2 me-3">{{ desktop.icon }}</span>
+                  <div>
+                    <h5 class="card-title mb-0 text-dark">{{ desktop.name }}</h5>
                   </div>
                 </div>
-              </div>
-            </router-link>
-          </div>
 
-          <!-- Empty State -->
-          <div v-if="desktops.length === 0" class="col-12">
-            <div class="card border-dashed p-5 text-center bg-transparent">
-              <p class="text-muted mb-0">No desktops found</p>
+                <div class="mt-auto d-flex justify-content-between align-items-center">
+                  <span class="badge bg-light text-secondary rounded-pill"> Desktop </span>
+                  <button
+                    class="btn btn-sm btn-outline-primary"
+                    @click="openDesktop(desktop.realm)"
+                    title="Open Terminal">
+                    <i class="bi bi-terminal"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Empty State -->
+            <div v-if="desktops.length === 0" class="col-12">
+              <div class="card border-dashed p-5 text-center bg-transparent">
+                <p class="text-muted mb-0">No desktops found</p>
+              </div>
             </div>
           </div>
         </div>
