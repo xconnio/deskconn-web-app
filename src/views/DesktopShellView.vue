@@ -127,10 +127,14 @@ onMounted(async () => {
 
   try {
     session = await authStore.shellWebRTC(realm)
-  } catch (err) {
-    console.error(err)
-    term.writeln('Connection failed.')
-    return
+  } catch {
+    try {
+      session = await authStore.shell(realm)
+    } catch (err) {
+      console.error(err)
+      term.writeln('Connection failed.')
+      return
+    }
   }
 
   channel = new ProgressChannel()
