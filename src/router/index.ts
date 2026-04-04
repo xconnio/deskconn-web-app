@@ -56,6 +56,12 @@ const router = createRouter({
       component: () => import('../views/DesktopShellView.vue'),
       meta: { requiresAuth: true, hideNavbar: true },
     },
+    {
+      path: '/desktops/:realm/files',
+      name: 'desktop-files',
+      component: () => import('../views/DesktopFileExplorerView.vue'),
+      meta: { requiresAuth: true, hideNavbar: true },
+    },
   ],
 })
 
