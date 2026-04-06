@@ -33,3 +33,30 @@ export interface Desktop {
   realm: string
   icon: string
 }
+
+export interface FileEntry {
+  name: string
+  path: string
+  type: string
+  mode: string
+  size: number
+  hidden: boolean
+  mod_time: string
+  is_dir: boolean
+  is_symlink: boolean
+  link_target?: string
+}
+
+export interface FileBrowseResult {
+  path: string
+  home_path: string
+  parent_path?: string
+  type: string
+  mode: string
+  size: number
+  mod_time: string
+  is_dir: boolean
+  is_symlink: boolean
+  link_target?: string
+  entries?: FileEntry[]
+}

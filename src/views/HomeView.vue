@@ -1,29 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, watch } from 'vue'
 
+import { openDesktop, openFileExplorer } from '../router/navigation'
 import { useAuthStore } from '../stores/auth'
 import { authService } from '../services/authService'
 import type { Organization, Desktop } from '../types'
 
 const authStore = useAuthStore()
-const router = useRouter()
-
-function openDesktop(realm: string) {
-  const url = router.resolve(`/desktops/${realm}`).href
-
-  const width = 1000
-  const height = 700
-
-  const left = window.screenX + (window.outerWidth - width) / 2
-  const top = window.screenY + (window.outerHeight - height) / 2
-
-  window.open(
-    url,
-    '_blank',
-    `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
-  )
-}
 
 // State
 const organizations = ref<Organization[]>([])
@@ -78,7 +61,6 @@ const fetchDesktops = async () => {
   }
 }
 
-// Watch for session changes (e.g., after auto-login)
 watch(
   () => authStore.session,
   (newSession) => {
@@ -92,18 +74,6 @@ watch(
   },
   { immediate: true },
 )
-
-onMounted(() => {
-  // If session is already present, fetch immediately
-  if (authStore.session) {
-    fetchOrganizations()
-    fetchDesktops()
-  } else {
-    // If not, the watcher will handle it, but let's make sure we don't hang forever
-    // if auto-login is not even running or fails.
-    // authStore.autoLogin is called in App.vue, so we wait for its result indirectly.
-  }
-})
 
 const handleOpenModal = () => {
   showModal.value = true
@@ -181,7 +151,10 @@ const handleCreateOrg = async () => {
 
         <div v-else class="row g-4">
           <div v-for="desktop in desktops" :key="desktop.realm" class="col-md-4">
-            <div class="card h-100 border-0 shadow-sm">
+            <div
+              class="card h-100 border-0 shadow-sm card-hover desktop-card"
+              @click="openFileExplorer(desktop.realm, desktop.name)"
+            >
               <div class="card-body p-4 d-flex flex-column">
                 <div class="d-flex align-items-center mb-3">
                   <span class="fs-2 me-3">{{ desktop.icon }}</span>
@@ -191,23 +164,22 @@ const handleCreateOrg = async () => {
                 </div>
 
                 <div class="mt-auto d-flex justify-content-between align-items-center">
-                  <span class="badge bg-light text-secondary rounded-pill"> Desktop </span>
+                  <span class="badge bg-light text-secondary rounded-pill"> Open Explorer </span>
                   <button
                     class="btn btn-sm btn-outline-primary"
-                    @click="openDesktop(desktop.realm)"
+                    @click.stop="openDesktop(desktop.realm)"
                     title="Open Terminal">
                     <i class="bi bi-terminal"></i>
                   </button>
                 </div>
               </div>
             </div>
+          </div>
+        </div>
 
-            <!-- Empty State -->
-            <div v-if="desktops.length === 0" class="col-12">
-              <div class="card border-dashed p-5 text-center bg-transparent">
-                <p class="text-muted mb-0">No desktops found</p>
-              </div>
-            </div>
+        <div v-if="desktops.length === 0" class="col-12">
+          <div class="card border-dashed p-5 text-center bg-transparent">
+            <p class="text-muted mb-0">No desktops found</p>
           </div>
         </div>
       </div>
@@ -325,6 +297,10 @@ const handleCreateOrg = async () => {
 .card-hover:hover {
   transform: translateY(-5px);
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1) !important;
+}
+
+.desktop-card {
+  cursor: pointer;
 }
 
 /* Theme Primary Button Override for consistency */
