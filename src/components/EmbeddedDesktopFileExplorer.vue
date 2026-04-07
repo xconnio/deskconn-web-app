@@ -113,6 +113,13 @@ function getStringValue(source: Record<string, unknown>, ...keys: string[]) {
   return typeof value === 'string' ? value : ''
 }
 
+function getDateValue(source: Record<string, unknown>, ...keys: string[]) {
+  const value = getValue(source, ...keys)
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return ''
+}
+
 function getBooleanValue(source: Record<string, unknown>, ...keys: string[]) {
   const value = getValue(source, ...keys)
   return typeof value === 'boolean' ? value : false
@@ -152,7 +159,7 @@ function parseBrowseResult(raw: unknown): FileBrowseResult {
     type: getStringValue(source, 'type', 'Type'),
     mode: getStringValue(source, 'mode', 'Mode'),
     size: getNumberValue(source, 'size', 'Size'),
-    mod_time: getStringValue(source, 'mod_time', 'ModTime'),
+    mod_time: getDateValue(source, 'mod_time'),
     is_dir: getBooleanValue(source, 'is_dir', 'IsDir'),
     is_symlink: getBooleanValue(source, 'is_symlink', 'IsSymlink'),
     link_target: getStringValue(source, 'link_target', 'LinkTarget'),
@@ -224,7 +231,15 @@ function formatError(error: unknown) {
 function formatDate(value?: string) {
   if (!value) return 'Unknown'
 
-  const date = new Date(value)
+  const numericValue = Number(value)
+  const parsedValue =
+    Number.isFinite(numericValue) && value.trim() !== ''
+      ? numericValue < 1e12
+        ? numericValue * 1000
+        : numericValue
+      : value
+
+  const date = new Date(parsedValue)
   if (Number.isNaN(date.getTime())) return value
 
   return new Intl.DateTimeFormat(undefined, {
@@ -317,7 +332,7 @@ async function loadPath(path = '') {
   try {
     const result = await session.value.call(
       procedureFileBrowse,
-      requestedPath ? [requestedPath] : [""],
+      requestedPath ? [requestedPath] : [''],
     )
     const browse = result.args?.[0] ? parseBrowseResult(result.args[0]) : undefined
 
@@ -486,7 +501,6 @@ onUnmounted(async () => {
         <div v-if="errorMessage" class="alert alert-danger mb-0 mt-3">
           <i class="bi bi-exclamation-octagon me-2"></i>{{ errorMessage }}
         </div>
-
       </section>
 
       <div v-if="isConnecting" class="state-card">
@@ -513,11 +527,7 @@ onUnmounted(async () => {
                 <span>Show hidden files</span>
               </label>
               <span class="entry-count">
-                {{
-                  currentBrowse.is_dir
-                    ? `${visibleEntries.length} entries`
-                    : currentBrowse.type
-                }}
+                {{ currentBrowse.is_dir ? `${visibleEntries.length} entries` : currentBrowse.type }}
               </span>
             </div>
           </div>
@@ -530,9 +540,7 @@ onUnmounted(async () => {
           </div>
 
           <div
-            v-else-if="
-              currentBrowse && currentBrowse.is_dir && visibleEntries.length > 0
-            "
+            v-else-if="currentBrowse && currentBrowse.is_dir && visibleEntries.length > 0"
             class="entry-list"
           >
             <button
@@ -550,7 +558,6 @@ onUnmounted(async () => {
                   <div class="entry-name">{{ entry.name }}</div>
                   <div class="entry-meta">
                     <span>{{ entry.type }}</span>
-                    <span>{{ formatDate(entry.mod_time) }}</span>
                   </div>
                 </div>
               </div>
