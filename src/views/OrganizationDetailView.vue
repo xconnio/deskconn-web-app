@@ -3,7 +3,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { authService } from '../services/authService'
-import type { Organization, Device } from '../types'
+import type { Organization } from '../types'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,13 +14,6 @@ const orgId = route.params.id as string
 const organization = ref<Organization | null>(null)
 const isLoading = ref(true)
 const errorMessage = ref('')
-
-// Mock data for Devices (same as HomeView)
-const devices = ref<Device[]>([
-  { id: 'd1', name: 'MacBook Pro M3', type: 'Laptop', status: 'Online', icon: '💻' },
-  { id: 'd2', name: 'iPhone 15 Pro', type: 'Mobile', status: 'Offline', icon: '📱' },
-  { id: 'd3', name: 'iPad Air', type: 'Tablet', status: 'Online', icon: '平板' },
-])
 
 // Modal State for Edit
 const showEditModal = ref(false)
@@ -193,43 +186,8 @@ const handleDeleteOrg = async () => {
     </div>
 
     <div v-if="organization" class="row justify-content-center g-4">
-      <!-- Devices Section -->
-      <div class="col-lg-7">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-          <h3 class="mb-0 d-flex align-items-center">
-            <span class="badge bg-secondary me-3 p-2">
-              <i class="bi bi-laptop"></i>
-            </span>
-            Devices
-          </h3>
-        </div>
-
-        <div class="row g-3">
-          <div v-for="device in devices" :key="device.id" class="col-12">
-            <div class="card border-0 shadow-sm card-hover">
-              <div class="card-body p-3 d-flex align-items-center">
-                <span class="fs-3 me-3">{{ device.icon }}</span>
-                <div class="flex-grow-1">
-                  <h6 class="mb-0">{{ device.name }}</h6>
-                  <small class="text-muted">{{ device.type }}</small>
-                </div>
-                <div class="d-flex align-items-center">
-                  <span 
-                    class="status-indicator me-2" 
-                    :class="device.status === 'Online' ? 'bg-success' : 'bg-danger'"
-                  ></span>
-                  <small :class="device.status === 'Online' ? 'text-success' : 'text-danger'">
-                    {{ device.status }}
-                  </small>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- Members Section -->
-      <div class="col-lg-3">
+      <div class="col-lg-10">
         <div class="d-flex justify-content-between align-items-center mb-4">
           <h3 class="mb-0 d-flex align-items-center">
             <span class="badge bg-info me-3 p-2">
