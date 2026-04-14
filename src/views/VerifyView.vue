@@ -113,10 +113,10 @@ const handleOnChange = () => {
 </script>
 
 <template>
-  <div class="row justify-content-center align-items-center flex-grow-1 w-100 m-0">
-    <div class="col-md-6 col-lg-4">
+  <div class="row justify-content-center align-items-center flex-grow-1 w-100 m-0 px-3 px-md-0">
+    <div class="col-12 col-sm-10 col-md-6 col-lg-4">
       <div class="card shadow-lg border-0 fade-in-up">
-        <div class="card-body p-5 text-center">
+        <div class="card-body p-4 p-md-5 text-center">
           <h3 class="card-title fw-bold mb-3">Verify Your Account</h3>
           <p class="text-muted mb-4">
             Enter the 6-digit code sent to your email/device for user
@@ -196,7 +196,7 @@ const handleOnChange = () => {
 /* Focus style handled by bootstrap form-control mostly, but we can enhance */
 .otp-input:focus {
   border-color: var(--bs-primary);
-  box-shadow: 0 0 0 4px rgba(255, 184, 0, 0.25);
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.08);
   transform: translateY(-2px);
   outline: 0;
 }

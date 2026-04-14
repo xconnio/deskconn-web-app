@@ -71,10 +71,10 @@ const handleRegister = async () => {
 </script>
 
 <template>
-  <div class="row justify-content-center align-items-center flex-grow-1 w-100 m-0">
-    <div class="col-md-6 col-lg-4">
+  <div class="row justify-content-center align-items-center flex-grow-1 w-100 m-0 px-3 px-md-0">
+    <div class="col-12 col-sm-10 col-md-6 col-lg-4">
       <div class="card shadow-lg border-0 fade-in-up">
-        <div class="card-body p-5">
+        <div class="card-body p-4 p-md-5">
           <div class="text-center mb-5">
             <h3 class="card-title fw-bold">Create Account</h3>
             <p class="text-muted text-sm">Join DeskConn today</p>
