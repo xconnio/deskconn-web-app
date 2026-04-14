@@ -72,17 +72,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="container pt-5 pb-5 fade-in-up">
-    <!-- Navigation -->
-    <div class="row mb-2 justify-content-center">
-      <div class="col-lg-6">
-        <router-link to="/" class="btn btn-link text-decoration-none text-muted p-0 d-flex align-items-center back-link">
-          <i class="bi bi-arrow-left-short fs-2 me-1"></i>
-          <span class="fw-semibold">Back to Dashboard</span>
-        </router-link>
-      </div>
-    </div>
-
+  <div class="container pt-3 pt-md-5 pb-5 fade-in-up">
     <div class="row justify-content-center">
       <div class="col-lg-6">
         <div class="card glass-modal border-0 shadow-lg">
@@ -141,7 +131,7 @@ onMounted(() => {
                     class="form-control theme-input pe-5"
                     id="password"
                     v-model="form.password"
-                    placeholder="Leave blank to keep current"
+                    placeholder="Leave blank to keep unchanged"
                     autocomplete="new-password"
                     :disabled="isLoading"
                   />
@@ -154,14 +144,14 @@ onMounted(() => {
                     <i class="bi" :class="showPassword ? 'bi-eye-slash' : 'bi-eye'"></i>
                   </button>
                 </div>
-                <div class="form-text mt-2">
+                <div class="password-hints mt-2">
                   <span :class="{'text-success': form.password.length >= 8, 'text-muted': form.password.length === 0}">
                     <i class="bi" :class="form.password.length >= 8 ? 'bi-check-circle' : 'bi-circle'"></i> 8+ characters
                   </span>
-                  <span class="ms-3" :class="{'text-success': /[A-Z]/.test(form.password), 'text-muted': form.password.length === 0}">
+                  <span :class="{'text-success': /[A-Z]/.test(form.password), 'text-muted': form.password.length === 0}">
                     <i class="bi" :class="/[A-Z]/.test(form.password) ? 'bi-check-circle' : 'bi-circle'"></i> 1 Capital letter
                   </span>
-                  <span class="ms-3" :class="{'text-success': /[^a-zA-Z0-9]/.test(form.password), 'text-muted': form.password.length === 0}">
+                  <span :class="{'text-success': /[^a-zA-Z0-9]/.test(form.password), 'text-muted': form.password.length === 0}">
                     <i class="bi" :class="/[^a-zA-Z0-9]/.test(form.password) ? 'bi-check-circle' : 'bi-circle'"></i> 1 Symbol
                   </span>
                 </div>
@@ -221,7 +211,7 @@ onMounted(() => {
 
 .back-link:hover {
   opacity: 1;
-  color: var(--theme-yellow) !important;
+  color: var(--theme-primary) !important;
   transform: translateX(-4px);
 }
 
@@ -272,5 +262,12 @@ onMounted(() => {
 .btn-password-toggle:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+.password-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  font-size: 0.8rem;
 }
 </style>

@@ -19,9 +19,9 @@ function closeExplorer() {
 </script>
 
 <template>
-  <div class="container py-5 fade-in-up">
+  <div class="container py-3 py-md-5 px-2 px-md-3 fade-in-up">
     <div class="row justify-content-center">
-      <div class="col-lg-10">
+      <div class="col-12 col-lg-10">
         <div class="mb-4">
           <button class="btn btn-link text-decoration-none px-0 back-link" @click="closeExplorer">
             <i class="bi bi-arrow-left me-2"></i>Back to dashboard
@@ -31,7 +31,6 @@ function closeExplorer() {
         <EmbeddedDesktopFileExplorer
           :realm="realm"
           :desktop-name="desktopName"
-          @close="closeExplorer"
         />
       </div>
     </div>

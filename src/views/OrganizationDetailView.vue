@@ -114,8 +114,8 @@ const handleDeleteOrg = async () => {
 
     await authService.deleteOrganization(authStore.session, orgId)
     
-    // Redirect home on success
-    router.push('/')
+    // Redirect to organizations on success
+    router.push('/organizations')
   } catch (err: unknown) {
     console.error('Failed to delete organization', err)
     deleteErrorMessage.value = err instanceof Error ? err.message : 'Failed to delete organization'
@@ -126,17 +126,17 @@ const handleDeleteOrg = async () => {
 </script>
 
 <template>
-  <div class="container py-5 fade-in-up">
+  <div class="container py-3 py-md-5 fade-in-up">
     <!-- Navigation -->
     <div class="row mb-4 justify-content-center">
       <div class="col-lg-10">
-        <router-link to="/" class="btn btn-link text-decoration-none text-muted p-0 d-flex align-items-center back-link mb-3">
+        <router-link to="/organizations" class="btn btn-link text-decoration-none text-muted p-0 d-flex align-items-center back-link mb-3">
           <i class="bi bi-arrow-left-short fs-2 me-1"></i>
-          <span class="fw-semibold">Back to Dashboard</span>
+          <span class="fw-semibold">Back to Organizations</span>
         </router-link>
         <nav aria-label="breadcrumb">
           <ol class="breadcrumb mb-0">
-            <li class="breadcrumb-item"><router-link to="/" class="text-decoration-none text-primary opacity-75">Dashboard</router-link></li>
+            <li class="breadcrumb-item"><router-link to="/organizations" class="text-decoration-none text-primary opacity-75">Organizations</router-link></li>
             <li class="breadcrumb-item active" aria-current="page">Organization</li>
           </ol>
         </nav>
@@ -146,17 +146,17 @@ const handleDeleteOrg = async () => {
     <!-- Header Section -->
     <div v-if="organization" class="row mb-5 justify-content-center">
       <div class="col-lg-10">
-        <div class="d-flex justify-content-between align-items-center">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
           <div>
             <h1 class="display-5 fw-bold mb-0">{{ organization.name }}</h1>
             <p class="text-muted lead mb-0">Organization Management</p>
           </div>
-          <div class="d-flex gap-2">
-            <button @click="handleOpenEditModal" class="btn btn-primary rounded-pill px-4 py-2 fw-bold shadow-sm">
-              <i class="bi bi-pencil-square me-2"></i> Edit
+          <div class="d-flex gap-2 flex-shrink-0">
+            <button @click="handleOpenEditModal" class="btn btn-primary rounded-pill px-3 px-md-4 py-2 fw-bold shadow-sm">
+              <i class="bi bi-pencil-square me-1 me-md-2"></i><span class="d-none d-sm-inline">Edit</span>
             </button>
-            <button @click="handleOpenDeleteModal" class="btn btn-theme-danger rounded-pill px-4 py-2 fw-bold shadow-sm">
-              <i class="bi bi-trash me-2"></i> Delete
+            <button @click="handleOpenDeleteModal" class="btn btn-theme-danger rounded-pill px-3 px-md-4 py-2 fw-bold shadow-sm">
+              <i class="bi bi-trash me-1 me-md-2"></i><span class="d-none d-sm-inline">Delete</span>
             </button>
           </div>
         </div>
@@ -170,8 +170,8 @@ const handleDeleteOrg = async () => {
           <i class="bi bi-exclamation-triangle-fill me-2"></i>
           <div>{{ errorMessage }}</div>
         </div>
-        <button @click="router.push('/')" class="btn btn-outline-primary mt-3">
-          <i class="bi bi-arrow-left me-2"></i> Back to Dashboard
+        <button @click="router.push('/organizations')" class="btn btn-outline-primary mt-3">
+          <i class="bi bi-arrow-left me-2"></i> Back to Organizations
         </button>
       </div>
     </div>
@@ -190,7 +190,7 @@ const handleDeleteOrg = async () => {
       <div class="col-lg-10">
         <div class="d-flex justify-content-between align-items-center mb-4">
           <h3 class="mb-0 d-flex align-items-center">
-            <span class="badge bg-info me-3 p-2">
+            <span class="badge bg-dark me-3 p-2">
               <i class="bi bi-people"></i>
             </span>
             Members
@@ -201,12 +201,12 @@ const handleDeleteOrg = async () => {
           <div class="list-group list-group-flush rounded-3">
             <div v-for="member in organization.members" :key="member.user_id" class="list-group-item border-0 p-3">
               <div class="d-flex align-items-center">
-                <div class="avatar-sm bg-light text-primary rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
+                <div class="avatar-sm bg-light text-dark rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
                   {{ member.user.name?.charAt(0) || member.user.email?.charAt(0) || '?' }}
                 </div>
                 <div>
                   <h6 class="mb-0">{{ member.user.name || 'Unknown' }}</h6>
-                  <small class="text-muted d-block text-truncate" style="max-width: 150px;">{{ member.user.email || 'No email' }}</small>
+                  <small class="text-muted d-block text-truncate member-email">{{ member.user.email || 'No email' }}</small>
                   <span class="badge bg-light text-primary small text-capitalize mt-1">{{ member.role }}</span>
                 </div>
               </div>
@@ -313,13 +313,17 @@ const handleDeleteOrg = async () => {
 
 .back-link:hover {
   opacity: 1;
-  color: var(--theme-yellow) !important;
+  color: var(--theme-primary) !important;
   transform: translateX(-4px);
 }
 
 .avatar-sm {
   font-weight: 600;
   font-size: 1rem;
+}
+
+.member-email {
+  max-width: 240px;
 }
 
 .card-hover:hover {

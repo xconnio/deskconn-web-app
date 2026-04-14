@@ -13,10 +13,6 @@ const props = defineProps<{
   desktopName?: string
 }>()
 
-const emit = defineEmits<{
-  close: []
-}>()
-
 const authStore = useAuthStore()
 
 const session = ref<Session | null>(null)
@@ -378,10 +374,6 @@ async function initializeExplorer() {
   await loadPath('')
 }
 
-async function goHome() {
-  await loadPath('')
-}
-
 async function goUp() {
   if (!currentBrowse.value?.parent_path || !canGoUp.value) return
   await loadPath(currentBrowse.value.parent_path)
@@ -435,31 +427,13 @@ onUnmounted(async () => {
   <div class="embedded-explorer">
     <div class="explorer-shell">
       <header class="explorer-header">
-        <div>
-          <p class="eyebrow mb-2">Remote File Explorer</p>
-          <h2 class="explorer-title mb-2">{{ desktopName || realm }}</h2>
-          <p class="explorer-subtitle mb-0">
-            Browse folders and inspect files without leaving the dashboard.
-          </p>
-        </div>
-
         <div class="header-actions">
-          <button
-            class="btn btn-light rounded-pill px-3"
-            @click="goHome"
-            :disabled="isLoading || isConnecting"
-          >
-            <i class="bi bi-house-door me-2"></i>Home
-          </button>
           <button
             class="btn btn-dark rounded-pill px-3"
             @click="refreshCurrentPath"
             :disabled="isLoading || isConnecting"
           >
-            <i class="bi bi-arrow-clockwise me-2"></i>Refresh
-          </button>
-          <button class="btn btn-outline-secondary rounded-pill px-3" @click="emit('close')">
-            <i class="bi bi-x-lg me-2"></i>Close
+            <i class="bi bi-arrow-clockwise"></i><span class="btn-text ms-2">Refresh</span>
           </button>
         </div>
       </header>
@@ -476,14 +450,16 @@ onUnmounted(async () => {
           </button>
 
           <div class="breadcrumb-strip" v-if="breadcrumbSegments.length > 0">
-            <button
-              v-for="segment in breadcrumbSegments"
-              :key="segment.path"
-              class="breadcrumb-chip"
-              @click="() => loadPath(segment.path)"
-            >
-              {{ segment.label }}
-            </button>
+            <template v-for="(segment, index) in breadcrumbSegments" :key="segment.path">
+              <button
+                class="breadcrumb-chip"
+                :class="{ 'breadcrumb-chip-current': index === breadcrumbSegments.length - 1 }"
+                @click="() => loadPath(segment.path)"
+              >
+                {{ segment.label }}
+              </button>
+              <span v-if="index < breadcrumbSegments.length - 1" class="breadcrumb-sep">/</span>
+            </template>
           </div>
 
           <form class="path-input-wrap" @submit.prevent="submitPath">
@@ -518,7 +494,7 @@ onUnmounted(async () => {
           <div class="browser-card-header">
             <div>
               <p class="section-label mb-1">Current Location</p>
-              <h3 class="h5 mb-0">{{ currentBrowse?.path || 'Home' }}</h3>
+              <h3 class="mb-0 current-path">{{ currentBrowse?.path || 'Home' }}</h3>
             </div>
 
             <div v-if="currentBrowse" class="browser-header-actions">
@@ -532,16 +508,19 @@ onUnmounted(async () => {
             </div>
           </div>
 
-          <div v-if="isLoading" class="browser-state">
-            <div class="spinner-border text-warning mb-3" role="status">
+          <!-- Initial load spinner: only when no content exists yet -->
+          <div v-if="isLoading && !currentBrowse" class="browser-state">
+            <div class="spinner-border mb-3" role="status">
               <span class="visually-hidden">Loading...</span>
             </div>
             <p class="mb-0">Loading remote path…</p>
           </div>
 
+          <!-- Entry list: stays mounted, dims during in-folder navigation -->
           <div
             v-else-if="currentBrowse && currentBrowse.is_dir && visibleEntries.length > 0"
             class="entry-list"
+            :class="{ 'entry-list-loading': isLoading }"
           >
             <button
               v-for="entry in visibleEntries"
@@ -658,29 +637,8 @@ onUnmounted(async () => {
 
 .explorer-header {
   display: flex;
-  justify-content: space-between;
-  gap: 1.5rem;
-  align-items: flex-start;
+  justify-content: flex-end;
   margin-bottom: 1.5rem;
-}
-
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.74rem;
-  color: #64748b;
-  font-weight: 700;
-}
-
-.explorer-title {
-  font-size: clamp(1.6rem, 2vw, 2.4rem);
-  font-weight: 800;
-  color: #1f2a37;
-}
-
-.explorer-subtitle {
-  color: #617182;
-  max-width: 42rem;
 }
 
 .header-actions {
@@ -723,7 +681,7 @@ onUnmounted(async () => {
 .hidden-toggle input {
   width: 1rem;
   height: 1rem;
-  accent-color: var(--theme-yellow);
+  accent-color: var(--theme-primary);
 }
 
 .path-toolbar {
@@ -734,13 +692,17 @@ onUnmounted(async () => {
 }
 
 .tool-btn {
-  width: 48px;
-  height: 48px;
+  width: 38px;
+  height: 38px;
   border: 0;
-  border-radius: 16px;
+  border-radius: 8px;
   background: #2c2e33;
   color: #fff;
-  font-size: 1.1rem;
+  font-size: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .tool-btn:disabled {
@@ -749,19 +711,46 @@ onUnmounted(async () => {
 
 .breadcrumb-strip {
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  gap: 0.15rem;
   overflow-x: auto;
   padding-bottom: 0.1rem;
+  min-width: 0;
+}
+
+.breadcrumb-sep {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  user-select: none;
+  padding: 0 0.1rem;
 }
 
 .breadcrumb-chip {
   border: 0;
-  border-radius: 999px;
-  padding: 0.6rem 1rem;
-  background: #f8fafc;
+  border-radius: 6px;
+  padding: 0.3rem 0.4rem;
+  background: transparent;
   color: #475569;
-  font-weight: 700;
+  font-weight: 600;
+  font-size: 1rem;
   white-space: nowrap;
+}
+
+.breadcrumb-chip:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.breadcrumb-chip-current {
+  color: #0f172a;
+  font-weight: 700;
+  cursor: default;
+}
+
+.breadcrumb-chip-current:hover {
+  background: transparent;
+  color: #0f172a;
 }
 
 .path-input-wrap {
@@ -840,6 +829,14 @@ onUnmounted(async () => {
   word-break: break-word;
 }
 
+.current-path {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #21313f;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
 .section-label {
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -864,6 +861,12 @@ onUnmounted(async () => {
   max-height: 65vh;
   overflow: auto;
   padding-right: 0.25rem;
+  transition: opacity 0.15s ease;
+}
+
+.entry-list-loading {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 .entry-row {
@@ -886,7 +889,7 @@ onUnmounted(async () => {
 .entry-row:hover,
 .entry-row.active {
   transform: translateY(-1px);
-  border-color: rgba(255, 184, 0, 0.45);
+  border-color: rgba(0, 0, 0, 0.2);
   box-shadow: 0 10px 24px rgba(71, 85, 105, 0.08);
 }
 
@@ -981,36 +984,108 @@ onUnmounted(async () => {
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 767px) {
-  .embedded-explorer {
-    padding: 1rem;
-  }
-
-  .detail-row {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .detail-row span,
-  .detail-row strong {
-    text-align: left;
-  }
-}
-
+/* ── Tablet (≤ 991px) ── */
 @media (max-width: 991px) {
-  .explorer-header,
-  .path-toolbar,
+  /* Stack browser + details vertically */
   .explorer-grid {
     grid-template-columns: 1fr;
-    flex-direction: column;
-  }
-
-  .explorer-header {
-    align-items: stretch;
   }
 
   .entry-list {
     max-height: none;
   }
+}
+
+/* ── Mobile (≤ 767px) ── */
+@media (max-width: 767px) {
+  /* Reduce card padding */
+  .toolbar-card {
+    padding: 0.75rem;
+  }
+
+  .browser-card,
+  .details-card {
+    padding: 1rem;
+  }
+
+  /* Stack path title above actions so long paths don't squeeze them sideways */
+  .browser-card-header {
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .browser-header-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  /* Path toolbar: up-btn + breadcrumb on row 1, path input full-width on row 2 */
+  .path-toolbar {
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+  }
+
+  .path-input-wrap {
+    grid-column: 1 / -1;
+    min-height: 44px;
+  }
+
+  .tool-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  /* Compact detail rows — keep label + value side by side */
+  .detail-row {
+    padding: 0.5rem 0.65rem;
+    gap: 0.5rem;
+  }
+
+  .detail-row span {
+    flex: 0 0 75px;
+    font-size: 0.78rem;
+  }
+
+  .details-body {
+    gap: 0.35rem;
+  }
+
+  /* Reduce entry spacing */
+  .entry-row {
+    padding: 0.7rem 0.75rem;
+    border-radius: 14px;
+  }
+
+  .entry-list {
+    gap: 0.5rem;
+  }
+
+  .entry-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    font-size: 1rem;
+  }
+
+  /* State cards */
+  .state-card,
+  .browser-state,
+  .details-empty {
+    min-height: 200px;
+    padding: 1.5rem;
+  }
+}
+
+/* ── Small phones (≤ 480px) — icon-only header buttons ── */
+@media (max-width: 480px) {
+  .btn-text {
+    display: none;
+  }
+
+  .header-actions .btn {
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
+
 }
 </style>

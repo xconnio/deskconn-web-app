@@ -15,6 +15,30 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/organizations',
+      name: 'organizations',
+      component: () => import('../views/OrganizationsView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/organizations/:id',
+      name: 'organization-detail',
+      component: () => import('../views/OrganizationDetailView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/profile',
+      name: 'profile',
+      component: () => import('../views/ProfileView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('../views/SettingsView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/login',
       name: 'login',
       component: LoginView,
@@ -39,18 +63,6 @@ const router = createRouter({
       meta: { requiresGuest: true },
     },
     {
-      path: '/organizations/:id',
-      name: 'organization-detail',
-      component: () => import('../views/OrganizationDetailView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/profile',
-      name: 'profile',
-      component: () => import('../views/ProfileView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
       path: '/desktops/:realm',
       name: 'desktop-shell',
       component: () => import('../views/DesktopShellView.vue'),
@@ -60,7 +72,7 @@ const router = createRouter({
       path: '/desktops/:realm/files',
       name: 'desktop-files',
       component: () => import('../views/DesktopFileExplorerView.vue'),
-      meta: { requiresAuth: true, hideNavbar: true },
+      meta: { requiresAuth: true },
     },
   ],
 })
