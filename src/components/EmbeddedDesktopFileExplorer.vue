@@ -508,16 +508,19 @@ onUnmounted(async () => {
             </div>
           </div>
 
-          <div v-if="isLoading" class="browser-state">
-            <div class="spinner-border text-warning mb-3" role="status">
+          <!-- Initial load spinner: only when no content exists yet -->
+          <div v-if="isLoading && !currentBrowse" class="browser-state">
+            <div class="spinner-border mb-3" role="status">
               <span class="visually-hidden">Loading...</span>
             </div>
             <p class="mb-0">Loading remote path…</p>
           </div>
 
+          <!-- Entry list: stays mounted, dims during in-folder navigation -->
           <div
             v-else-if="currentBrowse && currentBrowse.is_dir && visibleEntries.length > 0"
             class="entry-list"
+            :class="{ 'entry-list-loading': isLoading }"
           >
             <button
               v-for="entry in visibleEntries"
@@ -858,6 +861,12 @@ onUnmounted(async () => {
   max-height: 65vh;
   overflow: auto;
   padding-right: 0.25rem;
+  transition: opacity 0.15s ease;
+}
+
+.entry-list-loading {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 .entry-row {
