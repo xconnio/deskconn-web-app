@@ -1,3 +1,6 @@
+IMAGE := xconnio/deskconn-web-app
+VERSION := $(shell git describe --tags --always)
+
 setup:
 	npm install
 
@@ -9,3 +12,9 @@ run:
 
 clean:
 	rm -rf dist/ node_modules/
+
+build-docker:
+	docker build -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
+
+run-docker:
+	docker compose up web

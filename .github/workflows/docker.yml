@@ -1,0 +1,27 @@
+name: build docker image & push to docker hub
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build Docker image
+        run: make build-docker
+
+      - name: Log in and push Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          VERSION=$(git describe --tags --always)
+          docker push xconnio/deskconn-web-app:latest
+          docker push xconnio/deskconn-web-app:$VERSION
