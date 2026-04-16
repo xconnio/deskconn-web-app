@@ -1,4 +1,4 @@
-import { connectCryptosign, connectCRA } from 'xconn'
+import { connectCryptosign, connectCRA, Client, AnonymousAuthenticator } from 'xconn'
 import { connectWAMP, ClientConfig } from 'xconn-webrtc-js'
 
 import { WAMP_URL, WAMP_REALM } from '../config'
@@ -15,6 +15,11 @@ export const wampService = {
 
   async connectWithCryptosign(authId: string, privateKey: string): Promise<WampSession> {
     return connectCryptosign(WAMP_URL, WAMP_REALM, authId, privateKey)
+  },
+
+  async connectWithAnonymous(authId: string): Promise<WampSession> {
+    const client = new Client({ authenticator: new AnonymousAuthenticator(authId, {}) })
+    return client.connect(WAMP_URL, WAMP_REALM)
   },
 
   async shellWithCryptosign(authId: string, privateKey: string, realm: string): Promise<WampSession> {

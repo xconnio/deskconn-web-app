@@ -2,12 +2,12 @@ import { ClientConfig } from 'xconn-webrtc-js'
 import { CBORSerializer, connectCryptosign, CryptoSignAuthenticator } from 'xconn'
 
 import { wampService, type WampSession } from './wamp'
-import { REGISTRATION_AUTHID, REGISTRATION_SECRET, WAMP_URL } from '../config'
+import { REGISTRATION_AUTHID, WAMP_URL } from '../config'
 
 export const authService = {
   async register(form: { username: string; name: string; password: string }) {
     // Connect with registrar credentials
-    const s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
+    const s = await wampService.connectWithAnonymous(REGISTRATION_AUTHID)
 
     try {
       const result = await s.call('io.xconn.deskconn.account.create', [
@@ -31,7 +31,7 @@ export const authService = {
     // Ensure we have a valid registrar session
     if (!s) {
       console.log('Restoring registrar session for verification...')
-      s = await wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
+      s = await wampService.connectWithAnonymous(REGISTRATION_AUTHID)
     }
 
     try {
@@ -44,7 +44,7 @@ export const authService = {
 
   // Helper to get a session if not provided
   async getRegistrarSession(): Promise<WampSession> {
-    return wampService.connectWithCryptosign(REGISTRATION_AUTHID, REGISTRATION_SECRET)
+    return wampService.connectWithAnonymous(REGISTRATION_AUTHID)
   },
 
   async resendOtp(session: WampSession | null, username: string) {
