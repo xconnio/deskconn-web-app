@@ -111,7 +111,7 @@ onMounted(async () => {
 
   term = new Terminal({
     cursorBlink: true,
-    cursorStyle: "block",
+    cursorStyle: 'block',
     convertEol: true,
     scrollback: 10000,
     fontSize: 15,
@@ -128,7 +128,7 @@ onMounted(async () => {
   try {
     session = await authStore.shell(realm)
   } catch {
-      term.writeln('Connection failed.')
+    term.writeln('Connection failed.')
   }
 
   channel = new ProgressChannel()
