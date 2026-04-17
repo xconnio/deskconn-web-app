@@ -4,6 +4,15 @@ import { CBORSerializer, connectCryptosign, CryptoSignAuthenticator } from 'xcon
 import { wampService, type WampSession } from './wamp'
 import { REGISTRATION_AUTHID, WAMP_URL } from '../config'
 
+interface TurnCredentials {
+  credential: string
+  expires_at: number
+  urls: string[]
+  username: string
+}
+
+let cachedTurnCredentials: TurnCredentials | null = null
+
 export const authService = {
   async register(form: { username: string; name: string; password: string }) {
     // Connect with registrar credentials
@@ -139,6 +148,27 @@ export const authService = {
     const topicAnswererOnCandidate = 'io.xconn.webrtc.answerer.on_candidate'
     const topicOffererOnCandidate = 'io.xconn.webrtc.offerer.on_candidate'
     const session = await connectCryptosign(WAMP_URL, realm, authID, privateKey)
+
+    const iceServers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }]
+
+    const nowSecs = Math.floor(Date.now() / 5000)
+    if (!cachedTurnCredentials || cachedTurnCredentials.expires_at <= nowSecs) {
+      try {
+        const result = await session.call('io.xconn.deskconn.coturn.credentials.create')
+        cachedTurnCredentials = result.args[0] as TurnCredentials
+      } catch {
+        cachedTurnCredentials = null
+      }
+    }
+
+    if (cachedTurnCredentials) {
+      iceServers.push({
+        urls: cachedTurnCredentials.urls,
+        username: cachedTurnCredentials.username,
+        credential: cachedTurnCredentials.credential,
+      })
+    }
+
     const config = new ClientConfig(
       realm,
       procedureWebRTCOffer,
@@ -147,7 +177,7 @@ export const authService = {
       new CBORSerializer(),
       new CryptoSignAuthenticator(authID, privateKey, {}),
       session,
-      [{ urls: ['stun:stun.l.google.com:19302'] }],
+      iceServers,
     )
 
     return await wampService.shellWithWebRTC(config)
