@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 
-import { openDesktop, openFileExplorer } from '../router/navigation'
+import { openFileExplorer } from '../router/navigation'
 import { useAuthStore } from '../stores/auth'
 import { authService } from '../services/authService'
 import type { Desktop } from '../types'
+import TerminalPanel from '../components/TerminalPanel.vue'
 
 const authStore = useAuthStore()
 
 const desktops = ref<Desktop[]>([])
 const isLoadingDesktops = ref(true)
+const activeTerminal = ref<{ realm: string; name: string } | null>(null)
 
 const fetchDesktops = async () => {
   if (!authStore.session) {
@@ -45,7 +47,17 @@ watch(
 </script>
 
 <template>
-  <div class="container py-3 py-md-5 fade-in-up">
+  <!-- Terminal view -->
+  <div v-if="activeTerminal" class="terminal-view fade-in-up">
+    <TerminalPanel
+      :realm="activeTerminal.realm"
+      :desktop-name="activeTerminal.name"
+      @close="activeTerminal = null"
+    />
+  </div>
+
+  <!-- Desktops view -->
+  <div v-else class="container py-3 py-md-5 fade-in-up">
     <div class="row justify-content-center mb-5">
       <div class="col-lg-10">
         <div class="d-flex justify-content-between align-items-center mb-4">
@@ -87,7 +99,7 @@ watch(
                   <span class="badge bg-light text-secondary rounded-pill">Open Explorer</span>
                   <button
                     class="btn btn-sm btn-outline-dark"
-                    @click.stop="openDesktop(desktop.realm)"
+                    @click.stop="activeTerminal = { realm: desktop.realm, name: desktop.name }"
                     title="Open Terminal"
                   >
                     <i class="bi bi-terminal"></i>
@@ -109,6 +121,11 @@ watch(
 </template>
 
 <style scoped>
+.terminal-view {
+  display: flex;
+  flex: 1;
+}
+
 .card-hover {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
