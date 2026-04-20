@@ -16,6 +16,8 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@noble/curves": "^2.2.0",
     "@noble/ed25519": "^3.0.0",
     "@popperjs/core": "^2.11.8",
     "@xterm/addon-fit": "^0.11.0",
