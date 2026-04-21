@@ -4,7 +4,15 @@ import { ApplicationError, type Session } from 'xconn'
 
 import { useAuthStore } from '@/stores/auth'
 import type { FileBrowseResult, FileEntry } from '@/types'
+import {
+  createX25519KeyPair,
+  deriveSessionKeys,
+  encryptPayload,
+  decryptPayload,
+  type EncryptionKeys,
+} from '@/utils/encryption'
 
+const procedureKeyExchange = 'io.xconn.deskconn.deskconnd.key.exchange'
 const procedureFileBrowse = 'io.xconn.deskconn.deskconnd.file.browse'
 const outsideHomeMessage = 'Access denied. You can only browse files inside the home directory.'
 
@@ -16,6 +24,7 @@ const props = defineProps<{
 const authStore = useAuthStore()
 
 const session = ref<Session | null>(null)
+const encryptionKeys = ref<EncryptionKeys | null>(null)
 const isConnecting = ref(true)
 const isLoading = ref(false)
 const errorMessage = ref('')
@@ -304,6 +313,38 @@ function resetExplorerState() {
   pathInput.value = ''
   errorMessage.value = ''
   isLoading.value = false
+  encryptionKeys.value = null
+}
+
+async function performKeyExchange(): Promise<boolean> {
+  if (!session.value) return false
+
+  const { publicKey, privateKey } = createX25519KeyPair()
+
+  let result
+  try {
+    result = await session.value.call(procedureKeyExchange, [publicKey])
+  } catch (error) {
+    if (
+      error instanceof ApplicationError && error.message?.toLowerCase() == 'wamp.error.no_such_procedure'
+    ) {
+      return false
+    }
+    throw error
+  }
+
+  const serverPublicKey = result.args?.[0]
+  if (!(serverPublicKey instanceof Uint8Array) && !Array.isArray(serverPublicKey)) {
+    throw new Error('Invalid server public key received during key exchange')
+  }
+
+  const serverKeyBytes =
+    serverPublicKey instanceof Uint8Array
+      ? serverPublicKey
+      : new Uint8Array(serverPublicKey as number[])
+
+  encryptionKeys.value = await deriveSessionKeys(privateKey, serverKeyBytes)
+  return true
 }
 
 async function loadPath(path = '') {
@@ -326,11 +367,31 @@ async function loadPath(path = '') {
   }
 
   try {
-    const result = await session.value.call(
-      procedureFileBrowse,
-      requestedPath ? [requestedPath] : [''],
-    )
-    const browse = result.args?.[0] ? parseBrowseResult(result.args[0]) : undefined
+    const keys = encryptionKeys.value
+    let browse: FileBrowseResult | undefined
+
+    if (keys) {
+      const pathBytes = new TextEncoder().encode(requestedPath)
+      const encryptedPath = encryptPayload(pathBytes, keys.encryptKey)
+      const result = await session.value.call(procedureFileBrowse, [encryptedPath])
+
+      const encryptedResult = result.args?.[0]
+      if (!encryptedResult) throw new Error('Empty response from remote file browser')
+
+      const encryptedBytes =
+        encryptedResult instanceof Uint8Array
+          ? encryptedResult
+          : new Uint8Array(encryptedResult as number[])
+
+      const decrypted = decryptPayload(encryptedBytes, keys.decryptKey)
+      browse = parseBrowseResult(JSON.parse(new TextDecoder().decode(decrypted)))
+    } else {
+      const result = await session.value.call(
+        procedureFileBrowse,
+        requestedPath ? [requestedPath] : [''],
+      )
+      browse = result.args?.[0] ? parseBrowseResult(result.args[0]) : undefined
+    }
 
     if (!browse || !browse.path) {
       throw new Error('Empty response from remote file browser')
@@ -370,6 +431,13 @@ async function initializeExplorer() {
   await connectDesktopSession()
 
   if (!session.value) return
+
+  try {
+    await performKeyExchange()
+  } catch (error) {
+    errorMessage.value = formatError(error)
+    return
+  }
 
   await loadPath('')
 }
@@ -1086,6 +1154,5 @@ onUnmounted(async () => {
     padding-left: 0.65rem;
     padding-right: 0.65rem;
   }
-
 }
 </style>
