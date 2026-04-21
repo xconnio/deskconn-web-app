@@ -5,6 +5,12 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { ApplicationError, Progress, Result, Session } from 'xconn'
 import { useAuthStore } from '@/stores/auth'
+import {
+  createX25519KeyPair,
+  deriveSessionKeys,
+  encryptPayload,
+  decryptPayload,
+} from '@/utils/encryption'
 
 const props = defineProps<{ realm: string; desktopName: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -17,6 +23,17 @@ let fitAddon: FitAddon | null = null
 let session: Session | null = null
 let channel: ProgressChannel | null = null
 let closed = false
+
+// Encryption state — reset on each startShell call
+let encKeys: { encryptKey: Uint8Array; decryptKey: Uint8Array } | null = null
+let encryptionMode: 'pending' | 'enabled' | 'disabled' = 'pending'
+let clientPrivateKey: Uint8Array | null = null
+let clientPublicKey: Uint8Array | null = null
+let pendingInputs: Uint8Array[] = []
+let isFirstSizeSent = false
+
+const enc = new TextEncoder()
+const dec = new TextDecoder()
 
 class ProgressChannel {
   private queue: Progress[] = []
@@ -37,10 +54,37 @@ class ProgressChannel {
   }
 }
 
+function pushEncrypted(bytes: Uint8Array) {
+  if (!channel) return
+  const payload = encKeys ? encryptPayload(bytes, encKeys.encryptKey) : bytes
+  channel.push(new Progress([payload], {}, { progress: true }))
+}
+
 const sendSize = () => {
   if (!term || !channel) return
   const { cols, rows } = term
-  channel.push(new Progress([`SIZE:${cols}:${rows}`], {}, { progress: true }))
+  const sizeStr = `SIZE:${cols}:${rows}`
+
+  if (!isFirstSizeSent) {
+    isFirstSizeSent = true
+    // First SIZE: append :KEY:<publicKey> for key exchange
+    const sizeBytes = enc.encode(sizeStr)
+    const keyMarker = enc.encode(':KEY:')
+    const first = new Uint8Array(sizeBytes.length + keyMarker.length + clientPublicKey!.length)
+    first.set(sizeBytes, 0)
+    first.set(keyMarker, sizeBytes.length)
+    first.set(clientPublicKey!, sizeBytes.length + keyMarker.length)
+    channel.push(new Progress([first], {}, { progress: true }))
+    return
+  }
+
+  // Subsequent resizes: encrypt if encryption is active, otherwise send as string
+  if (encryptionMode === 'enabled') {
+    pushEncrypted(enc.encode(sizeStr))
+  } else if (encryptionMode === 'disabled') {
+    channel.push(new Progress([sizeStr], {}, { progress: true }))
+  }
+  // If still 'pending', drop the resize — the terminal isn't active yet
 }
 
 const handleResize = () => {
@@ -51,7 +95,36 @@ const handleResize = () => {
 
 const handleTerminalInput = (data: string) => {
   if (closed || !channel) return
-  channel.push(new Progress([data], {}, { progress: true }))
+  const bytes = enc.encode(data)
+  if (encryptionMode === 'pending') {
+    pendingInputs.push(bytes)
+    return
+  }
+  if (encryptionMode === 'enabled') {
+    pushEncrypted(bytes)
+  } else {
+    channel.push(new Progress([data], {}, { progress: true }))
+  }
+}
+
+function flushPendingInputs() {
+  for (const bytes of pendingInputs) {
+    if (encryptionMode === 'enabled') {
+      pushEncrypted(bytes)
+    } else {
+      channel?.push(new Progress([dec.decode(bytes)], {}, { progress: true }))
+    }
+  }
+  pendingInputs = []
+}
+
+function resetEncryptionState() {
+  encKeys = null
+  encryptionMode = 'pending'
+  clientPrivateKey = null
+  clientPublicKey = null
+  pendingInputs = []
+  isFirstSizeSent = false
 }
 
 const cleanup = () => {
@@ -65,18 +138,52 @@ const cleanup = () => {
 
 const startShell = async () => {
   if (!session || !channel) return
+
+  let firstServerMessage = true
+
   try {
     await session.callProgressiveProgress(
       'io.xconn.deskconn.deskconnd.shell',
       async () => channel!.next(),
       async (progressResult: Result) => {
         const args = progressResult.args
-        if (args && args.length > 0 && term) {
-          term.write(args[0])
-        } else {
+        if (!args || args.length === 0) {
           channel?.push(new Progress([], {}, {}))
           cleanup()
           emit('close')
+          return
+        }
+
+        const raw = args[0]
+        const data: Uint8Array =
+          raw instanceof Uint8Array ? raw : enc.encode(typeof raw === 'string' ? raw : String(raw))
+
+        if (firstServerMessage) {
+          firstServerMessage = false
+          const keyPrefix = enc.encode('KEY:')
+          const startsWithKey =
+            data.length > keyPrefix.length &&
+            data.slice(0, keyPrefix.length).every((b, i) => b === keyPrefix[i])
+
+          if (startsWithKey) {
+            const serverPublicKey = data.slice(keyPrefix.length)
+            encKeys = await deriveSessionKeys(clientPrivateKey!, serverPublicKey)
+            encryptionMode = 'enabled'
+          } else {
+            // Old server: no encryption
+            encryptionMode = 'disabled'
+            term?.write(data)
+          }
+
+          flushPendingInputs()
+          return
+        }
+
+        if (encryptionMode === 'enabled' && encKeys) {
+          const plaintext = decryptPayload(data, encKeys.decryptKey)
+          term?.write(plaintext)
+        } else {
+          term?.write(data)
         }
       },
     )
@@ -88,7 +195,6 @@ const startShell = async () => {
     }
   }
 }
-
 
 const closePanel = () => {
   cleanup()
@@ -118,6 +224,11 @@ onMounted(async () => {
   } catch {
     term.writeln('Connection failed.')
   }
+
+  resetEncryptionState()
+  const kp = createX25519KeyPair()
+  clientPrivateKey = kp.privateKey
+  clientPublicKey = kp.publicKey
 
   channel = new ProgressChannel()
   term.onData(handleTerminalInput)
