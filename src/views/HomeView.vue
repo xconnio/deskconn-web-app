@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 
 import { openFileExplorer } from '../router/navigation'
 import { useAuthStore } from '../stores/auth'
@@ -12,6 +12,29 @@ const authStore = useAuthStore()
 const desktops = ref<Desktop[]>([])
 const isLoadingDesktops = ref(true)
 const activeTerminal = ref<{ realm: string; name: string } | null>(null)
+let hasTerminalHistoryEntry = false
+
+const openTerminal = (realm: string, name: string) => {
+  activeTerminal.value = { realm, name }
+}
+
+const closeTerminal = () => {
+  if (!activeTerminal.value) return
+
+  if (hasTerminalHistoryEntry) {
+    window.history.back()
+    return
+  }
+
+  activeTerminal.value = null
+}
+
+const handlePopState = () => {
+  if (!activeTerminal.value) return
+
+  hasTerminalHistoryEntry = false
+  activeTerminal.value = null
+}
 
 const fetchDesktops = async () => {
   if (!authStore.session) {
@@ -44,6 +67,21 @@ watch(
   },
   { immediate: true },
 )
+
+watch(activeTerminal, (next, previous) => {
+  if (!next || previous) return
+
+  window.history.pushState({ ...window.history.state, deskconnTerminal: true }, '')
+  hasTerminalHistoryEntry = true
+})
+
+onMounted(() => {
+  window.addEventListener('popstate', handlePopState)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('popstate', handlePopState)
+})
 </script>
 
 <template>
@@ -52,7 +90,7 @@ watch(
     <TerminalPanel
       :realm="activeTerminal.realm"
       :desktop-name="activeTerminal.name"
-      @close="activeTerminal = null"
+      @close="closeTerminal"
     />
   </div>
 
@@ -99,7 +137,7 @@ watch(
                   <span class="badge bg-light text-secondary rounded-pill">Open Explorer</span>
                   <button
                     class="btn btn-sm btn-outline-dark"
-                    @click.stop="activeTerminal = { realm: desktop.realm, name: desktop.name }"
+                    @click.stop="openTerminal(desktop.realm, desktop.name)"
                     title="Open Terminal"
                   >
                     <i class="bi bi-terminal"></i>
