@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ApplicationError, type Session } from 'xconn'
 
 import { useAuthStore } from '@/stores/auth'
@@ -14,6 +14,9 @@ import {
 
 const procedureKeyExchange = 'io.xconn.deskconn.deskconnd.key.exchange'
 const procedureFileBrowse = 'io.xconn.deskconn.deskconnd.file.browse'
+const procedureFileRename = 'io.xconn.deskconn.deskconnd.file.rename'
+const procedureFileDelete = 'io.xconn.deskconn.deskconnd.file.delete'
+const procedureFileCopy = 'io.xconn.deskconn.deskconnd.file.copy'
 const outsideHomeMessage = 'Access denied. You can only browse files inside the home directory.'
 
 const props = defineProps<{
@@ -32,6 +35,21 @@ const currentBrowse = ref<FileBrowseResult | null>(null)
 const selectedEntry = ref<FileEntry | null>(null)
 const pathInput = ref('')
 const showHiddenFiles = ref(false)
+
+const actionSheetEntry = ref<FileEntry | null>(null)
+const actionSheetVisible = ref(false)
+const dropdownPos = ref<{ top: number; right: number } | null>(null)
+const showRenameDialog = ref(false)
+const showDeleteDialog = ref(false)
+const renameInput = ref('')
+const clipboard = ref<FileEntry | null>(null)
+const isOperating = ref(false)
+const operationError = ref('')
+const supportedFileProcedures = ref({
+  rename: false,
+  delete: false,
+  copy: false,
+})
 
 const detailsTarget = computed(() => {
   if (selectedEntry.value) {
@@ -98,6 +116,13 @@ const visibleEntries = computed(() => {
 
   return entries.filter((entry) => !entry.hidden && !entry.name.startsWith('.'))
 })
+
+const hasEntryActions = computed(
+  () =>
+    supportedFileProcedures.value.rename ||
+    supportedFileProcedures.value.delete ||
+    supportedFileProcedures.value.copy,
+)
 
 function normalizePathValue(value: unknown) {
   return typeof value === 'string' ? value : ''
@@ -233,6 +258,18 @@ function formatError(error: unknown) {
   return fallback
 }
 
+function isNoSuchProcedureException(error: unknown) {
+  if (error instanceof ApplicationError) {
+    return (error.message || '').toLowerCase() === 'wamp.error.no_such_procedure'
+  }
+
+  if (error instanceof Error) {
+    return (error.message || '').toLowerCase().includes('wamp.error.no_such_procedure')
+  }
+
+  return false
+}
+
 function formatDate(value?: string) {
   if (!value) return 'Unknown'
 
@@ -314,6 +351,13 @@ function resetExplorerState() {
   errorMessage.value = ''
   isLoading.value = false
   encryptionKeys.value = null
+  supportedFileProcedures.value = {
+    rename: false,
+    delete: false,
+    copy: false,
+  }
+  clipboard.value = null
+  closeActionSheet()
 }
 
 async function performKeyExchange(): Promise<boolean> {
@@ -325,9 +369,7 @@ async function performKeyExchange(): Promise<boolean> {
   try {
     result = await session.value.call(procedureKeyExchange, [publicKey])
   } catch (error) {
-    if (
-      error instanceof ApplicationError && error.message?.toLowerCase() == 'wamp.error.no_such_procedure'
-    ) {
+    if (isNoSuchProcedureException(error)) {
       return false
     }
     throw error
@@ -345,6 +387,54 @@ async function performKeyExchange(): Promise<boolean> {
 
   encryptionKeys.value = await deriveSessionKeys(privateKey, serverKeyBytes)
   return true
+}
+
+async function probeFileOperation(procedure: string): Promise<boolean> {
+  if (!session.value || !encryptionKeys.value) return false
+
+  try {
+    await callFileOperation(procedure, {})
+    return true
+  } catch (error) {
+    if (isNoSuchProcedureException(error)) {
+      return false
+    }
+
+    return true
+  }
+}
+
+async function detectFileOperationSupport() {
+  if (!session.value || !encryptionKeys.value) {
+    supportedFileProcedures.value = {
+      rename: false,
+      delete: false,
+      copy: false,
+    }
+    clipboard.value = null
+    closeActionSheet()
+    return
+  }
+
+  const [rename, deleteItem, copy] = await Promise.all([
+    probeFileOperation(procedureFileRename),
+    probeFileOperation(procedureFileDelete),
+    probeFileOperation(procedureFileCopy),
+  ])
+
+  supportedFileProcedures.value = {
+    rename,
+    delete: deleteItem,
+    copy,
+  }
+
+  if (!copy) {
+    clipboard.value = null
+  }
+
+  if (!hasEntryActions.value) {
+    closeActionSheet()
+  }
 }
 
 async function loadPath(path = '') {
@@ -439,6 +529,8 @@ async function initializeExplorer() {
     return
   }
 
+  await detectFileOperationSupport()
+
   await loadPath('')
 }
 
@@ -466,6 +558,174 @@ async function openEntry(entry: FileEntry) {
 
 async function submitPath() {
   await loadPath(pathInput.value.trim())
+}
+
+function openActionSheet(entry: FileEntry, event: MouseEvent) {
+  const btn = event.currentTarget as HTMLElement
+  const rect = btn.getBoundingClientRect()
+  const dropdownHeight = 132 // approx height of 3 items
+  const fitsBelow = rect.bottom + dropdownHeight + 8 < window.innerHeight
+  dropdownPos.value = {
+    top: fitsBelow ? rect.bottom + 6 : rect.top - dropdownHeight - 6,
+    right: Math.max(4, window.innerWidth - rect.right),
+  }
+  actionSheetEntry.value = entry
+  actionSheetVisible.value = true
+  operationError.value = ''
+}
+
+function closeActionSheet() {
+  actionSheetVisible.value = false
+  actionSheetEntry.value = null
+  showRenameDialog.value = false
+  showDeleteDialog.value = false
+  operationError.value = ''
+}
+
+function startRename() {
+  if (!actionSheetEntry.value || !supportedFileProcedures.value.rename) return
+  renameInput.value = actionSheetEntry.value.name
+  actionSheetVisible.value = false
+  showRenameDialog.value = true
+  operationError.value = ''
+  nextTick(() => {
+    const input = document.querySelector('.rename-input') as HTMLInputElement | null
+    if (input) {
+      input.focus()
+      input.select()
+    }
+  })
+}
+
+function startDelete() {
+  if (!supportedFileProcedures.value.delete) return
+  actionSheetVisible.value = false
+  showDeleteDialog.value = true
+  operationError.value = ''
+}
+
+function copyToClipboard() {
+  if (!actionSheetEntry.value || !supportedFileProcedures.value.copy) return
+  clipboard.value = actionSheetEntry.value
+  closeActionSheet()
+}
+
+async function callFileOperation(procedure: string, payload: object): Promise<void> {
+  if (!session.value || !encryptionKeys.value) {
+    throw new Error('No active encrypted session. Please reconnect.')
+  }
+
+  const keys = encryptionKeys.value
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload))
+  const encrypted = encryptPayload(payloadBytes, keys.encryptKey)
+
+  const result = await session.value.call(procedure, [encrypted])
+
+  const encryptedResult = result.args?.[0]
+  if (encryptedResult) {
+    const bytes =
+      encryptedResult instanceof Uint8Array
+        ? encryptedResult
+        : new Uint8Array(encryptedResult as number[])
+    decryptPayload(bytes, keys.decryptKey)
+  }
+}
+
+async function confirmRename() {
+  if (!actionSheetEntry.value || !renameInput.value.trim() || !supportedFileProcedures.value.rename) {
+    return
+  }
+
+  const newName = renameInput.value.trim()
+  if (newName === actionSheetEntry.value.name) {
+    showRenameDialog.value = false
+    actionSheetEntry.value = null
+    return
+  }
+
+  const parentDir = actionSheetEntry.value.path.slice(
+    0,
+    actionSheetEntry.value.path.lastIndexOf('/'),
+  )
+  const newPath = `${parentDir}/${newName}`
+
+  isOperating.value = true
+  operationError.value = ''
+
+  try {
+    await callFileOperation(procedureFileRename, {
+      old_path: actionSheetEntry.value.path,
+      new_path: newPath,
+    })
+    if (clipboard.value?.path === actionSheetEntry.value.path) {
+      clipboard.value = null
+    }
+    if (selectedEntry.value?.path === actionSheetEntry.value.path) {
+      selectedEntry.value = null
+    }
+    showRenameDialog.value = false
+    actionSheetEntry.value = null
+    await refreshCurrentPath()
+  } catch (error) {
+    operationError.value = formatError(error)
+  } finally {
+    isOperating.value = false
+  }
+}
+
+async function confirmDelete() {
+  if (!actionSheetEntry.value || !supportedFileProcedures.value.delete) return
+
+  isOperating.value = true
+  operationError.value = ''
+
+  try {
+    await callFileOperation(procedureFileDelete, { path: actionSheetEntry.value.path })
+    if (clipboard.value?.path === actionSheetEntry.value.path) {
+      clipboard.value = null
+    }
+    if (selectedEntry.value?.path === actionSheetEntry.value.path) {
+      selectedEntry.value = null
+    }
+    showDeleteDialog.value = false
+    actionSheetEntry.value = null
+    await refreshCurrentPath()
+  } catch (error) {
+    operationError.value = formatError(error)
+  } finally {
+    isOperating.value = false
+  }
+}
+
+async function pasteClipboard() {
+  if (!clipboard.value || !currentBrowse.value || !supportedFileProcedures.value.copy) return
+
+  const srcPath = clipboard.value.path
+  const dstDir = currentBrowse.value.path
+  let dstPath = `${dstDir}/${clipboard.value.name}`
+
+  if (dstPath === srcPath) {
+    const name = clipboard.value.name
+    const dotIndex = clipboard.value.is_dir ? -1 : name.lastIndexOf('.')
+    if (dotIndex > 0) {
+      dstPath = `${dstDir}/${name.slice(0, dotIndex)}_copy${name.slice(dotIndex)}`
+    } else {
+      dstPath = `${dstDir}/${name}_copy`
+    }
+  }
+
+  isOperating.value = true
+  operationError.value = ''
+
+  try {
+    await callFileOperation(procedureFileCopy, { src: srcPath, dst: dstPath })
+    clipboard.value = null
+    await refreshCurrentPath()
+  } catch (error) {
+    operationError.value = formatError(error)
+  } finally {
+    isOperating.value = false
+  }
 }
 
 watch(showHiddenFiles, (enabled) => {
@@ -566,6 +826,16 @@ onUnmounted(async () => {
             </div>
 
             <div v-if="currentBrowse" class="browser-header-actions">
+              <button
+                v-if="clipboard && currentBrowse.is_dir && supportedFileProcedures.copy"
+                class="paste-btn"
+                :disabled="isOperating"
+                @click="pasteClipboard"
+                :title="`Paste &quot;${clipboard.name}&quot; here`"
+              >
+                <i class="bi bi-clipboard-check"></i>
+                <span>Paste "{{ clipboard.name }}"</span>
+              </button>
               <label v-if="currentBrowse.is_dir" class="hidden-toggle">
                 <input v-model="showHiddenFiles" type="checkbox" />
                 <span>Show hidden files</span>
@@ -574,6 +844,10 @@ onUnmounted(async () => {
                 {{ currentBrowse.is_dir ? `${visibleEntries.length} entries` : currentBrowse.type }}
               </span>
             </div>
+          </div>
+          <div v-if="operationError && !actionSheetVisible && !showRenameDialog && !showDeleteDialog" class="alert alert-danger mb-0 mt-2 py-2 px-3">
+            <i class="bi bi-exclamation-octagon me-2"></i>{{ operationError }}
+            <button type="button" class="btn-close float-end" @click="operationError = ''"></button>
           </div>
 
           <!-- Initial load spinner: only when no content exists yet -->
@@ -613,8 +887,13 @@ onUnmounted(async () => {
                 <span class="entry-size">{{
                   entry.is_dir ? 'Folder' : formatSize(entry.size)
                 }}</span>
-                <button class="open-btn" @click.stop="openEntry(entry)">
-                  <i class="bi" :class="entry.is_dir ? 'bi-chevron-right' : 'bi-info-circle'"></i>
+                <button
+                  v-if="hasEntryActions"
+                  class="menu-btn"
+                  @click.stop="openActionSheet(entry, $event)"
+                  title="More actions"
+                >
+                  <i class="bi bi-three-dots-vertical"></i>
                 </button>
               </div>
             </button>
@@ -687,6 +966,71 @@ onUnmounted(async () => {
             <p class="mb-0">Pick a file or folder to inspect its properties.</p>
           </div>
         </aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- Entry dropdown -->
+  <div v-if="actionSheetVisible && actionSheetEntry && dropdownPos" class="dropdown-backdrop" @click="closeActionSheet">
+    <div
+      class="entry-dropdown"
+      :style="`top: ${dropdownPos.top}px; right: ${dropdownPos.right}px`"
+      @click.stop
+    >
+      <button v-if="supportedFileProcedures.rename" class="dropdown-item" @click="startRename">
+        <i class="bi bi-pencil"></i>Rename
+      </button>
+      <button v-if="supportedFileProcedures.copy" class="dropdown-item" @click="copyToClipboard">
+        <i class="bi bi-clipboard"></i>Copy
+      </button>
+      <div
+        v-if="supportedFileProcedures.delete && (supportedFileProcedures.rename || supportedFileProcedures.copy)"
+        class="dropdown-divider"
+      ></div>
+      <button
+        v-if="supportedFileProcedures.delete"
+        class="dropdown-item dropdown-item-danger"
+        @click="startDelete"
+      >
+        <i class="bi bi-trash"></i>Delete
+      </button>
+    </div>
+  </div>
+
+  <!-- Rename dialog -->
+  <div v-if="showRenameDialog && actionSheetEntry" class="fs-overlay dialog-overlay" @click.self="showRenameDialog = false; operationError = ''">
+    <div class="action-dialog">
+      <h4 class="dialog-title">Rename</h4>
+      <input
+        v-model="renameInput"
+        type="text"
+        class="rename-input"
+        placeholder="New name"
+        :disabled="isOperating"
+        @keyup.enter="confirmRename"
+        @keyup.escape="showRenameDialog = false; operationError = ''"
+      />
+      <p v-if="operationError" class="op-error">{{ operationError }}</p>
+      <div class="dialog-actions">
+        <button class="dialog-btn" :disabled="isOperating" @click="showRenameDialog = false; operationError = ''">Cancel</button>
+        <button class="dialog-btn dialog-btn-primary" :disabled="isOperating || !renameInput.trim()" @click="confirmRename">
+          {{ isOperating ? 'Renaming…' : 'Rename' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete confirm dialog -->
+  <div v-if="showDeleteDialog && actionSheetEntry" class="fs-overlay dialog-overlay" @click.self="showDeleteDialog = false; operationError = ''">
+    <div class="action-dialog">
+      <h4 class="dialog-title">Delete "{{ actionSheetEntry.name }}"?</h4>
+      <p class="dialog-body">This action cannot be undone.</p>
+      <p v-if="operationError" class="op-error">{{ operationError }}</p>
+      <div class="dialog-actions">
+        <button class="dialog-btn" :disabled="isOperating" @click="showDeleteDialog = false; operationError = ''">Cancel</button>
+        <button class="dialog-btn dialog-btn-danger" :disabled="isOperating" @click="confirmDelete">
+          {{ isOperating ? 'Deleting…' : 'Delete' }}
+        </button>
       </div>
     </div>
   </div>
@@ -1007,15 +1351,6 @@ onUnmounted(async () => {
   white-space: nowrap;
 }
 
-.open-btn {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  border: 0;
-  background: #2c2e33;
-  color: #fff;
-}
-
 .details-body {
   display: flex;
   flex-direction: column;
@@ -1154,5 +1489,234 @@ onUnmounted(async () => {
     padding-left: 0.65rem;
     padding-right: 0.65rem;
   }
+}
+
+/* ── Menu button on entry rows ── */
+.menu-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.menu-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+/* ── Paste button ── */
+.paste-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  border: 0;
+  background: #2c2e33;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  max-width: 220px;
+  transition: background 0.15s;
+}
+
+.paste-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paste-btn:hover:not(:disabled) {
+  background: #1a1b1e;
+}
+
+.paste-btn:disabled {
+  opacity: 0.5;
+}
+
+/* ── Full-screen overlay for dialogs ── */
+.fs-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 2000;
+  display: flex;
+  justify-content: center;
+  backdrop-filter: blur(3px);
+}
+
+.dialog-overlay {
+  align-items: center;
+  padding: 1.25rem;
+}
+
+/* ── Entry dropdown ── */
+.dropdown-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+}
+
+.entry-dropdown {
+  position: fixed;
+  z-index: 2001;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.07);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  min-width: 152px;
+  padding: 0.3rem;
+  animation: dropdown-pop 0.13s ease;
+}
+
+@keyframes dropdown-pop {
+  from { transform: scale(0.88) translateY(-4px); opacity: 0; }
+  to   { transform: scale(1)    translateY(0);    opacity: 1; }
+}
+
+.dropdown-item {
+  width: 100%;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #21313f;
+  font-size: 0.9rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  transition: background 0.12s;
+  cursor: pointer;
+}
+
+.dropdown-item:hover {
+  background: #f1f5f9;
+}
+
+.dropdown-item-danger {
+  color: #dc2626;
+}
+
+.dropdown-item-danger:hover {
+  background: #fef2f2;
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: #e2e8f0;
+  margin: 0.2rem 0.5rem;
+}
+
+/* ── Dialog (centered modal) ── */
+.action-dialog {
+  background: #fff;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 420px;
+  padding: 1.5rem;
+  animation: dialog-pop 0.18s ease;
+}
+
+@keyframes dialog-pop {
+  from { transform: scale(0.93); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+
+.dialog-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #21313f;
+  margin-bottom: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.dialog-body {
+  color: #778697;
+  font-size: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+.rename-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  border: 1.5px solid #e2e8f0;
+  font-size: 1rem;
+  color: #21313f;
+  margin-bottom: 1rem;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.rename-input:focus {
+  border-color: #94a3b8;
+}
+
+.rename-input:disabled {
+  opacity: 0.6;
+}
+
+.op-error {
+  color: #dc2626;
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}
+
+.dialog-btn {
+  padding: 0.6rem 1.2rem;
+  border: 0;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  background: #eef3f7;
+  color: #475569;
+  cursor: pointer;
+  transition: background 0.15s;
+  min-width: 80px;
+}
+
+.dialog-btn:hover:not(:disabled) {
+  background: #e2e8f0;
+}
+
+.dialog-btn-primary {
+  background: #2c2e33;
+  color: #fff;
+}
+
+.dialog-btn-primary:hover:not(:disabled) {
+  background: #1a1b1e;
+}
+
+.dialog-btn-danger {
+  background: #dc2626;
+  color: #fff;
+}
+
+.dialog-btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.dialog-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>
