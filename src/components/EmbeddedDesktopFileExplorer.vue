@@ -35,6 +35,7 @@ const currentBrowse = ref<FileBrowseResult | null>(null)
 const selectedEntry = ref<FileEntry | null>(null)
 const pathInput = ref('')
 const showHiddenFiles = ref(false)
+const searchMode = ref(false)
 
 const actionSheetEntry = ref<FileEntry | null>(null)
 const actionSheetVisible = ref(false)
@@ -558,6 +559,23 @@ async function openEntry(entry: FileEntry) {
 
 async function submitPath() {
   await loadPath(pathInput.value.trim())
+  searchMode.value = false
+}
+
+function enterSearchMode() {
+  searchMode.value = true
+  pathInput.value = currentBrowse.value?.path || ''
+  nextTick(() => {
+    const input = document.querySelector('.path-input') as HTMLInputElement | null
+    if (input) {
+      input.focus()
+      input.select()
+    }
+  })
+}
+
+function exitSearchMode() {
+  searchMode.value = false
 }
 
 function openActionSheet(entry: FileEntry, event: MouseEvent) {
@@ -777,29 +795,40 @@ onUnmounted(async () => {
             <i class="bi bi-arrow-left"></i>
           </button>
 
-          <div class="breadcrumb-strip" v-if="breadcrumbSegments.length > 0">
-            <template v-for="(segment, index) in breadcrumbSegments" :key="segment.path">
-              <button
-                class="breadcrumb-chip"
-                :class="{ 'breadcrumb-chip-current': index === breadcrumbSegments.length - 1 }"
-                @click="() => loadPath(segment.path)"
-              >
-                {{ segment.label }}
-              </button>
-              <span v-if="index < breadcrumbSegments.length - 1" class="breadcrumb-sep">/</span>
+          <div
+            class="breadcrumb-search-area"
+            :class="{ 'breadcrumb-search-active': searchMode }"
+            @click="!searchMode && enterSearchMode()"
+          >
+            <template v-if="!searchMode">
+              <div class="breadcrumb-strip" v-if="breadcrumbSegments.length > 0">
+                <template v-for="(segment, index) in breadcrumbSegments" :key="segment.path">
+                  <button
+                    class="breadcrumb-chip"
+                    :class="{ 'breadcrumb-chip-current': index === breadcrumbSegments.length - 1 }"
+                    @click.stop="loadPath(segment.path)"
+                  >
+                    {{ segment.label }}
+                  </button>
+                  <span v-if="index < breadcrumbSegments.length - 1" class="breadcrumb-sep">/</span>
+                </template>
+              </div>
+              <i class="bi bi-search breadcrumb-search-hint"></i>
             </template>
-          </div>
 
-          <form class="path-input-wrap" @submit.prevent="submitPath">
-            <i class="bi bi-folder2-open path-icon"></i>
-            <input
-              v-model="pathInput"
-              type="text"
-              class="path-input"
-              placeholder="Enter a path"
-              :disabled="isConnecting"
-            />
-          </form>
+            <form v-else class="path-input-inner" @submit.prevent="submitPath">
+              <i class="bi bi-folder2-open path-icon"></i>
+              <input
+                v-model="pathInput"
+                type="text"
+                class="path-input"
+                placeholder="Enter a path"
+                :disabled="isConnecting"
+                @blur="exitSearchMode"
+                @keyup.escape="exitSearchMode"
+              />
+            </form>
+          </div>
         </div>
 
         <div v-if="errorMessage" class="alert alert-danger mb-0 mt-3">
@@ -819,13 +848,8 @@ onUnmounted(async () => {
 
       <div v-else class="explorer-grid">
         <section class="browser-card">
-          <div class="browser-card-header">
-            <div>
-              <p class="section-label mb-1">Current Location</p>
-              <h3 class="mb-0 current-path">{{ currentBrowse?.path || 'Home' }}</h3>
-            </div>
-
-            <div v-if="currentBrowse" class="browser-header-actions">
+          <div v-if="currentBrowse" class="browser-card-header">
+            <div class="browser-header-actions">
               <button
                 v-if="clipboard && currentBrowse.is_dir && supportedFileProcedures.copy"
                 class="paste-btn"
@@ -919,7 +943,15 @@ onUnmounted(async () => {
         <aside class="details-card">
           <div class="details-card-header">
             <p class="section-label mb-1">Properties</p>
-            <h3 class="h5 mb-0 details-title">{{ detailsTarget?.path || 'No item selected' }}</h3>
+            <h3 class="h5 mb-0 details-title">
+              {{
+                detailsTarget
+                  ? ('name' in detailsTarget && detailsTarget.name
+                      ? detailsTarget.name
+                      : currentBrowse?.path?.split('/').pop() || 'Home')
+                  : 'No item selected'
+              }}
+            </h3>
           </div>
 
           <div v-if="detailsTarget" class="details-body">
@@ -1098,7 +1130,7 @@ onUnmounted(async () => {
 
 .path-toolbar {
   display: grid;
-  grid-template-columns: auto 1fr minmax(260px, 420px);
+  grid-template-columns: auto 1fr;
   gap: 0.75rem;
   align-items: center;
 }
@@ -1165,19 +1197,45 @@ onUnmounted(async () => {
   color: #0f172a;
 }
 
-.path-input-wrap {
+.breadcrumb-search-area {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   padding: 0 1rem;
   border-radius: 18px;
   background: #fff;
   border: 1px solid #e2e8f0;
   min-height: 52px;
+  cursor: pointer;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.breadcrumb-search-area:hover {
+  border-color: #cbd5e1;
+}
+
+.breadcrumb-search-active {
+  cursor: default;
+}
+
+.breadcrumb-search-hint {
+  margin-left: auto;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.path-input-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
 }
 
 .path-icon {
   color: #64748b;
+  flex-shrink: 0;
 }
 
 .path-input {
@@ -1241,13 +1299,6 @@ onUnmounted(async () => {
   word-break: break-word;
 }
 
-.current-path {
-  font-size: 1rem;
-  font-weight: 600;
-  color: #21313f;
-  overflow-wrap: anywhere;
-  word-break: break-all;
-}
 
 .section-label {
   text-transform: uppercase;
@@ -1420,17 +1471,6 @@ onUnmounted(async () => {
   .browser-header-actions {
     justify-content: flex-start;
     width: 100%;
-  }
-
-  /* Path toolbar: up-btn + breadcrumb on row 1, path input full-width on row 2 */
-  .path-toolbar {
-    grid-template-columns: auto 1fr;
-    grid-template-rows: auto auto;
-  }
-
-  .path-input-wrap {
-    grid-column: 1 / -1;
-    min-height: 44px;
   }
 
   .tool-btn {
