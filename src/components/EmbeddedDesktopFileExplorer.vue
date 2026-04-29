@@ -17,6 +17,7 @@ const procedureFileBrowse = 'io.xconn.deskconn.deskconnd.file.browse'
 const procedureFileRename = 'io.xconn.deskconn.deskconnd.file.rename'
 const procedureFileDelete = 'io.xconn.deskconn.deskconnd.file.delete'
 const procedureFileCopy = 'io.xconn.deskconn.deskconnd.file.copy'
+const procedureFileDownload = 'io.xconn.deskconn.deskconnd.file.download'
 const outsideHomeMessage = 'Access denied. You can only browse files inside the home directory.'
 
 const props = defineProps<{
@@ -51,6 +52,18 @@ const supportedFileProcedures = ref({
   delete: false,
   copy: false,
 })
+
+type FilePreviewType = 'image' | 'audio' | 'video' | 'text' | 'pdf' | 'none'
+
+const previewVisible = ref(false)
+const previewFileEntry = ref<FileEntry | null>(null)
+const previewType = ref<FilePreviewType>('none')
+const previewBlobUrl = ref('')
+const previewTextContent = ref('')
+const previewError = ref('')
+const previewLoading = ref(false)
+const previewExpectedBytes = ref(0)
+const previewReceivedBytes = ref(0)
 
 const detailsTarget = computed(() => {
   if (selectedEntry.value) {
@@ -124,6 +137,13 @@ const hasEntryActions = computed(
     supportedFileProcedures.value.delete ||
     supportedFileProcedures.value.copy,
 )
+
+const canDownload = computed(() => !!session.value)
+
+function entryHasMenu(entry: FileEntry) {
+  if (!entry.is_dir) return canDownload.value
+  return hasEntryActions.value
+}
 
 function normalizePathValue(value: unknown) {
   return typeof value === 'string' ? value : ''
@@ -320,6 +340,29 @@ function iconClassForEntry(entry: FileEntry) {
   return 'bi-file-earmark-fill'
 }
 
+function getFilePreviewType(name: string): FilePreviewType {
+  const ext = name.toLowerCase().split('.').pop() || ''
+  if (/^(png|jpg|jpeg|gif|webp|svg|bmp)$/.test(ext)) return 'image'
+  if (/^(mp3|ogg|wav|flac|aac|m4a|opus)$/.test(ext)) return 'audio'
+  if (/^(mp4|webm|mov|ogv)$/.test(ext)) return 'video'
+  if (ext === 'pdf') return 'pdf'
+  if (/^(txt|md|log|json|yaml|yml|toml|xml|ini|conf|env|sh|bash|zsh|py|js|ts|jsx|tsx|css|html|htm|go|rs|c|cpp|h|hpp|java|rb|php|csv|vue|svelte|sql)$/.test(ext)) return 'text'
+  return 'none'
+}
+
+function getMimeType(name: string): string {
+  const ext = name.toLowerCase().split('.').pop() || ''
+  const m: Record<string, string> = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp',
+    mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav',
+    flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4', opus: 'audio/ogg',
+    mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg',
+    pdf: 'application/pdf',
+  }
+  return m[ext] || 'application/octet-stream'
+}
+
 function normalizeComparablePath(path: string) {
   const normalized = path.replace(/\/+/g, '/').replace(/\/$/, '')
   return normalized || '/'
@@ -359,6 +402,7 @@ function resetExplorerState() {
   }
   clipboard.value = null
   closeActionSheet()
+  closePreview()
 }
 
 async function performKeyExchange(): Promise<boolean> {
@@ -376,15 +420,10 @@ async function performKeyExchange(): Promise<boolean> {
     throw error
   }
 
-  const serverPublicKey = result.args?.[0]
-  if (!(serverPublicKey instanceof Uint8Array) && !Array.isArray(serverPublicKey)) {
+  const serverKeyBytes = result.args?.[0] as Uint8Array
+  if (!serverKeyBytes?.length) {
     throw new Error('Invalid server public key received during key exchange')
   }
-
-  const serverKeyBytes =
-    serverPublicKey instanceof Uint8Array
-      ? serverPublicKey
-      : new Uint8Array(serverPublicKey as number[])
 
   encryptionKeys.value = await deriveSessionKeys(privateKey, serverKeyBytes)
   return true
@@ -466,13 +505,8 @@ async function loadPath(path = '') {
       const encryptedPath = encryptPayload(pathBytes, keys.encryptKey)
       const result = await session.value.call(procedureFileBrowse, [encryptedPath])
 
-      const encryptedResult = result.args?.[0]
-      if (!encryptedResult) throw new Error('Empty response from remote file browser')
-
-      const encryptedBytes =
-        encryptedResult instanceof Uint8Array
-          ? encryptedResult
-          : new Uint8Array(encryptedResult as number[])
+      const encryptedBytes = result.args?.[0] as Uint8Array
+      if (!encryptedBytes?.length) throw new Error('Empty response from remote file browser')
 
       const decrypted = decryptPayload(encryptedBytes, keys.decryptKey)
       browse = parseBrowseResult(JSON.parse(new TextDecoder().decode(decrypted)))
@@ -600,6 +634,322 @@ function closeActionSheet() {
   operationError.value = ''
 }
 
+function closePreview() {
+  if (previewBlobUrl.value) {
+    URL.revokeObjectURL(previewBlobUrl.value)
+    previewBlobUrl.value = ''
+  }
+  previewVisible.value = false
+  previewTextContent.value = ''
+  previewError.value = ''
+  previewLoading.value = false
+  previewFileEntry.value = null
+}
+
+// Size limits for formats that must be fully buffered before display
+const MAX_SIZE_IMAGE_PDF = 100 * 1024 * 1024  // 100 MB
+const MAX_SIZE_AUDIO_FALLBACK = 50 * 1024 * 1024 // 50 MB (WAV/FLAC without MSE)
+const MAX_SIZE_VIDEO_FALLBACK = 200 * 1024 * 1024 // 200 MB (formats without MSE)
+
+// Returns the MSE MIME type to use for a file, or null if MSE is unsupported for that format.
+function getMSEMimeType(name: string): string | null {
+  if (!('MediaSource' in window)) return null
+  const ext = name.toLowerCase().split('.').pop() || ''
+  const candidates: Record<string, string[]> = {
+    mp3:  ['audio/mpeg'],
+    ogg:  ['audio/ogg; codecs=vorbis', 'audio/ogg; codecs=opus', 'audio/ogg'],
+    opus: ['audio/ogg; codecs=opus'],
+    aac:  ['audio/mp4; codecs="mp4a.40.2"'],
+    m4a:  ['audio/mp4; codecs="mp4a.40.2"'],
+    mp4:  ['video/mp4; codecs="avc1.42E01E,mp4a.40.2"', 'video/mp4'],
+    webm: ['video/webm; codecs="vp9,opus"', 'video/webm; codecs="vp8,vorbis"', 'video/webm'],
+  }
+  for (const mime of candidates[ext] ?? []) {
+    if (MediaSource.isTypeSupported(mime)) return mime
+  }
+  return null
+}
+
+// Low-level stream: calls onChunk for each decrypted data chunk as it arrives.
+async function streamFileData(
+  remotePath: string,
+  onChunk: (chunk: Uint8Array, expectedTotal: number) => void,
+): Promise<void> {
+  if (!session.value) throw new Error('No active session')
+
+  const { publicKey, privateKey } = createX25519KeyPair()
+
+  type CallResult = Awaited<ReturnType<Session['call']>>
+
+  const progressResult: any = await session.value.callProgress(procedureFileDownload, [ // eslint-disable-line @typescript-eslint/no-explicit-any
+    remotePath, false, publicKey,
+  ])
+
+  // for-await over progressResult.receive() exits after the first message in Firefox.
+  // The library's async iterator closes prematurely when the final WAMP RESULT arrives
+  // before the iterator sets up its next waiter — a race that Chrome's event loop never
+  // triggers but Firefox's does. Using the callback-based registerProgress API instead
+  // routes all messages through a stable queue that is not affected by this race.
+  const queue: CallResult[] = []
+  let wakeUp: (() => void) | null = null
+  let streamDone = false
+  let streamError: unknown = null
+
+  const notify = () => { const fn = wakeUp; wakeUp = null; fn?.() }
+
+  progressResult.registerProgress((result: CallResult) => { queue.push(result); notify() })
+  progressResult.finalResultPromise
+    .then(() => { streamDone = true; notify() })
+    .catch((err: unknown) => { streamError = err; streamDone = true; notify() })
+
+  let receiveKey: Uint8Array | null = null
+  let firstMessage = true
+  let expectedTotal = 0
+
+  while (true) {
+    if (queue.length === 0) {
+      if (streamDone) break
+      await new Promise<void>(resolve => { wakeUp = resolve })
+      continue
+    }
+
+    const result = queue.shift()!
+    const args = (result.args ?? []) as unknown[]
+
+    if (firstMessage) {
+      firstMessage = false
+      const raw = args[0] as Uint8Array
+      if (raw.length < 36) throw new Error('Invalid key exchange message from server')
+      const keys = await deriveSessionKeys(privateKey, raw.slice(4))
+      receiveKey = keys.decryptKey
+      continue
+    }
+
+    if (!receiveKey || args.length < 2) continue
+    const msgType = args[0]
+    if (typeof msgType !== 'string') continue
+
+    if (msgType === 'H') {
+      const plaintext = decryptPayload(args[1] as Uint8Array, receiveKey)
+      const header = JSON.parse(new TextDecoder().decode(plaintext)) as { size?: number }
+      expectedTotal = header.size ?? 0
+    } else if (msgType === 'D') {
+      const chunk = decryptPayload(args[1] as Uint8Array, receiveKey)
+      onChunk(chunk, expectedTotal)
+    }
+  }
+
+  if (streamError) throw streamError instanceof Error ? streamError : new Error('Stream failed')
+}
+
+// Collects all chunks into a single Uint8Array (for images, PDF, text).
+async function fetchFileData(remotePath: string): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = []
+  let total = 0
+
+  await streamFileData(remotePath, (chunk, expectedTotal) => {
+    chunks.push(chunk)
+    total += chunk.length
+    previewExpectedBytes.value = expectedTotal
+    previewReceivedBytes.value = total
+  })
+
+  const combined = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    combined.set(chunk, offset)
+    offset += chunk.length
+  }
+  return combined
+}
+
+// Streams audio/video directly into a MediaSource so playback starts immediately.
+async function openWithMediaSource(entry: FileEntry, mseMime: string) {
+  const mediaSource = new MediaSource()
+  const blobUrl = URL.createObjectURL(mediaSource)
+
+  previewFileEntry.value = entry
+  previewType.value = getFilePreviewType(entry.name) as FilePreviewType
+  previewBlobUrl.value = blobUrl
+  previewVisible.value = true
+  previewLoading.value = false  // player is shown immediately; browser shows buffering state
+  previewExpectedBytes.value = entry.size
+  previewReceivedBytes.value = 0
+  previewError.value = ''
+
+  const queue: Uint8Array[] = []
+  let isAppending = false
+  let streamDone = false
+  let sourceBuffer: SourceBuffer | null = null
+
+  function drainQueue() {
+    if (!sourceBuffer || isAppending || mediaSource.readyState !== 'open') return
+    if (queue.length === 0) {
+      if (streamDone) {
+        try { mediaSource.endOfStream() } catch { /* already ended */ }
+      }
+      return
+    }
+    isAppending = true
+    try {
+      sourceBuffer.appendBuffer(queue.shift()!.slice())
+    } catch {
+      isAppending = false
+    }
+  }
+
+  await new Promise<void>(resolve => {
+    mediaSource.addEventListener('sourceopen', () => {
+      try {
+        sourceBuffer = mediaSource.addSourceBuffer(mseMime)
+        sourceBuffer.addEventListener('updateend', () => { isAppending = false; drainQueue() })
+        sourceBuffer.addEventListener('error', () => { isAppending = false })
+      } catch { /* unsupported codec at runtime */ }
+      resolve()
+    }, { once: true })
+  })
+
+  try {
+    await streamFileData(entry.path, (chunk, expectedTotal) => {
+      if (previewFileEntry.value?.path !== entry.path) return
+      if (expectedTotal > 0) previewExpectedBytes.value = expectedTotal
+      previewReceivedBytes.value += chunk.length
+      queue.push(chunk)
+      drainQueue()
+    })
+    streamDone = true
+    drainQueue()
+  } catch (err) {
+    if (previewFileEntry.value?.path === entry.path) {
+      previewError.value = err instanceof Error ? err.message : 'Failed to stream file'
+    }
+  }
+}
+
+async function openFile(entry: FileEntry) {
+  if (entry.is_dir) return
+  selectEntry(entry)
+
+  const pt = getFilePreviewType(entry.name)
+
+  // Unrecognised or oversized text → download directly
+  if (pt === 'none' || (pt === 'text' && entry.size > 5 * 1024 * 1024)) {
+    await downloadFileToClient(entry)
+    return
+  }
+
+  // Image / PDF: enforce memory limit
+  if ((pt === 'image' || pt === 'pdf') && entry.size > MAX_SIZE_IMAGE_PDF) {
+    await downloadFileToClient(entry)
+    return
+  }
+
+  // Audio / video: prefer MediaSource streaming (no memory limit needed)
+  if (pt === 'audio' || pt === 'video') {
+    const mseMime = getMSEMimeType(entry.name)
+    if (mseMime) {
+      closePreview()
+      await openWithMediaSource(entry, mseMime)
+      return
+    }
+    // Fallback for WAV/FLAC/MOV etc. that MSE doesn't support: full-buffer with size guard
+    const limit = pt === 'audio' ? MAX_SIZE_AUDIO_FALLBACK : MAX_SIZE_VIDEO_FALLBACK
+    if (entry.size > limit) {
+      await downloadFileToClient(entry)
+      return
+    }
+  }
+
+  // Full-buffer path for images, PDF, text, and MSE-unsupported audio/video
+  closePreview()
+  previewFileEntry.value = entry
+  previewType.value = pt
+  previewVisible.value = true
+  previewLoading.value = true
+  previewExpectedBytes.value = entry.size
+  previewReceivedBytes.value = 0
+  previewError.value = ''
+
+  try {
+    const data = await fetchFileData(entry.path)
+    if (previewFileEntry.value?.path !== entry.path) return
+
+    if (pt === 'text') {
+      previewTextContent.value = new TextDecoder('utf-8', { fatal: false }).decode(data)
+    } else {
+      const mime = getMimeType(entry.name)
+      const blob = new Blob([data.slice()], { type: mime })
+      previewBlobUrl.value = URL.createObjectURL(blob)
+    }
+  } catch (err) {
+    if (previewFileEntry.value?.path === entry.path) {
+      previewError.value = err instanceof Error ? err.message : 'Failed to load file'
+    }
+  } finally {
+    if (previewFileEntry.value?.path === entry.path) {
+      previewLoading.value = false
+    }
+  }
+}
+
+async function downloadFileToClient(entry: FileEntry) {
+  if (entry.is_dir) return
+  try {
+    const data = await fetchFileData(entry.path)
+    const mime = getMimeType(entry.name)
+    const blob = new Blob([data.slice()], { type: mime })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = entry.name
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (err) {
+    operationError.value = err instanceof Error ? err.message : 'Download failed'
+  }
+}
+
+function downloadFromPreview() {
+  if (!previewFileEntry.value) return
+  const entry = previewFileEntry.value
+  if (previewBlobUrl.value) {
+    const a = document.createElement('a')
+    a.href = previewBlobUrl.value
+    a.download = entry.name
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  } else if (previewTextContent.value) {
+    const blob = new Blob([previewTextContent.value], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = entry.name
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } else {
+    downloadFileToClient(entry)
+  }
+}
+
+async function openActionSheetEntry() {
+  if (!actionSheetEntry.value || actionSheetEntry.value.is_dir) return
+  const entry = actionSheetEntry.value
+  closeActionSheet()
+  await openFile(entry)
+}
+
+async function downloadActionSheetEntry() {
+  if (!actionSheetEntry.value || actionSheetEntry.value.is_dir) return
+  const entry = actionSheetEntry.value
+  closeActionSheet()
+  await downloadFileToClient(entry)
+}
+
 function startRename() {
   if (!actionSheetEntry.value || !supportedFileProcedures.value.rename) return
   renameInput.value = actionSheetEntry.value.name
@@ -641,11 +991,7 @@ async function callFileOperation(procedure: string, payload: object): Promise<vo
 
   const encryptedResult = result.args?.[0]
   if (encryptedResult) {
-    const bytes =
-      encryptedResult instanceof Uint8Array
-        ? encryptedResult
-        : new Uint8Array(encryptedResult as number[])
-    decryptPayload(bytes, keys.decryptKey)
+    decryptPayload(encryptedResult as Uint8Array, keys.decryptKey)
   }
 }
 
@@ -766,6 +1112,7 @@ onMounted(async () => {
 
 onUnmounted(async () => {
   await disconnectDesktopSession()
+  closePreview()
 })
 </script>
 
@@ -894,6 +1241,7 @@ onUnmounted(async () => {
               class="entry-row"
               :class="{ active: selectedEntry?.path === entry.path }"
               @click="openEntry(entry)"
+              @dblclick="openFile(entry)"
             >
               <div class="entry-main">
                 <span class="entry-icon">
@@ -912,7 +1260,7 @@ onUnmounted(async () => {
                   entry.is_dir ? 'Folder' : formatSize(entry.size)
                 }}</span>
                 <button
-                  v-if="hasEntryActions"
+                  v-if="entryHasMenu(entry)"
                   class="menu-btn"
                   @click.stop="openActionSheet(entry, $event)"
                   title="More actions"
@@ -1009,6 +1357,23 @@ onUnmounted(async () => {
       :style="`top: ${dropdownPos.top}px; right: ${dropdownPos.right}px`"
       @click.stop
     >
+      <template v-if="actionSheetEntry && !actionSheetEntry.is_dir">
+        <button class="dropdown-item" @click="openActionSheetEntry">
+          <i class="bi" :class="getFilePreviewType(actionSheetEntry.name) !== 'none' ? 'bi-eye' : 'bi-download'"></i>
+          {{ getFilePreviewType(actionSheetEntry.name) !== 'none' ? 'Open' : 'Download' }}
+        </button>
+        <button
+          v-if="getFilePreviewType(actionSheetEntry.name) !== 'none'"
+          class="dropdown-item"
+          @click="downloadActionSheetEntry"
+        >
+          <i class="bi bi-download"></i>Download
+        </button>
+        <div
+          v-if="supportedFileProcedures.rename || supportedFileProcedures.delete || supportedFileProcedures.copy"
+          class="dropdown-divider"
+        ></div>
+      </template>
       <button v-if="supportedFileProcedures.rename" class="dropdown-item" @click="startRename">
         <i class="bi bi-pencil"></i>Rename
       </button>
@@ -1063,6 +1428,73 @@ onUnmounted(async () => {
         <button class="dialog-btn dialog-btn-danger" :disabled="isOperating" @click="confirmDelete">
           {{ isOperating ? 'Deleting…' : 'Delete' }}
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- File Preview Modal -->
+  <div v-if="previewVisible" class="fs-overlay preview-overlay" @click.self="closePreview">
+    <div class="preview-dialog">
+      <div class="preview-header">
+        <span class="preview-title">{{ previewFileEntry?.name }}</span>
+        <div class="preview-header-actions">
+          <button
+            class="preview-action-btn"
+            @click="downloadFromPreview"
+            :disabled="previewLoading"
+          >
+            <i class="bi bi-download"></i>Download
+          </button>
+          <button class="preview-close-btn" @click="closePreview">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="preview-body">
+        <!-- Loading state -->
+        <div v-if="previewLoading" class="preview-state">
+          <div class="spinner-border mb-3" role="status">
+            <span class="visually-hidden">Loading…</span>
+          </div>
+          <p v-if="previewExpectedBytes > 0" class="preview-progress-text">
+            {{ formatSize(previewReceivedBytes) }} / {{ formatSize(previewExpectedBytes) }}
+          </p>
+          <p v-else class="preview-progress-text">Loading…</p>
+        </div>
+
+        <!-- Error state -->
+        <div v-else-if="previewError" class="preview-state">
+          <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
+          <p class="mb-0">{{ previewError }}</p>
+        </div>
+
+        <!-- Image -->
+        <div v-else-if="previewType === 'image' && previewBlobUrl" class="preview-image-wrap">
+          <img :src="previewBlobUrl" :alt="previewFileEntry?.name" class="preview-image" />
+        </div>
+
+        <!-- Audio -->
+        <div v-else-if="previewType === 'audio' && previewBlobUrl" class="preview-audio-wrap">
+          <div class="audio-icon"><i class="bi bi-music-note-beamed"></i></div>
+          <p class="audio-name">{{ previewFileEntry?.name }}</p>
+          <audio :src="previewBlobUrl" controls class="preview-audio" />
+        </div>
+
+        <!-- Video -->
+        <div v-else-if="previewType === 'video' && previewBlobUrl" class="preview-video-wrap">
+          <video :src="previewBlobUrl" controls class="preview-video" />
+        </div>
+
+        <!-- PDF -->
+        <div v-else-if="previewType === 'pdf' && previewBlobUrl" class="preview-pdf-wrap">
+          <iframe :src="previewBlobUrl" class="preview-pdf" />
+        </div>
+
+        <!-- Text -->
+        <div v-else-if="previewType === 'text'" class="preview-text-wrap">
+          <pre class="preview-text">{{ previewTextContent }}</pre>
+        </div>
       </div>
     </div>
   </div>
@@ -1758,5 +2190,209 @@ onUnmounted(async () => {
 .dialog-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ── Preview modal ── */
+.preview-overlay {
+  align-items: center;
+  padding: 1rem;
+}
+
+.preview-dialog {
+  background: #fff;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 960px;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  animation: dialog-pop 0.18s ease;
+  overflow: hidden;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e2e8f0;
+  gap: 1rem;
+  flex-shrink: 0;
+}
+
+.preview-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #21313f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.preview-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.preview-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  border: 0;
+  background: #2c2e33;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.preview-action-btn:hover:not(:disabled) {
+  background: #1a1b1e;
+}
+
+.preview-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.preview-close-btn {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.preview-close-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.preview-body {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.preview-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  text-align: center;
+  padding: 2rem;
+  color: #617182;
+  min-height: 220px;
+}
+
+.preview-progress-text {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.preview-image-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: #0d0d0d;
+  min-height: 300px;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.preview-audio-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 3rem 2rem;
+}
+
+.audio-icon {
+  font-size: 4rem;
+  color: #94a3b8;
+  line-height: 1;
+}
+
+.audio-name {
+  font-weight: 600;
+  color: #21313f;
+  text-align: center;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.preview-audio {
+  width: 100%;
+  max-width: 420px;
+}
+
+.preview-video-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0d0d0d;
+  min-height: 300px;
+}
+
+.preview-video {
+  max-width: 100%;
+  max-height: 72vh;
+}
+
+.preview-pdf-wrap {
+  flex: 1;
+  display: flex;
+  min-height: 60vh;
+}
+
+.preview-pdf {
+  width: 100%;
+  height: 100%;
+  min-height: 60vh;
+  border: 0;
+}
+
+.preview-text-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 1.25rem;
+}
+
+.preview-text {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.65;
+  color: #1e293b;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 </style>
