@@ -103,7 +103,7 @@ onUnmounted(() => {
             <span class="badge bg-secondary me-3 p-2">
               <i class="bi bi-pc-display"></i>
             </span>
-            Desktops
+            Machines
           </h3>
         </div>
 
