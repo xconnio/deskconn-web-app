@@ -97,10 +97,10 @@ onMounted(async () => {
           to="/"
           class="sidebar-item"
           :class="{ active: isActive('/') && route.path === '/' }"
-          :title="sidebarCollapsed ? 'Desktops' : ''"
+          :title="sidebarCollapsed ? 'Machines' : ''"
         >
           <i class="bi bi-pc-display"></i>
-          <span v-if="!sidebarCollapsed">Desktops</span>
+          <span v-if="!sidebarCollapsed">Machines</span>
         </router-link>
 
         <router-link
