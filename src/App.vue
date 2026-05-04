@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
+
 import { useAuthStore } from './stores/auth'
+import { useMachinesStore } from './stores/machines'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const machinesStore = useMachinesStore()
 
 const sidebarCollapsed = ref(false)
 const mobileOpen = ref(false)
+const machinesExpanded = ref(true)
 
 const toggleSidebar = () => {
   if (window.innerWidth < 768) {
@@ -23,13 +27,42 @@ const handleLogout = () => {
   router.push('/login')
 }
 
+const toggleMachinesExpanded = () => {
+  machinesExpanded.value = !machinesExpanded.value
+}
+
+const handleMachinesSectionClick = () => {
+  toggleMachinesExpanded()
+
+  if (route.name !== 'home') {
+    router.push('/')
+  }
+}
+
 const isActive = (path: string) => {
   if (path === '/') return route.path === '/'
   return route.path.startsWith(path)
 }
 
+const isMachinesRoute = () => route.path === '/' || route.name === 'desktop-files'
+
 // Close mobile sidebar on route change
-watch(() => route.path, () => { mobileOpen.value = false })
+watch(() => route.fullPath, () => {
+  mobileOpen.value = false
+})
+
+watch(
+  () => authStore.session,
+  (session) => {
+    if (session) {
+      machinesStore.fetchMachines(session)
+      return
+    }
+
+    machinesStore.clearMachines()
+  },
+  { immediate: true },
+)
 
 onMounted(async () => {
   try {
@@ -93,15 +126,49 @@ onMounted(async () => {
 
       <!-- Navigation items -->
       <nav class="sidebar-nav">
-        <router-link
-          to="/"
-          class="sidebar-item"
-          :class="{ active: isActive('/') && route.path === '/' }"
-          :title="sidebarCollapsed ? 'Machines' : ''"
-        >
-          <i class="bi bi-pc-display"></i>
-          <span v-if="!sidebarCollapsed">Machines</span>
-        </router-link>
+        <div class="sidebar-section">
+          <button
+            type="button"
+            class="sidebar-item sidebar-section-header"
+            :class="{ active: isMachinesRoute() }"
+            :title="sidebarCollapsed ? 'Machines' : ''"
+            @click="handleMachinesSectionClick"
+          >
+            <i class="bi bi-pc-display"></i>
+            <span v-if="!sidebarCollapsed">Machines</span>
+            <i
+              v-if="!sidebarCollapsed"
+              class="bi sidebar-section-chevron"
+              :class="machinesExpanded ? 'bi-chevron-up' : 'bi-chevron-down'"
+            ></i>
+          </button>
+
+          <transition name="sidebar-expand">
+            <div v-if="!sidebarCollapsed && machinesExpanded" class="sidebar-subnav">
+              <div v-if="machinesStore.isLoadingDesktops" class="sidebar-subitem sidebar-subitem-muted">
+                Loading machines...
+              </div>
+
+              <div
+                v-for="desktop in machinesStore.desktops"
+                :key="desktop.realm"
+                class="sidebar-subitem"
+              >
+                <span class="sidebar-subitem-icon" aria-hidden="true">
+                  {{ desktop.icon }}
+                </span>
+                <span class="sidebar-subitem-label">{{ desktop.name }}</span>
+              </div>
+
+              <div
+                v-if="!machinesStore.isLoadingDesktops && machinesStore.desktops.length === 0"
+                class="sidebar-subitem sidebar-subitem-muted"
+              >
+                No machines found
+              </div>
+            </div>
+          </transition>
+        </div>
 
         <router-link
           to="/organizations"
@@ -286,9 +353,23 @@ body {
   padding: 0.6rem;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.35rem;
   overflow-y: auto;
   min-height: 0;
+}
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.sidebar-section-header {
+  justify-content: space-between;
+}
+
+.sidebar-section-chevron {
+  margin-left: auto;
 }
 
 /* Shared item styles */
@@ -333,6 +414,57 @@ body {
 
 .sidebar-item.active i {
   color: var(--theme-primary);
+}
+
+.sidebar-subnav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.1rem 0 0.15rem 1.7rem;
+}
+
+.sidebar-subitem {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  background: transparent;
+  color: #64748b;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  font-size: 0.90rem;
+  font-weight: 500;
+  font-family: inherit;
+  line-height: 1.5;
+  cursor: default;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.sidebar-subitem:hover {
+  color: #0f172a;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.sidebar-subitem-muted {
+  color: #94a3b8;
+  cursor: default;
+}
+
+.sidebar-subitem-icon {
+  width: 20px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.sidebar-subitem-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Footer */

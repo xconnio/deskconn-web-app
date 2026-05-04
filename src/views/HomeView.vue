@@ -2,15 +2,10 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 
 import { openFileExplorer } from '../router/navigation'
-import { useAuthStore } from '../stores/auth'
-import { authService } from '../services/authService'
-import type { Desktop } from '../types'
+import { useMachinesStore } from '../stores/machines'
 import TerminalPanel from '../components/TerminalPanel.vue'
 
-const authStore = useAuthStore()
-
-const desktops = ref<Desktop[]>([])
-const isLoadingDesktops = ref(true)
+const machinesStore = useMachinesStore()
 const activeTerminal = ref<{ realm: string; name: string } | null>(null)
 let hasTerminalHistoryEntry = false
 
@@ -35,38 +30,6 @@ const handlePopState = () => {
   hasTerminalHistoryEntry = false
   activeTerminal.value = null
 }
-
-const fetchDesktops = async () => {
-  if (!authStore.session) {
-    isLoadingDesktops.value = false
-    return
-  }
-
-  isLoadingDesktops.value = true
-  try {
-    const result = await authService.listDesktops(authStore.session)
-    desktops.value = result.args.map((desktop: Desktop) => ({
-      ...desktop,
-      icon: '🖥️',
-    }))
-  } catch (err: unknown) {
-    console.error('Failed to fetch desktops', err)
-  } finally {
-    isLoadingDesktops.value = false
-  }
-}
-
-watch(
-  () => authStore.session,
-  (newSession) => {
-    if (newSession) {
-      fetchDesktops()
-    } else {
-      isLoadingDesktops.value = false
-    }
-  },
-  { immediate: true },
-)
 
 watch(activeTerminal, (next, previous) => {
   if (!next || previous) return
@@ -107,7 +70,7 @@ onUnmounted(() => {
           </h3>
         </div>
 
-        <div v-if="isLoadingDesktops" class="row g-4">
+        <div v-if="machinesStore.isLoadingDesktops" class="row g-4">
           <div v-for="i in 3" :key="i" class="col-md-4">
             <div class="card h-100 border-0 shadow-sm opacity-50">
               <div class="card-body p-4 text-center">
@@ -120,7 +83,7 @@ onUnmounted(() => {
         </div>
 
         <div v-else class="row g-4">
-          <div v-for="desktop in desktops" :key="desktop.realm" class="col-md-4">
+          <div v-for="desktop in machinesStore.desktops" :key="desktop.realm" class="col-md-4">
             <div
               class="card h-100 border-0 shadow-sm card-hover desktop-card"
               @click="openFileExplorer(desktop.realm, desktop.name)"
@@ -148,9 +111,9 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="!isLoadingDesktops && desktops.length === 0" class="col-12">
+        <div v-if="!machinesStore.isLoadingDesktops && machinesStore.desktops.length === 0" class="col-12">
           <div class="card border-dashed p-5 text-center bg-transparent">
-            <p class="text-muted mb-0">No desktops found</p>
+            <p class="text-muted mb-0">No machines found</p>
           </div>
         </div>
       </div>
