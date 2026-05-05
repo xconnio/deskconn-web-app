@@ -65,6 +65,12 @@ const previewLoading = ref(false)
 const previewExpectedBytes = ref(0)
 const previewReceivedBytes = ref(0)
 
+const isGridView = ref(false)
+const backgroundMenuVisible = ref(false)
+const backgroundMenuPos = ref<{ x: number; y: number } | null>(null)
+const propertiesModalVisible = ref(false)
+const propertiesModalEntry = ref<FileEntry | null>(null)
+
 const detailsTarget = computed(() => {
   if (selectedEntry.value) {
     return {
@@ -332,12 +338,33 @@ function iconClassForEntry(entry: FileEntry) {
   if (entry.is_symlink) return 'bi-signpost-split-fill'
 
   const lowered = entry.name.toLowerCase()
-  if (/\.(png|jpg|jpeg|gif|webp|svg)$/.test(lowered)) return 'bi-image-fill'
-  if (/\.(zip|tar|gz|xz|7z)$/.test(lowered)) return 'bi-file-earmark-zip-fill'
+  if (/\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/.test(lowered)) return 'bi-image-fill'
+  if (/\.(zip|tar|gz|xz|7z|rar|bz2)$/.test(lowered)) return 'bi-file-earmark-zip-fill'
+  if (/\.(mp3|ogg|wav|flac|aac|m4a|opus)$/.test(lowered)) return 'bi-file-earmark-music-fill'
+  if (/\.(mp4|webm|mov|ogv|avi|mkv)$/.test(lowered)) return 'bi-file-earmark-play-fill'
+  if (/\.(pdf)$/.test(lowered)) return 'bi-file-earmark-pdf-fill'
   if (/\.(json|yaml|yml|toml|xml|ini|conf|env)$/.test(lowered)) return 'bi-filetype-yml'
   if (/\.(md|txt|log)$/.test(lowered)) return 'bi-file-earmark-text-fill'
+  if (/\.(sh|bash|zsh|py|js|ts|jsx|tsx|go|rs|c|cpp|h|hpp|java|rb|php|vue|svelte|sql|css|html|htm)$/.test(lowered)) return 'bi-file-earmark-code-fill'
 
   return 'bi-file-earmark-fill'
+}
+
+function iconStyleForEntry(entry: FileEntry): { color: string; background: string } {
+  if (entry.is_dir) return { color: '#334155', background: '#e2e8f0' }
+  if (entry.is_symlink) return { color: '#a78bfa', background: '#ede9fe' }
+
+  const lowered = entry.name.toLowerCase()
+  if (/\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/.test(lowered)) return { color: '#f472b6', background: '#fce7f3' }
+  if (/\.(zip|tar|gz|xz|7z|rar|bz2)$/.test(lowered)) return { color: '#fb923c', background: '#ffedd5' }
+  if (/\.(mp3|ogg|wav|flac|aac|m4a|opus)$/.test(lowered)) return { color: '#60a5fa', background: '#dbeafe' }
+  if (/\.(mp4|webm|mov|ogv|avi|mkv)$/.test(lowered)) return { color: '#818cf8', background: '#e0e7ff' }
+  if (/\.(pdf)$/.test(lowered)) return { color: '#f87171', background: '#fee2e2' }
+  if (/\.(json|yaml|yml|toml|xml|ini|conf|env)$/.test(lowered)) return { color: '#34d399', background: '#d1fae5' }
+  if (/\.(md|txt|log)$/.test(lowered)) return { color: '#94a3b8', background: '#f1f5f9' }
+  if (/\.(sh|bash|zsh|py|js|ts|jsx|tsx|go|rs|c|cpp|h|hpp|java|rb|php|vue|svelte|sql|css|html|htm)$/.test(lowered)) return { color: '#a855f7', background: '#f5f3ff' }
+
+  return { color: '#94a3b8', background: '#f8fafc' }
 }
 
 function getFilePreviewType(name: string): FilePreviewType {
@@ -1092,6 +1119,66 @@ async function pasteClipboard() {
   }
 }
 
+function updateViewMode() {
+  isGridView.value = window.innerWidth >= 768
+}
+
+function openContextMenuAtCursor(entry: FileEntry, event: MouseEvent) {
+  selectedEntry.value = entry
+  const menuWidth = 185
+  const menuHeight = 280
+  const right = Math.max(4, window.innerWidth - Math.min(event.clientX + menuWidth, window.innerWidth - 4))
+  const top = Math.min(event.clientY, window.innerHeight - menuHeight - 8)
+  dropdownPos.value = { top, right }
+  actionSheetEntry.value = entry
+  actionSheetVisible.value = true
+  operationError.value = ''
+}
+
+function openBackgroundMenu(event: MouseEvent) {
+  const menuWidth = 210
+  const menuHeight = 150
+  backgroundMenuPos.value = {
+    x: Math.min(event.clientX, window.innerWidth - menuWidth - 8),
+    y: Math.min(event.clientY, window.innerHeight - menuHeight - 8),
+  }
+  backgroundMenuVisible.value = true
+}
+
+function closeBackgroundMenu() {
+  backgroundMenuVisible.value = false
+  backgroundMenuPos.value = null
+}
+
+function showPropertiesFromMenu() {
+  if (actionSheetEntry.value) {
+    propertiesModalEntry.value = actionSheetEntry.value
+    propertiesModalVisible.value = true
+  }
+  closeActionSheet()
+}
+
+function closePropertiesModal() {
+  propertiesModalVisible.value = false
+  propertiesModalEntry.value = null
+}
+
+function handleEntryPrimaryAction(entry: FileEntry) {
+  if (entry.is_dir) {
+    openEntry(entry)
+  } else {
+    openFile(entry)
+  }
+}
+
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    if (propertiesModalVisible.value) closePropertiesModal()
+    else if (actionSheetVisible.value) closeActionSheet()
+    else if (backgroundMenuVisible.value) closeBackgroundMenu()
+  }
+}
+
 watch(showHiddenFiles, (enabled) => {
   if (enabled) return
   if (selectedEntry.value?.hidden || selectedEntry.value?.name.startsWith('.')) {
@@ -1107,30 +1194,25 @@ watch(
 )
 
 onMounted(async () => {
+  updateViewMode()
+  window.addEventListener('resize', updateViewMode)
+  document.addEventListener('keydown', handleGlobalKeydown)
   await initializeExplorer()
 })
 
 onUnmounted(async () => {
+  window.removeEventListener('resize', updateViewMode)
+  document.removeEventListener('keydown', handleGlobalKeydown)
   await disconnectDesktopSession()
   closePreview()
 })
+
+defineExpose({ refreshCurrentPath, isLoading, isConnecting })
 </script>
 
 <template>
   <div class="embedded-explorer">
     <div class="explorer-shell">
-      <header class="explorer-header">
-        <div class="header-actions">
-          <button
-            class="btn btn-dark rounded-pill px-3"
-            @click="refreshCurrentPath"
-            :disabled="isLoading || isConnecting"
-          >
-            <i class="bi bi-arrow-clockwise"></i><span class="btn-text ms-2">Refresh</span>
-          </button>
-        </div>
-      </header>
-
       <section class="toolbar-card">
         <div class="path-toolbar">
           <button
@@ -1233,18 +1315,20 @@ onUnmounted(async () => {
           <div
             v-else-if="currentBrowse && currentBrowse.is_dir && visibleEntries.length > 0"
             class="entry-list"
-            :class="{ 'entry-list-loading': isLoading }"
+            :class="{ 'entry-list-loading': isLoading, 'grid-view': isGridView }"
+            @contextmenu.self.prevent="openBackgroundMenu($event)"
           >
             <button
               v-for="entry in visibleEntries"
               :key="entry.path"
               class="entry-row"
               :class="{ active: selectedEntry?.path === entry.path }"
-              @click="openEntry(entry)"
-              @dblclick="openFile(entry)"
+              @click="isGridView ? selectEntry(entry) : openEntry(entry)"
+              @dblclick="handleEntryPrimaryAction(entry)"
+              @contextmenu.prevent.stop="openContextMenuAtCursor(entry, $event)"
             >
               <div class="entry-main">
-                <span class="entry-icon">
+                <span class="entry-icon" :style="iconStyleForEntry(entry)">
                   <i class="bi" :class="iconClassForEntry(entry)"></i>
                 </span>
                 <div>
@@ -1288,76 +1372,22 @@ onUnmounted(async () => {
           </div>
         </section>
 
-        <aside class="details-card">
-          <div class="details-card-header">
-            <p class="section-label mb-1">Properties</p>
-            <h3 class="h5 mb-0 details-title">
-              {{
-                detailsTarget
-                  ? ('name' in detailsTarget && detailsTarget.name
-                      ? detailsTarget.name
-                      : currentBrowse?.path?.split('/').pop() || 'Home')
-                  : 'No item selected'
-              }}
-            </h3>
-          </div>
-
-          <div v-if="detailsTarget" class="details-body">
-            <div class="detail-row">
-              <span>Name</span>
-              <strong>{{
-                'name' in detailsTarget && detailsTarget.name
-                  ? detailsTarget.name
-                  : currentBrowse?.path?.split('/').pop() || 'Home'
-              }}</strong>
-            </div>
-            <div class="detail-row">
-              <span>Type</span>
-              <strong>{{ detailsTarget.type }}</strong>
-            </div>
-            <div class="detail-row">
-              <span>Mode</span>
-              <strong>{{ detailsTarget.mode }}</strong>
-            </div>
-            <div class="detail-row">
-              <span>Size</span>
-              <strong>{{ formatSize(detailsTarget.size) }}</strong>
-            </div>
-            <div class="detail-row">
-              <span>Modified</span>
-              <strong>{{ formatDate(detailsTarget.mod_time) }}</strong>
-            </div>
-            <div class="detail-row">
-              <span>Directory</span>
-              <strong>{{ detailsTarget.is_dir ? 'Yes' : 'No' }}</strong>
-            </div>
-            <div class="detail-row">
-              <span>Symlink</span>
-              <strong>{{ detailsTarget.is_symlink ? 'Yes' : 'No' }}</strong>
-            </div>
-            <div v-if="detailsTarget.link_target" class="detail-row">
-              <span>Link Target</span>
-              <strong class="path-detail">{{ detailsTarget.link_target }}</strong>
-            </div>
-          </div>
-
-          <div v-else class="details-empty">
-            <i class="bi bi-info-circle display-6 mb-3"></i>
-            <p class="mb-0">Pick a file or folder to inspect its properties.</p>
-          </div>
-        </aside>
       </div>
     </div>
   </div>
 
-  <!-- Entry dropdown -->
+  <!-- Entry dropdown / right-click context menu -->
   <div v-if="actionSheetVisible && actionSheetEntry && dropdownPos" class="dropdown-backdrop" @click="closeActionSheet">
     <div
       class="entry-dropdown"
       :style="`top: ${dropdownPos.top}px; right: ${dropdownPos.right}px`"
       @click.stop
     >
-      <template v-if="actionSheetEntry && !actionSheetEntry.is_dir">
+      <button v-if="actionSheetEntry.is_dir" class="dropdown-item" @click="openEntry(actionSheetEntry); closeActionSheet()">
+        <i class="bi bi-folder2-open"></i>Open
+      </button>
+      <div v-if="actionSheetEntry.is_dir && (supportedFileProcedures.rename || supportedFileProcedures.delete || supportedFileProcedures.copy)" class="dropdown-divider"></div>
+      <template v-if="!actionSheetEntry.is_dir">
         <button class="dropdown-item" @click="openActionSheetEntry">
           <i class="bi" :class="getFilePreviewType(actionSheetEntry.name) !== 'none' ? 'bi-eye' : 'bi-download'"></i>
           {{ getFilePreviewType(actionSheetEntry.name) !== 'none' ? 'Open' : 'Download' }}
@@ -1391,6 +1421,87 @@ onUnmounted(async () => {
       >
         <i class="bi bi-trash"></i>Delete
       </button>
+      <div class="dropdown-divider"></div>
+      <button class="dropdown-item" @click="showPropertiesFromMenu">
+        <i class="bi bi-info-circle"></i>Properties
+      </button>
+    </div>
+  </div>
+
+  <!-- Background right-click context menu -->
+  <div v-if="backgroundMenuVisible && backgroundMenuPos" class="dropdown-backdrop" @click="closeBackgroundMenu">
+    <div
+      class="entry-dropdown"
+      :style="`top: ${backgroundMenuPos.y}px; left: ${backgroundMenuPos.x}px`"
+      @click.stop
+    >
+      <button
+        v-if="clipboard && currentBrowse?.is_dir && supportedFileProcedures.copy"
+        class="dropdown-item"
+        @click="closeBackgroundMenu(); pasteClipboard()"
+      >
+        <i class="bi bi-clipboard-check"></i>Paste "{{ clipboard?.name }}"
+      </button>
+      <div v-if="clipboard && currentBrowse?.is_dir && supportedFileProcedures.copy" class="dropdown-divider"></div>
+      <button class="dropdown-item" @click="refreshCurrentPath(); closeBackgroundMenu()">
+        <i class="bi bi-arrow-clockwise"></i>Refresh
+      </button>
+      <button class="dropdown-item" @click="showHiddenFiles = !showHiddenFiles; closeBackgroundMenu()">
+        <i class="bi" :class="showHiddenFiles ? 'bi-eye-slash' : 'bi-eye'"></i>
+        {{ showHiddenFiles ? 'Hide hidden files' : 'Show hidden files' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Properties popup -->
+  <div v-if="propertiesModalVisible && propertiesModalEntry" class="fs-overlay dialog-overlay" @click.self="closePropertiesModal">
+    <div class="properties-dialog">
+      <div class="properties-header">
+        <span class="properties-icon" :style="iconStyleForEntry(propertiesModalEntry)">
+          <i class="bi" :class="iconClassForEntry(propertiesModalEntry)"></i>
+        </span>
+        <div class="properties-title-wrap">
+          <h4 class="properties-name">{{ propertiesModalEntry.name }}</h4>
+          <span class="properties-kind">{{ propertiesModalEntry.is_dir ? 'Folder' : propertiesModalEntry.type }}</span>
+        </div>
+        <button class="preview-close-btn" @click="closePropertiesModal">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+      <div class="properties-body">
+        <div class="prop-row">
+          <span class="prop-label">Location</span>
+          <span class="prop-value prop-mono">{{ propertiesModalEntry.path }}</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Size</span>
+          <span class="prop-value">{{ formatSize(propertiesModalEntry.size) }}</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Modified</span>
+          <span class="prop-value">{{ formatDate(propertiesModalEntry.mod_time) }}</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Permissions</span>
+          <span class="prop-value prop-mono">{{ propertiesModalEntry.mode }}</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Type</span>
+          <span class="prop-value">{{ propertiesModalEntry.type || (propertiesModalEntry.is_dir ? 'Directory' : 'File') }}</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Directory</span>
+          <span class="prop-value">{{ propertiesModalEntry.is_dir ? 'Yes' : 'No' }}</span>
+        </div>
+        <div class="prop-row">
+          <span class="prop-label">Symlink</span>
+          <span class="prop-value">{{ propertiesModalEntry.is_symlink ? 'Yes' : 'No' }}</span>
+        </div>
+        <div v-if="propertiesModalEntry.link_target" class="prop-row">
+          <span class="prop-label">Links to</span>
+          <span class="prop-value prop-mono">{{ propertiesModalEntry.link_target }}</span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1507,25 +1618,11 @@ onUnmounted(async () => {
 }
 
 .explorer-shell {
-  max-width: 1440px;
-  margin: 0 auto;
-}
-
-.explorer-header {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 1.5rem;
-}
-
-.header-actions {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
+  max-width: none;
 }
 
 .toolbar-card,
 .browser-card,
-.details-card,
 .state-card {
   background: rgba(255, 255, 255, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.5);
@@ -1538,7 +1635,7 @@ onUnmounted(async () => {
 
 .toolbar-card {
   padding: 1rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .hidden-toggle {
@@ -1679,8 +1776,7 @@ onUnmounted(async () => {
 }
 
 .state-card,
-.browser-state,
-.details-empty {
+.browser-state {
   min-height: 360px;
   display: flex;
   align-items: center;
@@ -1692,18 +1788,14 @@ onUnmounted(async () => {
 }
 
 .explorer-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
-  gap: 1.5rem;
+  display: block;
 }
 
-.browser-card,
-.details-card {
+.browser-card {
   padding: 1.25rem;
 }
 
-.browser-card-header,
-.details-card-header {
+.browser-card-header {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
@@ -1717,27 +1809,6 @@ onUnmounted(async () => {
   gap: 0.75rem;
   flex-wrap: wrap;
   justify-content: flex-end;
-}
-
-.details-card-header {
-  min-width: 0;
-  flex-direction: column;
-}
-
-.details-title {
-  width: 100%;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-
-.section-label {
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-size: 0.72rem;
-  color: #8b98a5;
-  font-weight: 700;
 }
 
 .entry-count {
@@ -1834,67 +1905,17 @@ onUnmounted(async () => {
   white-space: nowrap;
 }
 
-.details-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-  min-width: 0;
-}
-
-.detail-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.85rem 0.95rem;
-  border-radius: 16px;
-  background: #f8fafc;
-  min-width: 0;
-}
-
-.detail-row span {
-  color: #708090;
-  flex: 0 0 110px;
-}
-
-.detail-row strong {
-  color: #1f2a37;
-  text-align: right;
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.path-detail {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-
-/* ── Tablet (≤ 991px) ── */
-@media (max-width: 991px) {
-  /* Stack browser + details vertically */
-  .explorer-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .entry-list {
-    max-height: none;
-  }
-}
 
 /* ── Mobile (≤ 767px) ── */
 @media (max-width: 767px) {
-  /* Reduce card padding */
   .toolbar-card {
     padding: 0.75rem;
   }
 
-  .browser-card,
-  .details-card {
+  .browser-card {
     padding: 1rem;
   }
 
-  /* Stack path title above actions so long paths don't squeeze them sideways */
   .browser-card-header {
     flex-direction: column;
     gap: 0.6rem;
@@ -1905,27 +1926,6 @@ onUnmounted(async () => {
     width: 100%;
   }
 
-  .tool-btn {
-    width: 38px;
-    height: 38px;
-  }
-
-  /* Compact detail rows — keep label + value side by side */
-  .detail-row {
-    padding: 0.5rem 0.65rem;
-    gap: 0.5rem;
-  }
-
-  .detail-row span {
-    flex: 0 0 75px;
-    font-size: 0.78rem;
-  }
-
-  .details-body {
-    gap: 0.35rem;
-  }
-
-  /* Reduce entry spacing */
   .entry-row {
     padding: 0.7rem 0.75rem;
     border-radius: 14px;
@@ -1933,6 +1933,7 @@ onUnmounted(async () => {
 
   .entry-list {
     gap: 0.5rem;
+    max-height: none;
   }
 
   .entry-icon {
@@ -1942,24 +1943,10 @@ onUnmounted(async () => {
     font-size: 1rem;
   }
 
-  /* State cards */
   .state-card,
-  .browser-state,
-  .details-empty {
+  .browser-state {
     min-height: 200px;
     padding: 1.5rem;
-  }
-}
-
-/* ── Small phones (≤ 480px) — icon-only header buttons ── */
-@media (max-width: 480px) {
-  .btn-text {
-    display: none;
-  }
-
-  .header-actions .btn {
-    padding-left: 0.65rem;
-    padding-right: 0.65rem;
   }
 }
 
@@ -2394,5 +2381,180 @@ onUnmounted(async () => {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+/* ── Desktop grid view (≥ 768px) ── */
+@media (min-width: 768px) {
+  .explorer-shell {
+    max-width: none;
+  }
+
+  /* Hide three-dot button on desktop; right-click context menu replaces it */
+  .menu-btn {
+    display: none;
+  }
+
+  .entry-list.grid-view {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+    gap: 0.2rem;
+    max-height: 68vh;
+    padding: 0.35rem;
+  }
+
+  .entry-list.grid-view .entry-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 0.8rem 0.4rem 0.7rem;
+    gap: 0.5rem;
+    border: 1.5px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    text-align: center;
+    width: 100%;
+    min-height: unset;
+    /* reset hover effects from list view */
+    transition: background 0.13s ease, border-color 0.13s ease;
+  }
+
+  .entry-list.grid-view .entry-row:hover {
+    background: rgba(241, 245, 249, 0.9);
+    border-color: rgba(0, 0, 0, 0.07);
+    transform: none;
+    box-shadow: none;
+  }
+
+  .entry-list.grid-view .entry-row.active {
+    background: #dbeafe;
+    border-color: rgba(59, 130, 246, 0.28);
+    transform: none;
+    box-shadow: none;
+  }
+
+  .entry-list.grid-view .entry-main {
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .entry-list.grid-view .entry-icon {
+    width: 52px;
+    height: 52px;
+    font-size: 1.65rem;
+    border-radius: 12px;
+    flex-shrink: 0;
+  }
+
+  .entry-list.grid-view .entry-name {
+    font-size: 0.69rem;
+    font-weight: 600;
+    text-align: center;
+    white-space: normal;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-height: 1.35;
+    max-width: 100%;
+    word-break: break-word;
+  }
+
+  .entry-list.grid-view .entry-meta,
+  .entry-list.grid-view .entry-side {
+    display: none;
+  }
+}
+
+/* ── Properties popup ── */
+.properties-dialog {
+  background: #fff;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 460px;
+  animation: dialog-pop 0.18s ease;
+  overflow: hidden;
+}
+
+.properties-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem 1.25rem 1rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.properties-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  flex-shrink: 0;
+}
+
+.properties-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.properties-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1a2535;
+  margin: 0 0 0.15rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.properties-kind {
+  font-size: 0.78rem;
+  color: #8896a4;
+  font-weight: 500;
+}
+
+.properties-body {
+  padding: 0.6rem 1.25rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.prop-row {
+  display: flex;
+  gap: 1rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+}
+
+.prop-row:nth-child(odd) {
+  background: #f8fafc;
+}
+
+.prop-label {
+  flex: 0 0 90px;
+  color: #7a8fa0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding-top: 1px;
+}
+
+.prop-value {
+  flex: 1;
+  color: #1e2f3e;
+  font-size: 0.83rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.prop-mono {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.78rem;
 }
 </style>

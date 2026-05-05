@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import EmbeddedDesktopFileExplorer from '@/components/EmbeddedDesktopFileExplorer.vue'
@@ -13,31 +13,47 @@ const desktopName = computed(() => {
   return typeof queryName === 'string' ? queryName : undefined
 })
 
+const explorerRef = ref<InstanceType<typeof EmbeddedDesktopFileExplorer> | null>(null)
+
 function closeExplorer() {
   router.push('/')
 }
 </script>
 
 <template>
-  <div class="container py-3 py-md-5 px-2 px-md-3 fade-in-up">
-    <div class="row justify-content-center">
-      <div class="col-12 col-lg-10">
-        <div class="mb-4">
-          <button class="btn btn-link text-decoration-none px-0 back-link" @click="closeExplorer">
-            <i class="bi bi-arrow-left me-2"></i>Back to dashboard
-          </button>
-        </div>
-
-        <EmbeddedDesktopFileExplorer
-          :realm="realm"
-          :desktop-name="desktopName"
-        />
-      </div>
+  <div class="file-explorer-page fade-in-up">
+    <div class="page-topbar">
+      <button class="btn btn-link text-decoration-none px-0 back-link" @click="closeExplorer">
+        <i class="bi bi-arrow-left me-2"></i>Back to dashboard
+      </button>
+      <button
+        class="btn btn-dark rounded-pill px-3 refresh-btn"
+        @click="explorerRef?.refreshCurrentPath()"
+        :disabled="explorerRef?.isLoading || explorerRef?.isConnecting"
+      >
+        <i class="bi bi-arrow-clockwise"></i><span class="btn-text ms-2">Refresh</span>
+      </button>
     </div>
+    <EmbeddedDesktopFileExplorer
+      ref="explorerRef"
+      :realm="realm"
+      :desktop-name="desktopName"
+    />
   </div>
 </template>
 
 <style scoped>
+.file-explorer-page {
+  padding: 0.6rem 1rem 1.5rem;
+}
+
+.page-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+
 .back-link {
   color: #617182;
   font-weight: 600;
@@ -45,5 +61,22 @@ function closeExplorer() {
 
 .back-link:hover {
   color: #1f2a37;
+}
+
+@media (min-width: 768px) {
+  .file-explorer-page {
+    padding: 0.75rem 1.75rem 1.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .btn-text {
+    display: none;
+  }
+
+  .refresh-btn {
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
 }
 </style>
