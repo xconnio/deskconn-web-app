@@ -71,24 +71,6 @@ const backgroundMenuPos = ref<{ x: number; y: number } | null>(null)
 const propertiesModalVisible = ref(false)
 const propertiesModalEntry = ref<FileEntry | null>(null)
 
-const detailsTarget = computed(() => {
-  if (selectedEntry.value) {
-    return {
-      name: selectedEntry.value.name,
-      path: selectedEntry.value.path,
-      type: selectedEntry.value.type,
-      mode: selectedEntry.value.mode,
-      size: selectedEntry.value.size,
-      mod_time: selectedEntry.value.mod_time,
-      is_dir: selectedEntry.value.is_dir,
-      is_symlink: selectedEntry.value.is_symlink,
-      link_target: selectedEntry.value.link_target,
-    }
-  }
-
-  return currentBrowse.value
-})
-
 const breadcrumbSegments = computed(() => {
   const browse = currentBrowse.value
   if (!browse) return []
@@ -1276,7 +1258,7 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
       </div>
 
       <div v-else class="explorer-grid">
-        <section class="browser-card">
+        <section class="browser-card" @contextmenu.prevent="openBackgroundMenu($event)">
           <div v-if="currentBrowse" class="browser-card-header">
             <div class="browser-header-actions">
               <button
@@ -1316,7 +1298,7 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
             v-else-if="currentBrowse && currentBrowse.is_dir && visibleEntries.length > 0"
             class="entry-list"
             :class="{ 'entry-list-loading': isLoading, 'grid-view': isGridView }"
-            @contextmenu.self.prevent="openBackgroundMenu($event)"
+            @contextmenu.self.prevent.stop="openBackgroundMenu($event)"
           >
             <button
               v-for="entry in visibleEntries"
@@ -1331,7 +1313,7 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
                 <span class="entry-icon" :style="iconStyleForEntry(entry)">
                   <i class="bi" :class="iconClassForEntry(entry)"></i>
                 </span>
-                <div>
+                <div class="entry-text">
                   <div class="entry-name">{{ entry.name }}</div>
                   <div class="entry-meta">
                     <span>{{ entry.type }}</span>
@@ -1867,7 +1849,17 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
 }
 
 .entry-main {
+  flex: 1;
   min-width: 0;
+}
+
+.entry-side {
+  flex-shrink: 0;
+}
+
+.entry-text {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .entry-icon {
@@ -2385,8 +2377,29 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
 
 /* ── Desktop grid view (≥ 768px) ── */
 @media (min-width: 768px) {
+  .embedded-explorer {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+  }
+
   .explorer-shell {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
     max-width: none;
+  }
+
+  .explorer-grid {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .browser-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
   }
 
   /* Hide three-dot button on desktop; right-click context menu replaces it */
@@ -2398,7 +2411,9 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
     gap: 0.2rem;
-    max-height: 68vh;
+    flex: 1;
+    max-height: none;
+    align-content: start;
     padding: 0.35rem;
   }
 

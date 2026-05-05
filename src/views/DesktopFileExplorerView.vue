@@ -66,6 +66,10 @@ function closeExplorer() {
 @media (min-width: 768px) {
   .file-explorer-page {
     padding: 0.75rem 1.75rem 1.5rem;
+    min-height: 100dvh;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
   }
 }
 
