@@ -62,6 +62,7 @@ const previewBlobUrl = ref('')
 const previewTextContent = ref('')
 const previewError = ref('')
 const previewLoading = ref(false)
+const mediaRetryUsed = ref(false)
 const previewExpectedBytes = ref(0)
 const previewReceivedBytes = ref(0)
 
@@ -70,6 +71,17 @@ const backgroundMenuVisible = ref(false)
 const backgroundMenuPos = ref<{ x: number; y: number } | null>(null)
 const propertiesModalVisible = ref(false)
 const propertiesModalEntry = ref<FileEntry | null>(null)
+
+type DownloadProgressState = {
+  name: string
+  received: number
+  total: number
+  speed: number
+  cancel: () => void
+}
+const downloadProgress = ref<DownloadProgressState | null>(null)
+let downloadServiceWorker: ServiceWorker | null = null
+let downloadServiceWorkerReadyPromise: Promise<ServiceWorker | null> | null = null
 
 const breadcrumbSegments = computed(() => {
   const browse = currentBrowse.value
@@ -682,8 +694,12 @@ function getMSEMimeType(name: string): string | null {
 // Low-level stream: calls onChunk for each decrypted data chunk as it arrives.
 async function streamFileData(
   remotePath: string,
-  onChunk: (chunk: Uint8Array, expectedTotal: number) => void,
+  onChunk: (chunk: Uint8Array, expectedTotal: number) => void | Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
+  const LATE_PROGRESS_WAIT_MS = 250
+  const MAX_LATE_PROGRESS_WAIT_MS = 5_000
+
   if (!session.value) throw new Error('No active session')
 
   const { publicKey, privateKey } = createX25519KeyPair()
@@ -714,10 +730,50 @@ async function streamFileData(
   let receiveKey: Uint8Array | null = null
   let firstMessage = true
   let expectedTotal = 0
+  let receivedTotal = 0
+  let lateProgressWaitedMs = 0
 
+  // Wake any suspended promise immediately so the abort check at the loop top fires.
+  const onAbort = () => notify()
+  signal?.addEventListener('abort', onAbort, { once: true })
+
+  try {
   while (true) {
+    if (signal?.aborted) throw new Error('cancelled')
     if (queue.length === 0) {
-      if (streamDone) break
+      if (streamDone) {
+        if (expectedTotal > 0 && receivedTotal < expectedTotal) {
+          await new Promise<void>((resolve) => {
+            let settled = false
+            const timer = window.setTimeout(() => {
+              if (settled) return
+              settled = true
+              wakeUp = null
+              resolve()
+            }, LATE_PROGRESS_WAIT_MS)
+
+            wakeUp = () => {
+              if (settled) return
+              settled = true
+              window.clearTimeout(timer)
+              wakeUp = null
+              resolve()
+            }
+          })
+
+          if (queue.length > 0) {
+            lateProgressWaitedMs = 0
+            continue
+          }
+
+          lateProgressWaitedMs += LATE_PROGRESS_WAIT_MS
+          if (lateProgressWaitedMs < MAX_LATE_PROGRESS_WAIT_MS) continue
+          throw new Error(
+            `Download stream ended early (${receivedTotal} of ${expectedTotal} bytes received)`,
+          )
+        }
+        break
+      }
       await new Promise<void>(resolve => { wakeUp = resolve })
       continue
     }
@@ -744,8 +800,12 @@ async function streamFileData(
       expectedTotal = header.size ?? 0
     } else if (msgType === 'D') {
       const chunk = decryptPayload(args[1] as Uint8Array, receiveKey)
-      onChunk(chunk, expectedTotal)
+      receivedTotal += chunk.length
+      await onChunk(chunk, expectedTotal)
     }
+  }
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
   }
 
   if (streamError) throw streamError instanceof Error ? streamError : new Error('Stream failed')
@@ -835,9 +895,10 @@ async function openWithMediaSource(entry: FileEntry, mseMime: string) {
   }
 }
 
-async function openFile(entry: FileEntry) {
+async function openFile(entry: FileEntry, isRetry = false) {
   if (entry.is_dir) return
   selectEntry(entry)
+  if (!isRetry) mediaRetryUsed.value = false
 
   const pt = getFilePreviewType(entry.name)
 
@@ -903,26 +964,247 @@ async function openFile(entry: FileEntry) {
 
 async function downloadFileToClient(entry: FileEntry) {
   if (entry.is_dir) return
+
+  const STALL_MS = 20_000
+  const controller = new AbortController()
+  let stallTimer: ReturnType<typeof setTimeout> | null = null
+  let stalledOut = false
+
+  function armStall() {
+    if (stallTimer !== null) clearTimeout(stallTimer)
+    stallTimer = setTimeout(() => { stalledOut = true; controller.abort() }, STALL_MS)
+  }
+  function clearStall() {
+    if (stallTimer !== null) { clearTimeout(stallTimer); stallTimer = null }
+  }
+  function onError(err: unknown) {
+    if (stalledOut) {
+      operationError.value = 'Download stalled — machine may have disconnected.'
+    } else if (!controller.signal.aborted) {
+      operationError.value = err instanceof Error ? err.message : 'Download failed'
+    }
+  }
+
+  if (!isFirefoxBrowser() && 'showSaveFilePicker' in window) {
+    await downloadFileWithSavePicker(entry, controller, armStall, clearStall, onError)
+    return
+  }
+
   try {
-    const data = await fetchFileData(entry.path)
-    const mime = getMimeType(entry.name)
-    const blob = new Blob([data.slice()], { type: mime })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = entry.name
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    await downloadFileWithBrowserDownload(entry, controller.signal, armStall, clearStall)
   } catch (err) {
-    operationError.value = err instanceof Error ? err.message : 'Download failed'
+    clearStall()
+    onError(err)
+  }
+}
+
+function isFirefoxBrowser() {
+  return /firefox/i.test(navigator.userAgent)
+}
+
+async function downloadFileWithSavePicker(
+  entry: FileEntry,
+  controller: AbortController,
+  armStall: () => void,
+  clearStall: () => void,
+  onError: (err: unknown) => void,
+) {
+  let writable: FileSystemWritableFileStream | null = null
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handle = await (window as any).showSaveFilePicker({ suggestedName: entry.name })
+    writable = await handle.createWritable()
+  } catch (err: unknown) {
+    if ((err as { name?: string })?.name === 'AbortError') return
+    operationError.value = err instanceof Error ? err.message : 'Could not open save dialog'
+    return
+  }
+
+  const startTime = Date.now()
+  let received = 0
+  downloadProgress.value = {
+    name: entry.name,
+    received: 0,
+    total: entry.size,
+    speed: 0,
+    cancel: () => controller.abort(),
+  }
+  armStall()
+
+  try {
+    await streamFileData(entry.path, async (chunk, expectedTotal) => {
+      armStall()
+      await writable!.write(chunk.slice())
+      received += chunk.length
+      if (!downloadProgress.value) return
+      downloadProgress.value.received = received
+      if (expectedTotal > 0) downloadProgress.value.total = expectedTotal
+      const elapsed = (Date.now() - startTime) / 1000
+      downloadProgress.value.speed = elapsed > 0 ? received / elapsed : 0
+    }, controller.signal)
+    await writable!.close()
+  } catch (err) {
+    try { await writable?.abort() } catch { /* ignore */ }
+    onError(err)
+  } finally {
+    clearStall()
+    downloadProgress.value = null
+  }
+}
+
+async function downloadFileWithBrowserDownload(
+  entry: FileEntry,
+  signal: AbortSignal,
+  armStall: () => void,
+  clearStall: () => void,
+) {
+  armStall()
+  const sw = downloadServiceWorker ?? await ensureDownloadServiceWorker()
+  if (!sw) throw new Error('Browser downloads are not available in this browser')
+
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  let sentDownloadMeta = false
+  let pendingPulls = 0
+  let bridgeError: Error | null = null
+  let pullWaiter: (() => void) | null = null
+  const mc = new MessageChannel()
+  const keepAliveTimer = window.setInterval(() => {
+    sw.postMessage({ type: 'ping', id })
+  }, 10_000)
+
+  function resolvePull() {
+    if (pullWaiter) {
+      const resolve = pullWaiter
+      pullWaiter = null
+      resolve()
+      return
+    }
+    pendingPulls += 1
+  }
+
+  function waitForPullSignal() {
+    if (bridgeError) return Promise.reject(bridgeError)
+    if (pendingPulls > 0) {
+      pendingPulls -= 1
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve, reject) => {
+      pullWaiter = () => {
+        if (bridgeError) {
+          reject(bridgeError)
+          return
+        }
+        resolve()
+      }
+    })
+  }
+
+  mc.port1.onmessage = (event) => {
+    const data = event.data ?? {}
+    if (data.type === 'pull') {
+      resolvePull()
+      return
+    }
+    if (data.type === 'error') {
+      bridgeError = new Error(data.message || 'Download bridge failed')
+      if (pullWaiter) {
+        const resolve = pullWaiter
+        pullWaiter = null
+        resolve()
+      }
+    }
+  }
+
+  sw.postMessage(
+    { type: 'download', id, filename: entry.name },
+    [mc.port2],
+  )
+
+  const a = document.createElement('a')
+  a.href = `/_dl/${id}`
+  a.download = entry.name
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+
+  try {
+    await streamFileData(entry.path, async (chunk, expectedTotal) => {
+      armStall()
+      if (!sentDownloadMeta) {
+        mc.port1.postMessage({
+          type: 'meta',
+          filename: entry.name,
+          size: expectedTotal > 0 ? expectedTotal : 0,
+        })
+        sentDownloadMeta = true
+      }
+      await waitForPullSignal()
+      if (bridgeError) throw bridgeError
+      const payload = chunk.slice().buffer
+      mc.port1.postMessage({ type: 'chunk', chunk: payload }, [payload])
+    }, signal)
+    mc.port1.postMessage({ type: 'close' })
+  } catch (err) {
+    mc.port1.postMessage({
+      type: 'error',
+      message: err instanceof Error ? err.message : 'Download failed',
+    })
+    throw err
+  } finally {
+    window.clearInterval(keepAliveTimer)
+    clearStall()
+  }
+}
+
+async function ensureDownloadServiceWorker(): Promise<ServiceWorker | null> {
+  if (!('serviceWorker' in navigator)) return null
+  if (downloadServiceWorker) return downloadServiceWorker
+  if (!downloadServiceWorkerReadyPromise) {
+    downloadServiceWorkerReadyPromise = (async () => {
+      await navigator.serviceWorker.register('/sw-download.js', { scope: '/' })
+      await navigator.serviceWorker.ready
+      if (navigator.serviceWorker.controller) {
+        downloadServiceWorker = navigator.serviceWorker.controller
+        return downloadServiceWorker
+      }
+
+      downloadServiceWorker = await new Promise<ServiceWorker>((resolve) => {
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (navigator.serviceWorker.controller) resolve(navigator.serviceWorker.controller)
+        }, { once: true })
+      })
+      return downloadServiceWorker
+    })().catch((err) => {
+      downloadServiceWorkerReadyPromise = null
+      throw err
+    })
+  }
+
+  return downloadServiceWorkerReadyPromise
+}
+
+function handleMediaError(event: Event) {
+  const media = event.target as HTMLMediaElement
+  if (!media.error) return
+  const entry = previewFileEntry.value
+  if (!entry) return
+  if (!mediaRetryUsed.value) {
+    mediaRetryUsed.value = true
+    openFile(entry, true)
+  } else {
+    previewError.value = 'This file could not be played. Use the Download button above.'
   }
 }
 
 function downloadFromPreview() {
   if (!previewFileEntry.value) return
   const entry = previewFileEntry.value
+  // For audio/video, previewBlobUrl may be a MediaSource URL (not a real blob),
+  // so always trigger a proper download for these types.
+  if (previewType.value === 'audio' || previewType.value === 'video') {
+    downloadFileToClient(entry)
+    return
+  }
   if (previewBlobUrl.value) {
     const a = document.createElement('a')
     a.href = previewBlobUrl.value
@@ -1179,6 +1461,9 @@ onMounted(async () => {
   updateViewMode()
   window.addEventListener('resize', updateViewMode)
   document.addEventListener('keydown', handleGlobalKeydown)
+  if (isFirefoxBrowser()) {
+    void ensureDownloadServiceWorker().catch(() => {})
+  }
   await initializeExplorer()
 })
 
@@ -1571,12 +1856,12 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
         <div v-else-if="previewType === 'audio' && previewBlobUrl" class="preview-audio-wrap">
           <div class="audio-icon"><i class="bi bi-music-note-beamed"></i></div>
           <p class="audio-name">{{ previewFileEntry?.name }}</p>
-          <audio :src="previewBlobUrl" controls class="preview-audio" />
+          <audio :src="previewBlobUrl" controls class="preview-audio" @error="handleMediaError" />
         </div>
 
         <!-- Video -->
         <div v-else-if="previewType === 'video' && previewBlobUrl" class="preview-video-wrap">
-          <video :src="previewBlobUrl" controls class="preview-video" />
+          <video :src="previewBlobUrl" controls class="preview-video" @error="handleMediaError" />
         </div>
 
         <!-- PDF -->
@@ -1591,6 +1876,33 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
       </div>
     </div>
   </div>
+
+  <Transition name="dl-toast">
+    <div v-if="downloadProgress" class="dl-toast">
+      <div class="dl-toast-header">
+        <i class="bi bi-download dl-toast-icon"></i>
+        <span class="dl-toast-title">Downloading</span>
+        <button class="dl-toast-cancel" @click="downloadProgress.cancel()" title="Cancel">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+      <div class="dl-toast-name">{{ downloadProgress.name }}</div>
+      <div class="dl-progress-bar-wrap">
+        <div
+          class="dl-progress-bar"
+          :style="{
+            width: downloadProgress.total > 0
+              ? `${Math.min(100, Math.round(downloadProgress.received / downloadProgress.total * 100))}%`
+              : '0%'
+          }"
+        ></div>
+      </div>
+      <div class="dl-toast-meta">
+        <span>{{ formatSize(downloadProgress.received) }} / {{ downloadProgress.total > 0 ? formatSize(downloadProgress.total) : '…' }}</span>
+        <span>{{ downloadProgress.speed > 0 ? `${formatSize(Math.round(downloadProgress.speed))}/s` : '…' }}</span>
+      </div>
+    </div>
+  </Transition>
 </template>
 
 <style scoped>
@@ -2572,4 +2884,94 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 0.78rem;
 }
+
+.dl-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 3000;
+  background: #1e2a35;
+  color: #e2e8f0;
+  border-radius: 16px;
+  padding: 1rem 1.1rem 0.9rem;
+  width: 300px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.14);
+}
+
+.dl-toast-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.dl-toast-icon {
+  font-size: 0.9rem;
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+
+.dl-toast-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 1;
+}
+
+.dl-toast-cancel {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: #94a3b8;
+  font-size: 0.7rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.dl-toast-cancel:hover {
+  background: rgba(248, 113, 113, 0.2);
+  color: #f87171;
+}
+
+.dl-toast-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.65rem;
+}
+
+.dl-progress-bar-wrap {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.dl-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.dl-toast-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
 </style>
