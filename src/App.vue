@@ -4,6 +4,7 @@ import { RouterView, useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from './stores/auth'
 import { useMachinesStore } from './stores/machines'
+import { openFileExplorer } from './router/navigation'
 
 const router = useRouter()
 const route = useRoute()
@@ -152,7 +153,8 @@ onMounted(async () => {
               <div
                 v-for="desktop in machinesStore.desktops"
                 :key="desktop.realm"
-                class="sidebar-subitem"
+                class="sidebar-subitem sidebar-subitem-clickable"
+                @click="openFileExplorer(desktop.realm, desktop.name)"
               >
                 <span class="sidebar-subitem-icon" aria-hidden="true">
                   {{ desktop.icon }}
@@ -444,6 +446,10 @@ body {
 .sidebar-subitem:hover {
   color: #0f172a;
   background: rgba(148, 163, 184, 0.12);
+}
+
+.sidebar-subitem-clickable {
+  cursor: pointer;
 }
 
 .sidebar-subitem-muted {
