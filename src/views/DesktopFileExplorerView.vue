@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import EmbeddedDesktopFileExplorer from '@/components/EmbeddedDesktopFileExplorer.vue'
@@ -13,8 +13,6 @@ const desktopName = computed(() => {
   return typeof queryName === 'string' ? queryName : undefined
 })
 
-const explorerRef = ref<InstanceType<typeof EmbeddedDesktopFileExplorer> | null>(null)
-
 function closeExplorer() {
   router.push('/')
 }
@@ -26,16 +24,8 @@ function closeExplorer() {
       <button class="btn btn-link text-decoration-none px-0 back-link" @click="closeExplorer">
         <i class="bi bi-arrow-left me-2"></i>Back to dashboard
       </button>
-      <button
-        class="btn btn-dark rounded-pill px-3 refresh-btn"
-        @click="explorerRef?.refreshCurrentPath()"
-        :disabled="explorerRef?.isLoading || explorerRef?.isConnecting"
-      >
-        <i class="bi bi-arrow-clockwise"></i><span class="btn-text ms-2">Refresh</span>
-      </button>
     </div>
     <EmbeddedDesktopFileExplorer
-      ref="explorerRef"
       :realm="realm"
       :desktop-name="desktopName"
     />
@@ -50,7 +40,6 @@ function closeExplorer() {
 .page-topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 0.6rem;
 }
 
@@ -70,17 +59,6 @@ function closeExplorer() {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-  }
-}
-
-@media (max-width: 480px) {
-  .btn-text {
-    display: none;
-  }
-
-  .refresh-btn {
-    padding-left: 0.65rem;
-    padding-right: 0.65rem;
   }
 }
 </style>

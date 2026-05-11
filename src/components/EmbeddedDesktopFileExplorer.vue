@@ -1465,7 +1465,6 @@ onUnmounted(() => {
   closePreview()
 })
 
-defineExpose({ refreshCurrentPath, isLoading, isConnecting })
 </script>
 
 <template>
@@ -1480,6 +1479,14 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
             title="Go up"
           >
             <i class="bi bi-arrow-left"></i>
+          </button>
+          <button
+            class="tool-btn"
+            @click="refreshCurrentPath"
+            :disabled="isLoading || isConnecting"
+            title="Refresh"
+          >
+            <i class="bi bi-arrow-clockwise"></i>
           </button>
 
           <div
@@ -1944,7 +1951,7 @@ defineExpose({ refreshCurrentPath, isLoading, isConnecting })
 
 .path-toolbar {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto auto 1fr;
   gap: 0.75rem;
   align-items: center;
 }
