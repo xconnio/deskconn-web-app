@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { ApplicationError, Progress, Result, Session } from 'xconn'
-import { useAuthStore } from '@/stores/auth'
+import { useSessionCacheStore } from '@/stores/sessionCache'
 import {
   createX25519KeyPair,
   deriveSessionKeys,
@@ -15,7 +15,7 @@ import {
 const props = defineProps<{ realm: string; desktopName: string }>()
 const emit = defineEmits<{ close: [] }>()
 
-const authStore = useAuthStore()
+const sessionCacheStore = useSessionCacheStore()
 const panelRef = ref<HTMLDivElement | null>(null)
 const terminalRef = ref<HTMLDivElement | null>(null)
 const keybarRef = ref<HTMLDivElement | null>(null)
@@ -154,7 +154,9 @@ const cleanup = () => {
   clearTerminalTouchScroll()
   unlockPageScroll()
   term?.dispose()
-  session?.leave().catch(console.error)
+  // Non-progress frame unblocks the sender; without it the call lingers on the cached session.
+  channel?.push(new Progress([], {}, {}))
+  channel = null
   session = null
 }
 
@@ -168,6 +170,7 @@ const startShell = async () => {
       'io.xconn.deskconn.deskconnd.shell',
       async () => channel!.next(),
       async (progressResult: Result) => {
+        if (closed) return
         const args = progressResult.args
         if (!args || args.length === 0) {
           channel?.push(new Progress([], {}, {}))
@@ -372,9 +375,15 @@ onMounted(async () => {
   term.focus()
 
   try {
-    session = await authStore.shell(props.realm)
+    session = await sessionCacheStore.acquire(props.realm)
   } catch {
     term.writeln('Connection failed.')
+    return
+  }
+
+  if (!session) {
+    term.writeln('Connection failed.')
+    return
   }
 
   resetEncryptionState()

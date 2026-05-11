@@ -6,6 +6,7 @@ import { SecureStorage } from '../services/storageService'
 import { generateDeviceID, generateKeys } from '../utils/crypto'
 import { type User } from '../types'
 import { useSettingsStore } from './settings'
+import { useSessionCacheStore } from './sessionCache'
 
 export const useAuthStore = defineStore('auth', () => {
   // State
@@ -257,6 +258,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
+    useSessionCacheStore().invalidateAll()
     session.value?.leave().catch(console.error)
     session.value = null
     setUser(null)

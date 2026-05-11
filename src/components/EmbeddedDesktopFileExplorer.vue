@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ApplicationError, type Session } from 'xconn'
 
-import { useAuthStore } from '@/stores/auth'
+import { useSessionCacheStore } from '@/stores/sessionCache'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import {
   createX25519KeyPair,
@@ -25,7 +25,7 @@ const props = defineProps<{
   desktopName?: string
 }>()
 
-const authStore = useAuthStore()
+const sessionCacheStore = useSessionCacheStore()
 
 const session = ref<Session | null>(null)
 const encryptionKeys = ref<EncryptionKeys | null>(null)
@@ -396,17 +396,8 @@ function isPathWithinHome(path: string, homePath: string) {
   return normalizedPath === normalizedHome || normalizedPath.startsWith(`${normalizedHome}/`)
 }
 
-async function disconnectDesktopSession() {
-  const currentSession = session.value
+function disconnectDesktopSession() {
   session.value = null
-
-  if (!currentSession) return
-
-  try {
-    await currentSession.leave()
-  } catch (error) {
-    console.error(error)
-  }
 }
 
 function resetExplorerState() {
@@ -562,7 +553,7 @@ async function connectDesktopSession() {
   errorMessage.value = ''
 
   try {
-    session.value = (await authStore.shell(props.realm)) as Session | null
+    session.value = await sessionCacheStore.acquire(props.realm)
   } catch (error) {
     errorMessage.value = formatError(error)
     session.value = null
@@ -573,7 +564,7 @@ async function connectDesktopSession() {
 
 async function initializeExplorer() {
   resetExplorerState()
-  await disconnectDesktopSession()
+  disconnectDesktopSession()
   await connectDesktopSession()
 
   if (!session.value) return
@@ -1467,10 +1458,10 @@ onMounted(async () => {
   await initializeExplorer()
 })
 
-onUnmounted(async () => {
+onUnmounted(() => {
   window.removeEventListener('resize', updateViewMode)
   document.removeEventListener('keydown', handleGlobalKeydown)
-  await disconnectDesktopSession()
+  disconnectDesktopSession()
   closePreview()
 })
 
