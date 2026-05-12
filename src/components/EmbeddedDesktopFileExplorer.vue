@@ -37,6 +37,7 @@ const selectedEntry = ref<FileEntry | null>(null)
 const pathInput = ref('')
 const showHiddenFiles = ref(false)
 const searchMode = ref(false)
+const entryListRef = ref<HTMLElement | null>(null)
 
 const actionSheetEntry = ref<FileEntry | null>(null)
 const actionSheetVisible = ref(false)
@@ -1426,11 +1427,75 @@ function handleEntryPrimaryAction(entry: FileEntry) {
   }
 }
 
+function gridColumnCount(): number {
+  if (!entryListRef.value) return 1
+  return window.getComputedStyle(entryListRef.value).gridTemplateColumns.split(' ').length
+}
+
+function scrollSelectedIntoView() {
+  nextTick(() => {
+    entryListRef.value?.querySelector<HTMLElement>('.entry-row.active')?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
 function handleGlobalKeydown(e: KeyboardEvent) {
+  const target = e.target as HTMLElement
+
   if (e.key === 'Escape') {
-    if (propertiesModalVisible.value) closePropertiesModal()
-    else if (actionSheetVisible.value) closeActionSheet()
-    else if (backgroundMenuVisible.value) closeBackgroundMenu()
+    if (searchMode.value) { exitSearchMode(); return }
+    if (propertiesModalVisible.value) { closePropertiesModal(); return }
+    if (actionSheetVisible.value) { closeActionSheet(); return }
+    if (backgroundMenuVisible.value) { closeBackgroundMenu(); return }
+    return
+  }
+
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || searchMode.value) return
+
+  if (e.ctrlKey) {
+    if (e.key === 'h' || e.key === 'H') { e.preventDefault(); showHiddenFiles.value = !showHiddenFiles.value }
+    else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); refreshCurrentPath() }
+    return
+  }
+
+  if (propertiesModalVisible.value || actionSheetVisible.value || backgroundMenuVisible.value) return
+
+  if (e.key === 'Backspace') {
+    e.preventDefault()
+    goUp()
+    return
+  }
+
+  const entries = visibleEntries.value
+  if (!entries.length) return
+
+  const idx = selectedEntry.value ? entries.findIndex(e => e.path === selectedEntry.value!.path) : -1
+
+  const moveTo = (i: number) => {
+    selectedEntry.value = entries[Math.max(0, Math.min(i, entries.length - 1))] ?? null
+    scrollSelectedIntoView()
+  }
+
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault()
+      moveTo(idx === -1 ? 0 : idx + (isGridView.value ? gridColumnCount() : 1))
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      moveTo(idx === -1 ? entries.length - 1 : idx - (isGridView.value ? gridColumnCount() : 1))
+      break
+    case 'ArrowRight':
+      e.preventDefault()
+      if (isGridView.value) moveTo(idx === -1 ? 0 : idx + 1)
+      else if (selectedEntry.value) handleEntryPrimaryAction(selectedEntry.value)
+      break
+    case 'ArrowLeft':
+      e.preventDefault()
+      if (isGridView.value) moveTo(idx <= 0 ? 0 : idx - 1)
+      break
+    case 'Enter':
+      if (selectedEntry.value) { e.preventDefault(); handleEntryPrimaryAction(selectedEntry.value) }
+      break
   }
 }
 
@@ -1579,6 +1644,7 @@ onUnmounted(() => {
           <!-- Entry list: stays mounted, dims during in-folder navigation -->
           <div
             v-else-if="currentBrowse && currentBrowse.is_dir && visibleEntries.length > 0"
+            ref="entryListRef"
             class="entry-list"
             :class="{ 'entry-list-loading': isLoading, 'grid-view': isGridView }"
             @contextmenu.self.prevent.stop="openBackgroundMenu($event)"
