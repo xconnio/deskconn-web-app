@@ -410,14 +410,12 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
 <template>
   <div ref="panelRef" class="terminal-panel" :style="terminalPanelStyle">
     <div class="terminal-titlebar">
+      <button class="tbar-btn tbar-close" title="Close" @click="closePanel">
+        <i class="bi bi-x-lg"></i>
+      </button>
       <div class="terminal-title">
         <i class="bi bi-terminal me-2"></i>
         <span>{{ desktopName }}</span>
-      </div>
-      <div class="terminal-actions">
-        <button class="tbar-btn tbar-close" title="Close" @click="closePanel">
-          <i class="bi bi-x-lg"></i>
-        </button>
       </div>
     </div>
     <div
@@ -586,7 +584,7 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
 .terminal-titlebar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.5rem;
   padding: 0 0.75rem;
   height: 38px;
   background: #2d2d2d;
@@ -601,11 +599,6 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
   color: #cbd5e1;
   font-size: 0.8rem;
   font-weight: 500;
-  gap: 0.25rem;
-}
-
-.terminal-actions {
-  display: flex;
   gap: 0.25rem;
 }
 
