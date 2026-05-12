@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ApplicationError, type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
+import { useSettingsStore } from '@/stores/settings'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import {
   createX25519KeyPair,
@@ -26,6 +27,7 @@ const props = defineProps<{
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
+const settingsStore = useSettingsStore()
 
 const session = ref<Session | null>(null)
 const encryptionKeys = ref<EncryptionKeys | null>(null)
@@ -66,6 +68,16 @@ const previewLoading = ref(false)
 const mediaRetryUsed = ref(false)
 const previewExpectedBytes = ref(0)
 const previewReceivedBytes = ref(0)
+const previewBodyEl = ref<HTMLElement | null>(null)
+
+function scrollPreviewBody(e: WheelEvent) {
+  const body = previewBodyEl.value
+  if (!body) return
+  const child = Array.from(body.children).find(
+    (el) => (el as HTMLElement).scrollHeight > (el as HTMLElement).clientHeight
+  ) as HTMLElement | undefined
+  ;(child ?? body).scrollTop += e.deltaY
+}
 
 const isGridView = ref(false)
 const backgroundMenuVisible = ref(false)
@@ -1513,6 +1525,10 @@ watch(
   },
 )
 
+watch(previewVisible, (visible) => {
+  document.body.style.overflow = visible ? 'hidden' : ''
+})
+
 onMounted(async () => {
   updateViewMode()
   window.addEventListener('resize', updateViewMode)
@@ -1654,7 +1670,7 @@ onUnmounted(() => {
               :key="entry.path"
               class="entry-row"
               :class="{ active: selectedEntry?.path === entry.path }"
-              @click="isGridView ? selectEntry(entry) : openEntry(entry)"
+              @click="settingsStore.singleClickOpen ? handleEntryPrimaryAction(entry) : (isGridView ? selectEntry(entry) : openEntry(entry))"
               @dblclick="handleEntryPrimaryAction(entry)"
               @contextmenu.prevent.stop="openContextMenuAtCursor(entry, $event)"
             >
@@ -1875,7 +1891,7 @@ onUnmounted(() => {
   </div>
 
   <!-- File Preview Modal -->
-  <div v-if="previewVisible" class="fs-overlay preview-overlay" @click.self="closePreview">
+  <div v-if="previewVisible" class="fs-overlay preview-overlay" @click.self="closePreview" @wheel.self.prevent="scrollPreviewBody">
     <div class="preview-dialog">
       <div class="preview-header">
         <span class="preview-title">{{ previewFileEntry?.name }}</span>
@@ -1893,7 +1909,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="preview-body">
+      <div class="preview-body" ref="previewBodyEl">
         <!-- Loading state -->
         <div v-if="previewLoading" class="preview-state">
           <div class="spinner-border mb-3" role="status">
@@ -1992,7 +2008,7 @@ onUnmounted(() => {
 }
 
 .toolbar-card {
-  padding: 1rem;
+  padding: 0.6rem 0.75rem;
   margin-bottom: 0.75rem;
 }
 
@@ -2023,13 +2039,13 @@ onUnmounted(() => {
 }
 
 .tool-btn {
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: #2c2e33;
   color: #fff;
-  font-size: 1rem;
+  font-size: 0.85rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2060,11 +2076,11 @@ onUnmounted(() => {
 .breadcrumb-chip {
   border: 0;
   border-radius: 6px;
-  padding: 0.3rem 0.4rem;
+  padding: 0.25rem 0.35rem;
   background: transparent;
   color: #475569;
   font-weight: 600;
-  font-size: 1rem;
+  font-size: 0.875rem;
   white-space: nowrap;
 }
 
@@ -2088,11 +2104,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0 1rem;
-  border-radius: 18px;
+  padding: 0 0.75rem;
+  border-radius: 14px;
   background: #fff;
   border: 1px solid #e2e8f0;
-  min-height: 52px;
+  min-height: 40px;
   cursor: pointer;
   overflow: hidden;
   min-width: 0;
@@ -2738,6 +2754,7 @@ onUnmounted(() => {
 .preview-text-wrap {
   flex: 1;
   overflow: auto;
+  background: #272822;
   padding: 1.25rem;
 }
 
@@ -2745,7 +2762,7 @@ onUnmounted(() => {
   margin: 0;
   font-size: 0.82rem;
   line-height: 1.65;
-  color: #1e293b;
+  color: #f8f8f2;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;

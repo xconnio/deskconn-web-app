@@ -21,9 +21,13 @@ function closeExplorer() {
 <template>
   <div class="file-explorer-page fade-in-up">
     <div class="page-topbar">
-      <button class="btn btn-link text-decoration-none px-0 back-link" @click="closeExplorer">
-        <i class="bi bi-arrow-left me-2"></i>Back to dashboard
+      <button class="tbar-btn tbar-close" title="Close" @click="closeExplorer">
+        <i class="bi bi-x-lg"></i>
       </button>
+      <div class="page-title">
+        <i class="bi bi-display me-2"></i>
+        <span>{{ desktopName }}</span>
+      </div>
     </div>
     <EmbeddedDesktopFileExplorer
       :realm="realm"
@@ -34,31 +38,58 @@ function closeExplorer() {
 
 <style scoped>
 .file-explorer-page {
-  padding: 0.6rem 1rem 1.5rem;
+  padding: 0 1rem 1.5rem;
 }
 
 .page-topbar {
   display: flex;
   align-items: center;
-  margin-bottom: 0.6rem;
+  gap: 0.75rem;
+  margin: 0 -1rem 0.75rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid #e8ecf0;
 }
 
-.back-link {
-  color: #617182;
+.page-title {
+  color: #1e293b;
   font-weight: 600;
+  font-size: 0.95rem;
 }
 
-.back-link:hover {
-  color: #1f2a37;
+.tbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.tbar-btn:hover {
+  background: #f1f5f9;
+  color: #111827;
 }
 
 @media (min-width: 768px) {
   .file-explorer-page {
-    padding: 0.75rem 1.75rem 1.5rem;
+    padding: 0 1.75rem 1.5rem;
     min-height: 100dvh;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+  }
+
+  .page-topbar {
+    margin: 0 -1.75rem 0.75rem;
+    padding: 0.65rem 1.75rem;
   }
 }
 </style>

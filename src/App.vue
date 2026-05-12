@@ -154,6 +154,7 @@ onMounted(async () => {
                 v-for="desktop in machinesStore.desktops"
                 :key="desktop.realm"
                 class="sidebar-subitem sidebar-subitem-clickable"
+                :class="{ 'sidebar-subitem-active': route.name === 'desktop-files' && route.params.realm === desktop.realm }"
                 @click="openFileExplorer(desktop.realm, desktop.name)"
               >
                 <span class="sidebar-subitem-icon" aria-hidden="true">
@@ -315,7 +316,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1.1rem 1rem;
+  padding: 0.65rem 1rem;
   border-bottom: 1px solid #e8ecf0;
   flex-shrink: 0;
 }
@@ -455,6 +456,12 @@ body {
 .sidebar-subitem-muted {
   color: #94a3b8;
   cursor: default;
+}
+
+.sidebar-subitem-active {
+  color: var(--theme-primary);
+  background: rgba(0, 0, 0, 0.06);
+  font-weight: 600;
 }
 
 .sidebar-subitem-icon {
