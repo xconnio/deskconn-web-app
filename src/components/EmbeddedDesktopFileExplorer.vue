@@ -625,7 +625,7 @@ async function goForward() {
 }
 
 async function refreshCurrentPath() {
-  await loadPath(currentBrowse.value?.path || '')
+  await loadPath(currentBrowse.value?.path || '', true)
 }
 
 function selectEntry(entry: FileEntry) {
