@@ -69,6 +69,11 @@ const mediaRetryUsed = ref(false)
 const previewExpectedBytes = ref(0)
 const previewReceivedBytes = ref(0)
 const previewBodyEl = ref<HTMLElement | null>(null)
+const navHistory = ref<string[]>([])
+const navHistoryIndex = ref(-1)
+
+const canGoBack = computed(() => navHistoryIndex.value > 0)
+const canGoForward = computed(() => navHistoryIndex.value < navHistory.value.length - 1)
 
 function scrollPreviewBody(e: WheelEvent) {
   const body = previewBodyEl.value
@@ -420,6 +425,8 @@ function resetExplorerState() {
   errorMessage.value = ''
   isLoading.value = false
   encryptionKeys.value = null
+  navHistory.value = []
+  navHistoryIndex.value = -1
   supportedFileProcedures.value = {
     rename: false,
     delete: false,
@@ -502,7 +509,7 @@ async function detectFileOperationSupport() {
   }
 }
 
-async function loadPath(path = '') {
+async function loadPath(path = '', skipHistory = false) {
   if (!session.value) return
 
   isLoading.value = true
@@ -554,6 +561,12 @@ async function loadPath(path = '') {
     currentBrowse.value = browse
     pathInput.value = browse.path
     selectedEntry.value = null
+
+    if (!skipHistory) {
+      navHistory.value = navHistory.value.slice(0, navHistoryIndex.value + 1)
+      navHistory.value.push(browse.path)
+      navHistoryIndex.value = navHistory.value.length - 1
+    }
   } catch (error) {
     errorMessage.value = formatError(error)
   } finally {
@@ -597,6 +610,18 @@ async function initializeExplorer() {
 async function goUp() {
   if (!currentBrowse.value?.parent_path || !canGoUp.value) return
   await loadPath(currentBrowse.value.parent_path)
+}
+
+async function goBack() {
+  if (!canGoBack.value) return
+  navHistoryIndex.value--
+  await loadPath(navHistory.value[navHistoryIndex.value], true)
+}
+
+async function goForward() {
+  if (!canGoForward.value) return
+  navHistoryIndex.value++
+  await loadPath(navHistory.value[navHistoryIndex.value], true)
 }
 
 async function refreshCurrentPath() {
@@ -1555,11 +1580,19 @@ onUnmounted(() => {
         <div class="path-toolbar">
           <button
             class="tool-btn"
-            @click="goUp"
-            :disabled="!canGoUp || isLoading || isConnecting"
-            title="Go up"
+            @click="goBack"
+            :disabled="!canGoBack || isLoading || isConnecting"
+            title="Go back"
           >
             <i class="bi bi-arrow-left"></i>
+          </button>
+          <button
+            class="tool-btn"
+            @click="goForward"
+            :disabled="!canGoForward || isLoading || isConnecting"
+            title="Go forward"
+          >
+            <i class="bi bi-arrow-right"></i>
           </button>
           <button
             class="tool-btn"
@@ -1583,7 +1616,7 @@ onUnmounted(() => {
                     :class="{ 'breadcrumb-chip-current': index === breadcrumbSegments.length - 1 }"
                     @click.stop="loadPath(segment.path)"
                   >
-                    {{ segment.label }}
+                    <i v-if="index === 0" class="bi bi-house me-1"></i>{{ segment.label }}
                   </button>
                   <span v-if="index < breadcrumbSegments.length - 1" class="breadcrumb-sep">/</span>
                 </template>
@@ -2033,7 +2066,7 @@ onUnmounted(() => {
 
 .path-toolbar {
   display: grid;
-  grid-template-columns: auto auto 1fr;
+  grid-template-columns: auto auto auto 1fr;
   gap: 0.75rem;
   align-items: center;
 }
