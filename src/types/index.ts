@@ -10,6 +10,18 @@ export interface OrganizationMember {
     user_id: string | number
 }
 
+export interface OrganizationInvite {
+    id: string
+    organization_id: string
+    role: 'admin' | 'member'
+    status: 'pending' | 'accepted' | 'rejected' | 'expired'
+    expires_at: string
+    created_at: string
+    invitee_id?: string
+    organization?: { id: string; name: string }
+    invitee?: User
+}
+
 export interface Organization {
     id: string
     name: string
@@ -32,6 +44,39 @@ export interface Desktop {
   name: string
   realm: string
   icon: string
+  user_id?: string
+  role?: string
+}
+
+export interface DesktopUserAccess {
+  id: string
+  desktop_id: string
+  user_id: string
+  role: 'owner' | 'admin' | 'member'
+  created_at: string
+  user?: User
+}
+
+export interface DesktopOrganizationAccess {
+  id: string
+  desktop_id: string
+  organization_id: string
+  role: 'admin' | 'member'
+  created_at: string
+  organization?: Organization
+}
+
+export interface DesktopInvite {
+  id: string
+  desktop_id: string
+  role: 'admin' | 'member'
+  status: 'pending' | 'accepted' | 'rejected' | 'expired'
+  expires_at: string
+  created_at: string
+  invitee_user_id?: string
+  invitee_organization_id?: string
+  desktop?: { id: string; name: string }
+  invitee_user?: User
 }
 
 export interface FileEntry {
