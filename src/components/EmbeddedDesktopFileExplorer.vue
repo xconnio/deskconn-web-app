@@ -59,6 +59,7 @@ const supportedFileProcedures = ref({
 type FilePreviewType = 'image' | 'audio' | 'video' | 'text' | 'pdf' | 'none'
 
 const previewVisible = ref(false)
+const previewFullscreen = ref(false)
 const previewFileEntry = ref<FileEntry | null>(null)
 const previewType = ref<FilePreviewType>('none')
 const previewBlobUrl = ref('')
@@ -735,6 +736,7 @@ function closePreview() {
     previewBlobUrl.value = ''
   }
   previewVisible.value = false
+  previewFullscreen.value = false
   previewTextContent.value = ''
   previewError.value = ''
   previewLoading.value = false
@@ -1976,18 +1978,17 @@ onUnmounted(() => {
 
   <!-- File Preview Modal -->
   <div v-if="previewVisible" class="fs-overlay preview-overlay" @click.self="closePreview" @wheel.self.prevent="scrollPreviewBody">
-    <div class="preview-dialog">
+    <div class="preview-dialog" :class="{ 'preview-dialog--fullscreen': previewFullscreen }">
       <div class="preview-header">
         <span class="preview-title">{{ previewFileEntry?.name }}</span>
         <div class="preview-header-actions">
-          <button
-            class="preview-action-btn"
-            @click="downloadFromPreview"
-            :disabled="previewLoading"
-          >
-            <i class="bi bi-download"></i>Download
+          <button class="preview-close-btn" @click="downloadFromPreview" :disabled="previewLoading" title="Download">
+            <i class="bi bi-download"></i>
           </button>
-          <button class="preview-close-btn" @click="closePreview">
+          <button class="preview-close-btn" @click="previewFullscreen = !previewFullscreen" :title="previewFullscreen ? 'Restore' : 'Maximize'">
+            <i class="bi" :class="previewFullscreen ? 'bi-arrows-angle-contract' : 'bi-arrows-angle-expand'"></i>
+          </button>
+          <button class="preview-close-btn" @click="closePreview" title="Close">
             <i class="bi bi-x-lg"></i>
           </button>
         </div>
@@ -2651,25 +2652,39 @@ onUnmounted(() => {
 .preview-overlay {
   align-items: center;
   padding: 1rem;
+  transition: padding 0.2s ease;
+}
+
+.preview-overlay:has(.preview-dialog--fullscreen) {
+  padding: 0;
 }
 
 .preview-dialog {
   background: #fff;
-  border-radius: 20px;
+  border-radius: 12px;
   width: 100%;
   max-width: 960px;
   display: flex;
   flex-direction: column;
+  height: 85vh;
   max-height: 90vh;
   animation: dialog-pop 0.18s ease;
   overflow: hidden;
+  transition: height 0.2s ease, max-height 0.2s ease, border-radius 0.2s ease;
+}
+
+.preview-dialog--fullscreen {
+  height: 100vh;
+  max-height: 100vh;
+  max-width: 100vw;
+  border-radius: 0;
 }
 
 .preview-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.25rem;
+  padding: 0.3rem 1rem;
   border-bottom: 1px solid #e2e8f0;
   gap: 1rem;
   flex-shrink: 0;
