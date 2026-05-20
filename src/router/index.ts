@@ -63,6 +63,24 @@ const router = createRouter({
       meta: { requiresGuest: true },
     },
     {
+      path: '/access-management',
+      name: 'access-management',
+      component: () => import('../views/AccessManagementView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/access-management/machines/:id',
+      name: 'machine-access',
+      component: () => import('../views/MachineAccessView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/access-management/machines/:desktopId/orgs/:accessId',
+      name: 'desktop-org-access',
+      component: () => import('../views/OrgDesktopAccessView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/desktops/:realm/files',
       name: 'desktop-files',
       component: () => import('../views/DesktopFileExplorerView.vue'),

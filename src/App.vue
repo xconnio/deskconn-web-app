@@ -174,13 +174,13 @@ onMounted(async () => {
         </div>
 
         <router-link
-          to="/organizations"
+          to="/access-management"
           class="sidebar-item"
-          :class="{ active: isActive('/organizations') }"
-          :title="sidebarCollapsed ? 'Organizations' : ''"
+          :class="{ active: isActive('/access-management') }"
+          :title="sidebarCollapsed ? 'Access Management' : ''"
         >
-          <i class="bi bi-building"></i>
-          <span v-if="!sidebarCollapsed">Organizations</span>
+          <i class="bi bi-shield-lock"></i>
+          <span v-if="!sidebarCollapsed">Access Management</span>
         </router-link>
 
         <router-link
