@@ -159,6 +159,7 @@ const hasEntryActions = computed(
 const canDownload = computed(() => !!session.value)
 
 function entryHasMenu(entry: FileEntry) {
+  if (entry.is_symlink) return true
   if (!entry.is_dir) return canDownload.value
   return hasEntryActions.value
 }
@@ -632,9 +633,53 @@ function selectEntry(entry: FileEntry) {
   selectedEntry.value = entry
 }
 
+// Resolves a symlink's link_target to an absolute path so the backend receives
+// a plain file path. The backend uses Lstat for the download-header size; on a
+// symlink Lstat returns the target-path length, not the file size, causing a
+// stream-length mismatch. A resolved path avoids that entirely.
+function resolveSymlinkTarget(entry: FileEntry): string | null {
+  const target = entry.link_target
+  if (!target) return null
+  if (target.startsWith('/')) return target
+  const lastSlash = entry.path.lastIndexOf('/')
+  const parentDir = lastSlash > 0 ? entry.path.slice(0, lastSlash) : '/'
+  const parts = `${parentDir}/${target}`.split('/')
+  const resolved: string[] = []
+  for (const part of parts) {
+    if (part === '..' && resolved.length > 0) resolved.pop()
+    else if (part !== '.' && part !== '') resolved.push(part)
+  }
+  return '/' + resolved.join('/')
+}
+
 async function openEntry(entry: FileEntry) {
   if (entry.is_dir) {
     await loadPath(entry.path)
+    return
+  }
+
+  if (entry.is_symlink) {
+    // The backend uses Lstat, so the symlink path itself shows is_dir = false even
+    // for directory symlinks, and gives the wrong size for files. Browse and download
+    // the resolved target path directly so Lstat operates on the actual target.
+    const resolvedPath = resolveSymlinkTarget(entry)
+    const browsePath = resolvedPath ?? entry.path
+
+    const prevBrowse = currentBrowse.value
+    const prevHistory = navHistory.value.slice()
+    const prevIndex = navHistoryIndex.value
+
+    await loadPath(browsePath)
+
+    if (currentBrowse.value?.is_dir) return  // directory symlink: navigation succeeded
+
+    // File symlink: revert state and open the file.
+    currentBrowse.value = prevBrowse
+    navHistory.value = prevHistory
+    navHistoryIndex.value = prevIndex
+    if (prevBrowse) pathInput.value = prevBrowse.path
+
+    await openFile(resolvedPath ? { ...entry, path: resolvedPath } : entry)
     return
   }
 
@@ -929,7 +974,13 @@ async function openFile(entry: FileEntry, isRetry = false) {
   selectEntry(entry)
   if (!isRetry) mediaRetryUsed.value = false
 
-  const pt = getFilePreviewType(entry.name)
+  // For symlinks use the target filename for extension-based type detection,
+  // since the symlink name itself may have no extension.
+  const effectiveName = entry.is_symlink && entry.link_target
+    ? (entry.link_target.replace(/\/$/, '').split('/').pop() || entry.name)
+    : entry.name
+
+  const pt = getFilePreviewType(effectiveName)
 
   // Unrecognised or oversized text → download directly
   if (pt === 'none' || (pt === 'text' && entry.size > 5 * 1024 * 1024)) {
@@ -945,7 +996,7 @@ async function openFile(entry: FileEntry, isRetry = false) {
 
   // Audio / video: prefer MediaSource streaming (no memory limit needed)
   if (pt === 'audio' || pt === 'video') {
-    const mseMime = getMSEMimeType(entry.name)
+    const mseMime = getMSEMimeType(effectiveName)
     if (mseMime) {
       closePreview()
       await openWithMediaSource(entry, mseMime)
@@ -976,7 +1027,7 @@ async function openFile(entry: FileEntry, isRetry = false) {
     if (pt === 'text') {
       previewTextContent.value = new TextDecoder('utf-8', { fatal: false }).decode(data)
     } else {
-      const mime = getMimeType(entry.name)
+      const mime = getMimeType(effectiveName)
       const blob = new Blob([data.slice()], { type: mime })
       previewBlobUrl.value = URL.createObjectURL(blob)
     }
@@ -1457,7 +1508,7 @@ function closePropertiesModal() {
 }
 
 function handleEntryPrimaryAction(entry: FileEntry) {
-  if (entry.is_dir) {
+  if (entry.is_dir || entry.is_symlink) {
     openEntry(entry)
   } else {
     openFile(entry)
@@ -1763,11 +1814,11 @@ onUnmounted(() => {
       :style="`top: ${dropdownPos.top}px; right: ${dropdownPos.right}px`"
       @click.stop
     >
-      <button v-if="actionSheetEntry.is_dir" class="dropdown-item" @click="openEntry(actionSheetEntry); closeActionSheet()">
-        <i class="bi bi-folder2-open"></i>Open
+      <button v-if="actionSheetEntry.is_dir || actionSheetEntry.is_symlink" class="dropdown-item" @click="openEntry(actionSheetEntry); closeActionSheet()">
+        <i class="bi" :class="actionSheetEntry.is_dir ? 'bi-folder2-open' : 'bi-box-arrow-up-right'"></i>Open
       </button>
-      <div v-if="actionSheetEntry.is_dir && (supportedFileProcedures.rename || supportedFileProcedures.delete || supportedFileProcedures.copy)" class="dropdown-divider"></div>
-      <template v-if="!actionSheetEntry.is_dir">
+      <div v-if="(actionSheetEntry.is_dir || actionSheetEntry.is_symlink) && (supportedFileProcedures.rename || supportedFileProcedures.delete || supportedFileProcedures.copy)" class="dropdown-divider"></div>
+      <template v-if="!actionSheetEntry.is_dir && !actionSheetEntry.is_symlink">
         <button class="dropdown-item" @click="openActionSheetEntry">
           <i class="bi" :class="getFilePreviewType(actionSheetEntry.name) !== 'none' ? 'bi-eye' : 'bi-download'"></i>
           {{ getFilePreviewType(actionSheetEntry.name) !== 'none' ? 'Open' : 'Download' }}
