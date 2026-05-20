@@ -76,6 +76,18 @@ const navHistoryIndex = ref(-1)
 const canGoBack = computed(() => navHistoryIndex.value > 0)
 const canGoForward = computed(() => navHistoryIndex.value < navHistory.value.length - 1)
 
+const hoveredEntry = ref<FileEntry | null>(null)
+
+const selectionStatus = computed(() => {
+  const entry = hoveredEntry.value ?? selectedEntry.value
+  if (!entry) return ''
+  if (entry.is_dir) {
+    const count = entry.item_count ?? 0
+    return `"${entry.name}" selected (containing ${count} ${count === 1 ? 'item' : 'items'})`
+  }
+  return `"${entry.name}" selected (${formatSize(entry.size)})`
+})
+
 function scrollPreviewBody(e: WheelEvent) {
   const body = previewBodyEl.value
   if (!body) return
@@ -215,6 +227,7 @@ function parseFileEntry(raw: unknown): FileEntry {
     is_dir: getBooleanValue(source, 'is_dir', 'IsDir'),
     is_symlink: getBooleanValue(source, 'is_symlink', 'IsSymlink'),
     link_target: getStringValue(source, 'link_target', 'LinkTarget'),
+    item_count: getValue(source, 'item_count', 'ItemCount') as number | undefined,
   }
 }
 
@@ -1759,6 +1772,8 @@ onUnmounted(() => {
               @click="settingsStore.singleClickOpen ? handleEntryPrimaryAction(entry) : (isGridView ? selectEntry(entry) : openEntry(entry))"
               @dblclick="handleEntryPrimaryAction(entry)"
               @contextmenu.prevent.stop="openContextMenuAtCursor(entry, $event)"
+              @mouseenter="hoveredEntry = entry"
+              @mouseleave="hoveredEntry = null"
             >
               <div class="entry-main">
                 <span class="entry-icon" :style="iconStyleForEntry(entry)">
@@ -1802,6 +1817,10 @@ onUnmounted(() => {
           <div v-else-if="currentBrowse" class="browser-state">
             <i class="bi bi-file-earmark-text display-6 mb-3"></i>
             <p class="mb-0">You are viewing file properties.</p>
+          </div>
+
+          <div v-if="selectionStatus" class="selection-status">
+            {{ selectionStatus }}
           </div>
         </section>
 
@@ -2277,6 +2296,17 @@ onUnmounted(() => {
   color: #506071;
   font-size: 0.85rem;
   font-weight: 700;
+}
+
+.selection-status {
+  margin-top: 0.6rem;
+  text-align: right;
+  font-size: 0.78rem;
+  color: #7a8fa3;
+  padding: 0 0.25rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .entry-list {

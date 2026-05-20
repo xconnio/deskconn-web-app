@@ -90,6 +90,7 @@ export interface FileEntry {
   is_dir: boolean
   is_symlink: boolean
   link_target?: string
+  item_count?: number
 }
 
 export interface FileBrowseResult {
