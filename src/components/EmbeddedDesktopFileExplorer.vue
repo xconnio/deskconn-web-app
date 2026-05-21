@@ -19,6 +19,7 @@ const procedureFileRename = 'io.xconn.deskconn.deskconnd.file.rename'
 const procedureFileDelete = 'io.xconn.deskconn.deskconnd.file.delete'
 const procedureFileCopy = 'io.xconn.deskconn.deskconnd.file.copy'
 const procedureFileDownload = 'io.xconn.deskconn.deskconnd.file.download'
+const procedureFileSearch = 'io.xconn.deskconn.deskconnd.file.search'
 const outsideHomeMessage = 'Access denied. You can only browse files inside the home directory.'
 
 const props = defineProps<{
@@ -73,8 +74,22 @@ const previewBodyEl = ref<HTMLElement | null>(null)
 const navHistory = ref<string[]>([])
 const navHistoryIndex = ref(-1)
 
+const fileSearchActive = ref(false)
+const fileSearchQuery = ref('')
+const fileSearchResults = ref<FileEntry[]>([])
+const fileSearching = ref(false)
+const fileSearchError = ref('')
+let searchGeneration = 0
+
 const canGoBack = computed(() => navHistoryIndex.value > 0)
 const canGoForward = computed(() => navHistoryIndex.value < navHistory.value.length - 1)
+
+const visibleSearchResults = computed(() => {
+  if (!showHiddenFiles.value) {
+    return fileSearchResults.value.filter(e => !e.hidden && !e.name.startsWith('.'))
+  }
+  return fileSearchResults.value
+})
 
 const hoveredEntry = ref<FileEntry | null>(null)
 
@@ -450,6 +465,12 @@ function resetExplorerState() {
   clipboard.value = null
   closeActionSheet()
   closePreview()
+  searchGeneration++
+  fileSearchActive.value = false
+  fileSearchQuery.value = ''
+  fileSearchResults.value = []
+  fileSearchError.value = ''
+  fileSearching.value = false
 }
 
 async function performKeyExchange(): Promise<boolean> {
@@ -1278,6 +1299,96 @@ async function ensureDownloadServiceWorker(): Promise<ServiceWorker | null> {
   return downloadServiceWorkerReadyPromise
 }
 
+function enterFileSearch() {
+  fileSearchActive.value = true
+  fileSearchQuery.value = ''
+  fileSearchResults.value = []
+  fileSearchError.value = ''
+  fileSearching.value = false
+  nextTick(() => {
+    const input = document.querySelector('.file-search-input') as HTMLInputElement | null
+    if (input) input.focus()
+  })
+}
+
+function exitFileSearch() {
+  searchGeneration++
+  fileSearchActive.value = false
+  fileSearchQuery.value = ''
+  fileSearchResults.value = []
+  fileSearchError.value = ''
+  fileSearching.value = false
+}
+
+function onSearchQueryInput() {
+  const q = fileSearchQuery.value.trim()
+  if (!q) {
+    fileSearchResults.value = []
+    fileSearching.value = false
+    return
+  }
+  void executeSearch(q)
+}
+
+async function executeSearch(query: string) {
+  if (!session.value || !encryptionKeys.value) return
+  const gen = ++searchGeneration
+  const keys = encryptionKeys.value
+  const searchPath = currentBrowse.value?.path || ''
+
+  fileSearchResults.value = []
+  fileSearchError.value = ''
+  fileSearching.value = true
+
+  try {
+    const payloadBytes = new TextEncoder().encode(
+      JSON.stringify({ path: searchPath, query, show_hidden: showHiddenFiles.value }),
+    )
+    const encrypted = encryptPayload(payloadBytes, keys.encryptKey)
+
+    type CallResult = Awaited<ReturnType<Session['call']>>
+    const progressResult: any = await session.value.callProgress(procedureFileSearch, [encrypted]) // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    progressResult.registerProgress((result: CallResult) => {
+      if (gen !== searchGeneration) return
+      try {
+        const encryptedBatch = result.args?.[0] as Uint8Array
+        if (!encryptedBatch?.length) return
+        const decrypted = decryptPayload(encryptedBatch, keys.decryptKey)
+        const batch = JSON.parse(new TextDecoder().decode(decrypted)) as unknown[]
+        fileSearchResults.value.push(...batch.map(parseFileEntry))
+      } catch { /* ignore malformed batches */ }
+    })
+
+    await progressResult.finalResultPromise
+  } catch (err) {
+    if (gen === searchGeneration) {
+      fileSearchError.value = err instanceof Error ? err.message : 'Search failed'
+    }
+  } finally {
+    if (gen === searchGeneration) fileSearching.value = false
+  }
+}
+
+function searchResultParent(entry: FileEntry): string {
+  const root = currentBrowse.value?.path || ''
+  const parent = entry.path.slice(0, entry.path.lastIndexOf('/')) || '/'
+  if (parent === root) return '.'
+  if (parent.startsWith(root + '/')) return parent.slice(root.length + 1)
+  return parent
+}
+
+async function openSearchResult(entry: FileEntry) {
+  exitFileSearch()
+  if (entry.is_dir) {
+    await loadPath(entry.path)
+    return
+  }
+  const parentDir = entry.path.slice(0, entry.path.lastIndexOf('/')) || '/'
+  await loadPath(parentDir)
+  await openFile(entry)
+}
+
 function handleMediaError(event: Event) {
   const media = event.target as HTMLMediaElement
   if (!media.error) return
@@ -1545,6 +1656,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement
 
   if (e.key === 'Escape') {
+    if (fileSearchActive.value) { exitFileSearch(); return }
     if (searchMode.value) { exitSearchMode(); return }
     if (propertiesModalVisible.value) { closePropertiesModal(); return }
     if (actionSheetVisible.value) { closeActionSheet(); return }
@@ -1552,7 +1664,13 @@ function handleGlobalKeydown(e: KeyboardEvent) {
     return
   }
 
-  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || searchMode.value) return
+  if (e.ctrlKey && (e.key === 'f' || e.key === 'F')) {
+    e.preventDefault()
+    if (!fileSearchActive.value && currentBrowse.value) enterFileSearch()
+    return
+  }
+
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || searchMode.value || fileSearchActive.value) return
 
   if (e.ctrlKey) {
     if (e.key === 'h' || e.key === 'H') { e.preventDefault(); showHiddenFiles.value = !showHiddenFiles.value }
@@ -1668,13 +1786,36 @@ onUnmounted(() => {
           >
             <i class="bi bi-arrow-clockwise"></i>
           </button>
+          <button
+            class="tool-btn"
+            :class="{ 'tool-btn--active': fileSearchActive }"
+            @click="fileSearchActive ? exitFileSearch() : enterFileSearch()"
+            :disabled="isConnecting || !currentBrowse"
+            title="Search (Ctrl+F)"
+          >
+            <i class="bi bi-search"></i>
+          </button>
 
           <div
             class="breadcrumb-search-area"
-            :class="{ 'breadcrumb-search-active': searchMode }"
-            @click="!searchMode && enterSearchMode()"
+            :class="{ 'breadcrumb-search-active': searchMode || fileSearchActive }"
+            @click="!searchMode && !fileSearchActive && enterSearchMode()"
           >
-            <template v-if="!searchMode">
+            <template v-if="fileSearchActive">
+              <i class="bi bi-search path-icon"></i>
+              <input
+                v-model="fileSearchQuery"
+                type="text"
+                class="path-input file-search-input"
+                placeholder="Search in this folder…"
+                @input="onSearchQueryInput"
+                @keyup.escape="exitFileSearch"
+              />
+              <span v-if="fileSearching" class="search-spinner-wrap">
+                <span class="spinner-border spinner-border-sm" role="status"></span>
+              </span>
+            </template>
+            <template v-else-if="!searchMode">
               <div class="breadcrumb-strip" v-if="breadcrumbSegments.length > 0">
                 <template v-for="(segment, index) in breadcrumbSegments" :key="segment.path">
                   <button
@@ -1690,7 +1831,7 @@ onUnmounted(() => {
               <i class="bi bi-search breadcrumb-search-hint"></i>
             </template>
 
-            <form v-else class="path-input-inner" @submit.prevent="submitPath">
+            <form v-else-if="searchMode" class="path-input-inner" @submit.prevent="submitPath">
               <i class="bi bi-folder2-open path-icon"></i>
               <input
                 v-model="pathInput"
@@ -1747,6 +1888,60 @@ onUnmounted(() => {
             <i class="bi bi-exclamation-octagon me-2"></i>{{ operationError }}
             <button type="button" class="btn-close float-end" @click="operationError = ''"></button>
           </div>
+
+          <!-- Search results -->
+          <template v-if="fileSearchActive && fileSearchQuery.trim()">
+            <div v-if="fileSearching && !visibleSearchResults.length" class="browser-state">
+              <div class="spinner-border mb-3" role="status">
+                <span class="visually-hidden">Searching…</span>
+              </div>
+              <p class="mb-0">Searching…</p>
+            </div>
+            <div
+              v-else-if="visibleSearchResults.length > 0"
+              ref="entryListRef"
+              class="entry-list"
+              :class="{ 'grid-view': isGridView }"
+            >
+              <button
+                v-for="entry in visibleSearchResults"
+                :key="entry.path"
+                class="entry-row"
+                :class="{ active: selectedEntry?.path === entry.path }"
+                @click="openSearchResult(entry)"
+                @mouseenter="hoveredEntry = entry"
+                @mouseleave="hoveredEntry = null"
+              >
+                <div class="entry-main">
+                  <span class="entry-icon" :style="iconStyleForEntry(entry)">
+                    <i class="bi" :class="iconClassForEntry(entry)"></i>
+                  </span>
+                  <div class="entry-text">
+                    <div class="entry-name">{{ entry.name }}</div>
+                    <div class="entry-meta entry-search-path">{{ searchResultParent(entry) }}</div>
+                  </div>
+                </div>
+                <div class="entry-side">
+                  <span class="entry-size">{{ entry.is_dir ? 'Folder' : formatSize(entry.size) }}</span>
+                </div>
+              </button>
+            </div>
+            <div v-else-if="fileSearchError" class="browser-state">
+              <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
+              <p class="mb-0">{{ fileSearchError }}</p>
+            </div>
+            <div v-else-if="fileSearchQuery.trim()" class="browser-state">
+              <i class="bi bi-search display-6 mb-3"></i>
+              <p class="mb-0">No results for "{{ fileSearchQuery }}"</p>
+            </div>
+            <div v-else class="browser-state">
+              <i class="bi bi-search display-6 mb-3"></i>
+              <p class="mb-0 text-muted">Type to search files in this folder</p>
+            </div>
+          </template>
+
+          <!-- Normal directory / file view -->
+          <template v-else>
 
           <!-- Initial load spinner: only when no content exists yet -->
           <div v-if="isLoading && !currentBrowse" class="browser-state">
@@ -1818,6 +2013,8 @@ onUnmounted(() => {
             <i class="bi bi-file-earmark-text display-6 mb-3"></i>
             <p class="mb-0">You are viewing file properties.</p>
           </div>
+
+          </template>
 
           <div v-if="selectionStatus" class="selection-status">
             {{ selectionStatus }}
@@ -2137,7 +2334,7 @@ onUnmounted(() => {
 
 .path-toolbar {
   display: grid;
-  grid-template-columns: auto auto auto 1fr;
+  grid-template-columns: auto auto auto auto 1fr;
   gap: 0.75rem;
   align-items: center;
 }
@@ -2158,6 +2355,10 @@ onUnmounted(() => {
 
 .tool-btn:disabled {
   opacity: 0.5;
+}
+
+.tool-btn--active {
+  background: var(--theme-primary, #3b82f6);
 }
 
 .breadcrumb-strip {
@@ -2231,6 +2432,20 @@ onUnmounted(() => {
   color: #94a3b8;
   font-size: 0.85rem;
   flex-shrink: 0;
+}
+
+.search-spinner-wrap {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: #94a3b8;
+}
+
+.entry-search-path {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .path-input-inner {
