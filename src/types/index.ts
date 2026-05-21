@@ -91,6 +91,7 @@ export interface FileEntry {
   is_symlink: boolean
   link_target?: string
   item_count?: number
+  thumbnail?: string
 }
 
 export interface FileBrowseResult {
