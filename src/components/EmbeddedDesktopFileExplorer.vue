@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ApplicationError, type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
@@ -92,6 +92,8 @@ const visibleSearchResults = computed(() => {
 })
 
 const hoveredEntry = ref<FileEntry | null>(null)
+
+const thumbnailUrls = reactive<Record<string, string>>({})
 
 const selectionStatus = computed(() => {
   const entry = hoveredEntry.value ?? selectedEntry.value
@@ -243,6 +245,7 @@ function parseFileEntry(raw: unknown): FileEntry {
     is_symlink: getBooleanValue(source, 'is_symlink', 'IsSymlink'),
     link_target: getStringValue(source, 'link_target', 'LinkTarget'),
     item_count: getValue(source, 'item_count', 'ItemCount') as number | undefined,
+    thumbnail: getStringValue(source, 'thumbnail', 'Thumbnail') || undefined,
   }
 }
 
@@ -1352,12 +1355,17 @@ async function executeSearch(query: string) {
     progressResult.registerProgress((result: CallResult) => {
       if (gen !== searchGeneration) return
       try {
-        const encryptedBatch = result.args?.[0] as Uint8Array
-        if (!encryptedBatch?.length) return
-        const decrypted = decryptPayload(encryptedBatch, keys.decryptKey)
-        const batch = JSON.parse(new TextDecoder().decode(decrypted)) as unknown[]
-        fileSearchResults.value.push(...batch.map(parseFileEntry))
-      } catch { /* ignore malformed batches */ }
+        const encryptedMsg = result.args?.[0] as Uint8Array
+        if (!encryptedMsg?.length) return
+        const decrypted = decryptPayload(encryptedMsg, keys.decryptKey)
+        const parsed = JSON.parse(new TextDecoder().decode(decrypted))
+        if (Array.isArray(parsed)) {
+          fileSearchResults.value.push(...(parsed as unknown[]).map(parseFileEntry))
+        } else if (parsed && typeof parsed === 'object' && 'path' in parsed && 'thumbnail' in parsed) {
+          const { path, thumbnail } = parsed as { path: string; thumbnail: string }
+          if (thumbnail) thumbnailUrls[path] = `data:image/jpeg;base64,${thumbnail}`
+        }
+      } catch { /* ignore malformed messages */ }
     })
 
     await progressResult.finalResultPromise
@@ -1738,6 +1746,15 @@ watch(previewVisible, (visible) => {
   document.body.style.overflow = visible ? 'hidden' : ''
 })
 
+function applyThumbnails(entries: FileEntry[]) {
+  for (const entry of entries) {
+    if (entry.thumbnail && !thumbnailUrls[entry.path]) {
+      thumbnailUrls[entry.path] = `data:image/jpeg;base64,${entry.thumbnail}`
+    }
+  }
+}
+
+
 onMounted(async () => {
   updateViewMode()
   window.addEventListener('resize', updateViewMode)
@@ -1748,11 +1765,18 @@ onMounted(async () => {
   await initializeExplorer()
 })
 
+watch(currentBrowse, (browse) => {
+  if (browse?.is_dir && browse.entries?.length) {
+    applyThumbnails(browse.entries)
+  }
+})
+
 onUnmounted(() => {
   window.removeEventListener('resize', updateViewMode)
   document.removeEventListener('keydown', handleGlobalKeydown)
   disconnectDesktopSession()
   closePreview()
+  for (const url of Object.values(thumbnailUrls)) URL.revokeObjectURL(url)
 })
 
 </script>
@@ -1913,8 +1937,9 @@ onUnmounted(() => {
                 @mouseleave="hoveredEntry = null"
               >
                 <div class="entry-main">
-                  <span class="entry-icon" :style="iconStyleForEntry(entry)">
-                    <i class="bi" :class="iconClassForEntry(entry)"></i>
+                  <span class="entry-icon" :class="{ 'entry-icon--thumb': thumbnailUrls[entry.path] }" :style="thumbnailUrls[entry.path] ? undefined : iconStyleForEntry(entry)">
+                    <img v-if="thumbnailUrls[entry.path]" :src="thumbnailUrls[entry.path]" class="entry-thumb" :alt="entry.name" />
+                    <i v-else class="bi" :class="iconClassForEntry(entry)"></i>
                   </span>
                   <div class="entry-text">
                     <div class="entry-name">{{ entry.name }}</div>
@@ -1971,8 +1996,9 @@ onUnmounted(() => {
               @mouseleave="hoveredEntry = null"
             >
               <div class="entry-main">
-                <span class="entry-icon" :style="iconStyleForEntry(entry)">
-                  <i class="bi" :class="iconClassForEntry(entry)"></i>
+                <span class="entry-icon" :class="{ 'entry-icon--thumb': thumbnailUrls[entry.path] }" :style="thumbnailUrls[entry.path] ? undefined : iconStyleForEntry(entry)">
+                  <img v-if="thumbnailUrls[entry.path]" :src="thumbnailUrls[entry.path]" class="entry-thumb" :alt="entry.name" />
+                  <i v-else class="bi" :class="iconClassForEntry(entry)"></i>
                 </span>
                 <div class="entry-text">
                   <div class="entry-name">{{ entry.name }}</div>
@@ -2284,6 +2310,7 @@ onUnmounted(() => {
       </div>
     </div>
   </Transition>
+
 </template>
 
 <style scoped>
@@ -2511,6 +2538,20 @@ onUnmounted(() => {
   color: #506071;
   font-size: 0.85rem;
   font-weight: 700;
+}
+
+.entry-icon--thumb {
+  background: #111 !important;
+  padding: 0;
+  overflow: hidden;
+}
+
+.entry-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
 }
 
 .selection-status {
