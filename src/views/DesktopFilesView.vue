@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import EmbeddedDesktopFileExplorer from '@/components/EmbeddedDesktopFileExplorer.vue'
+import EmbeddedDesktopFiles from '@/components/EmbeddedDesktopFiles.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,7 +13,7 @@ const desktopName = computed(() => {
   return typeof queryName === 'string' ? queryName : undefined
 })
 
-function closeExplorer() {
+function close() {
   router.push('/')
 }
 </script>
@@ -21,7 +21,7 @@ function closeExplorer() {
 <template>
   <div class="file-explorer-page fade-in-up">
     <div class="page-topbar">
-      <button class="tbar-btn tbar-close" title="Close" @click="closeExplorer">
+      <button class="tbar-btn tbar-close" title="Close" @click="close">
         <i class="bi bi-x-lg"></i>
       </button>
       <div class="page-title">
@@ -29,7 +29,7 @@ function closeExplorer() {
         <span>{{ desktopName }}</span>
       </div>
     </div>
-    <EmbeddedDesktopFileExplorer
+    <EmbeddedDesktopFiles
       :realm="realm"
       :desktop-name="desktopName"
     />

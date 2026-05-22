@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { openFileExplorer } from '../router/navigation'
+import { openFiles } from '../router/navigation'
 import { useMachinesStore } from '../stores/machines'
 import { useSettingsStore } from '../stores/settings'
 import TerminalPanel from '../components/TerminalPanel.vue'
@@ -57,11 +57,11 @@ const selectedAppId = ref<string | null>(null)
 const apps = [
   {
     id: 'files',
-    label: 'File Explorer',
+    label: 'Files',
     icon: 'bi-folder2-open',
     iconColor: '#2563eb',
     iconBg: '#dbeafe',
-    action: () => openFileExplorer(realm.value, desktopName.value),
+    action: () => openFiles(realm.value, desktopName.value),
   },
   {
     id: 'terminal',

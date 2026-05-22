@@ -89,7 +89,7 @@ const router = createRouter({
     {
       path: '/desktops/:realm/files',
       name: 'desktop-files',
-      component: () => import('../views/DesktopFileExplorerView.vue'),
+      component: () => import('../views/DesktopFilesView.vue'),
       meta: { requiresAuth: true },
     },
   ],
