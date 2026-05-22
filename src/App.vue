@@ -4,7 +4,7 @@ import { RouterView, useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from './stores/auth'
 import { useMachinesStore } from './stores/machines'
-import { openFileExplorer } from './router/navigation'
+import { openLauncher } from './router/navigation'
 
 const router = useRouter()
 const route = useRoute()
@@ -45,7 +45,8 @@ const isActive = (path: string) => {
   return route.path.startsWith(path)
 }
 
-const isMachinesRoute = () => route.path === '/' || route.name === 'desktop-files'
+const isMachinesRoute = () =>
+  route.path === '/' || route.name === 'desktop-launcher' || route.name === 'desktop-files'
 
 // Close mobile sidebar on route change
 watch(() => route.fullPath, () => {
@@ -154,8 +155,8 @@ onMounted(async () => {
                 v-for="desktop in machinesStore.desktops"
                 :key="desktop.realm"
                 class="sidebar-subitem sidebar-subitem-clickable"
-                :class="{ 'sidebar-subitem-active': route.name === 'desktop-files' && route.params.realm === desktop.realm }"
-                @click="openFileExplorer(desktop.realm, desktop.name)"
+                :class="{ 'sidebar-subitem-active': (route.name === 'desktop-launcher' || route.name === 'desktop-files') && route.params.realm === desktop.realm }"
+                @click="openLauncher(desktop.realm, desktop.name)"
               >
                 <span class="sidebar-subitem-icon" aria-hidden="true">
                   {{ desktop.icon }}
