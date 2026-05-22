@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 
 import { openFiles } from '../router/navigation'
 import { useMachinesStore } from '../stores/machines'
@@ -51,6 +51,11 @@ watch(activeTerminal, (next, previous) => {
 
 onMounted(() => window.addEventListener('popstate', handlePopState))
 onUnmounted(() => window.removeEventListener('popstate', handlePopState))
+
+onBeforeRouteUpdate(() => {
+  activeTerminal.value = false
+  hasTerminalHistoryEntry = false
+})
 
 const selectedAppId = ref<string | null>(null)
 

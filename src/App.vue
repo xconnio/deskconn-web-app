@@ -48,6 +48,18 @@ const isActive = (path: string) => {
 const isMachinesRoute = () =>
   route.path === '/' || route.name === 'desktop-launcher' || route.name === 'desktop-files'
 
+const navigateToLauncher = (realm: string, name: string) => {
+  if (
+    route.name === 'desktop-launcher' &&
+    route.params.realm === realm &&
+    window.history.state?.deskconnTerminal
+  ) {
+    window.history.back()
+    return
+  }
+  openLauncher(realm, name)
+}
+
 // Close mobile sidebar on route change
 watch(() => route.fullPath, () => {
   mobileOpen.value = false
@@ -156,7 +168,7 @@ onMounted(async () => {
                 :key="desktop.realm"
                 class="sidebar-subitem sidebar-subitem-clickable"
                 :class="{ 'sidebar-subitem-active': (route.name === 'desktop-launcher' || route.name === 'desktop-files') && route.params.realm === desktop.realm }"
-                @click="openLauncher(desktop.realm, desktop.name)"
+                @click="navigateToLauncher(desktop.realm, desktop.name)"
               >
                 <span class="sidebar-subitem-icon" aria-hidden="true">
                   {{ desktop.icon }}
