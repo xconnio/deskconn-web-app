@@ -81,6 +81,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/desktops/:realm/launcher',
+      name: 'desktop-launcher',
+      component: () => import('../views/LauncherView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/desktops/:realm/files',
       name: 'desktop-files',
       component: () => import('../views/DesktopFileExplorerView.vue'),

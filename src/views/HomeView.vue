@@ -1,64 +1,12 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
-
-import { openFileExplorer } from '../router/navigation'
+import { openLauncher } from '../router/navigation'
 import { useMachinesStore } from '../stores/machines'
-import TerminalPanel from '../components/TerminalPanel.vue'
 
 const machinesStore = useMachinesStore()
-const activeTerminal = ref<{ realm: string; name: string } | null>(null)
-let hasTerminalHistoryEntry = false
-
-const openTerminal = (realm: string, name: string) => {
-  activeTerminal.value = { realm, name }
-}
-
-const closeTerminal = () => {
-  if (!activeTerminal.value) return
-
-  if (hasTerminalHistoryEntry) {
-    window.history.back()
-    return
-  }
-
-  activeTerminal.value = null
-}
-
-const handlePopState = () => {
-  if (!activeTerminal.value) return
-
-  hasTerminalHistoryEntry = false
-  activeTerminal.value = null
-}
-
-watch(activeTerminal, (next, previous) => {
-  if (!next || previous) return
-
-  window.history.pushState({ ...window.history.state, deskconnTerminal: true }, '')
-  hasTerminalHistoryEntry = true
-})
-
-onMounted(() => {
-  window.addEventListener('popstate', handlePopState)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('popstate', handlePopState)
-})
 </script>
 
 <template>
-  <!-- Terminal view -->
-  <div v-if="activeTerminal" class="terminal-view fade-in-up">
-    <TerminalPanel
-      :realm="activeTerminal.realm"
-      :desktop-name="activeTerminal.name"
-      @close="closeTerminal"
-    />
-  </div>
-
-  <!-- Desktops view -->
-  <div v-else class="container py-3 py-md-5 fade-in-up">
+  <div class="container py-3 py-md-5 fade-in-up">
     <div class="row justify-content-center mb-5">
       <div class="col-lg-10">
         <div class="d-flex justify-content-between align-items-center mb-4">
@@ -86,7 +34,7 @@ onUnmounted(() => {
           <div v-for="desktop in machinesStore.desktops" :key="desktop.realm" class="col-md-4">
             <div
               class="card h-100 border-0 shadow-sm card-hover desktop-card"
-              @click="openFileExplorer(desktop.realm, desktop.name)"
+              @click="openLauncher(desktop.realm, desktop.name)"
             >
               <div class="card-body p-4 d-flex flex-column">
                 <div class="d-flex align-items-center mb-3">
@@ -94,17 +42,6 @@ onUnmounted(() => {
                   <div>
                     <h5 class="card-title mb-0 text-dark">{{ desktop.name }}</h5>
                   </div>
-                </div>
-
-                <div class="mt-auto d-flex justify-content-between align-items-center">
-                  <span class="badge bg-light text-secondary rounded-pill">Open Explorer</span>
-                  <button
-                    class="btn btn-sm btn-outline-dark"
-                    @click.stop="openTerminal(desktop.realm, desktop.name)"
-                    title="Open Terminal"
-                  >
-                    <i class="bi bi-terminal"></i>
-                  </button>
                 </div>
               </div>
             </div>
@@ -122,11 +59,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.terminal-view {
-  display: flex;
-  flex: 1;
-}
-
 .card-hover {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
