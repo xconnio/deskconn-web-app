@@ -1,27 +1,23 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 
 import EmbeddedDesktopFiles from '@/components/EmbeddedDesktopFiles.vue'
+import { openLauncher } from '@/router/navigation'
 
 const route = useRoute()
-const router = useRouter()
 
 const realm = computed(() => String(route.params.realm || ''))
 const desktopName = computed(() => {
   const queryName = route.query.name
   return typeof queryName === 'string' ? queryName : undefined
 })
-
-function close() {
-  router.push('/')
-}
 </script>
 
 <template>
   <div class="file-explorer-page fade-in-up">
     <div class="page-topbar">
-      <button class="tbar-btn tbar-close" title="Close" @click="close">
+      <button class="tbar-btn tbar-close" title="Close" @click="openLauncher(realm, desktopName)">
         <i class="bi bi-x-lg"></i>
       </button>
       <div class="page-title">
