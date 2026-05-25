@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import WindowTitleBar from '@/components/WindowTitleBar.vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -409,15 +410,10 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
 
 <template>
   <div ref="panelRef" class="terminal-panel" :style="terminalPanelStyle">
-    <div class="terminal-titlebar">
-      <button class="tbar-btn tbar-close" title="Close" @click="closePanel">
-        <i class="bi bi-x-lg"></i>
-      </button>
-      <div class="terminal-title">
-        <i class="bi bi-terminal me-2"></i>
-        <span>{{ desktopName }}</span>
-      </div>
-    </div>
+    <WindowTitleBar @close="closePanel">
+      <i class="bi bi-terminal"></i>
+      <span>{{ desktopName }}</span>
+    </WindowTitleBar>
     <div
       ref="terminalRef"
       class="terminal-body"
@@ -581,52 +577,6 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
   overscroll-behavior: contain;
 }
 
-.terminal-titlebar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0 0.75rem;
-  height: 38px;
-  background: #2d2d2d;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.terminal-title {
-  display: flex;
-  align-items: center;
-  color: #cbd5e1;
-  font-size: 0.8rem;
-  font-weight: 500;
-  gap: 0.25rem;
-}
-
-.tbar-btn {
-  background: none;
-  border: none;
-  color: #94a3b8;
-  cursor: pointer;
-  padding: 0.3rem 0.4rem;
-  border-radius: 5px;
-  font-size: 0.8rem;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  transition:
-    color 0.15s,
-    background 0.15s;
-}
-
-.tbar-btn:hover {
-  color: #e2e8f0;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.tbar-close:hover {
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.2);
-}
 
 .terminal-body {
   flex: 1;
