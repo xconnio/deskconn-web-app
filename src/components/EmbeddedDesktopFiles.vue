@@ -429,7 +429,7 @@ function getMimeType(name: string): string {
     gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp',
     mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav',
     flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4', opus: 'audio/ogg',
-    mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg',
+    mp4: 'video/mp4', webm: 'video/webm', mov: 'video/mp4', ogv: 'video/ogg',
     pdf: 'application/pdf',
   }
   return m[ext] || 'application/octet-stream'
@@ -785,19 +785,35 @@ const MAX_SIZE_IMAGE_PDF = 100 * 1024 * 1024  // 100 MB
 const MAX_SIZE_AUDIO_FALLBACK = 50 * 1024 * 1024 // 50 MB (WAV/FLAC without MSE)
 const MAX_SIZE_VIDEO_FALLBACK = 200 * 1024 * 1024 // 200 MB (formats without MSE)
 
-// Returns the MSE MIME type to use for a file, or null if MSE is unsupported for that format.
+// Returns the first supported MSE MIME+codec string for the file, used for both
+// MediaSource.isTypeSupported and addSourceBuffer. High-profile variants are tried
+// first so the declared codec matches what real-world videos actually contain —
 function getMSEMimeType(name: string): string | null {
   if (!('MediaSource' in window)) return null
   const ext = name.toLowerCase().split('.').pop() || ''
+
   const candidates: Record<string, string[]> = {
+    // MP4/MOV are intentionally excluded from MSE: browsers vary in how strictly they
+    // validate the declared audio codec against the actual stream, and we can't know
+    // the audio codec before reading the file. All browsers play MP4/MOV reliably via
+    // the full-buffer blob URL path using their native decoder.
+    webm: [
+      'video/webm; codecs="vp9,opus"',
+      'video/webm; codecs="vp8,vorbis"',
+      'video/webm; codecs="vp9"',
+    ],
+    ogv: [
+      'video/ogg; codecs="theora,vorbis"',
+      'video/ogg; codecs="theora"',
+      'video/ogg',
+    ],
     mp3:  ['audio/mpeg'],
     ogg:  ['audio/ogg; codecs=vorbis', 'audio/ogg; codecs=opus', 'audio/ogg'],
     opus: ['audio/ogg; codecs=opus'],
     aac:  ['audio/mp4; codecs="mp4a.40.2"'],
     m4a:  ['audio/mp4; codecs="mp4a.40.2"'],
-    mp4:  ['video/mp4; codecs="avc1.42E01E,mp4a.40.2"', 'video/mp4'],
-    webm: ['video/webm; codecs="vp9,opus"', 'video/webm; codecs="vp8,vorbis"', 'video/webm'],
   }
+
   for (const mime of candidates[ext] ?? []) {
     if (MediaSource.isTypeSupported(mime)) return mime
   }
@@ -946,7 +962,8 @@ async function fetchFileData(remotePath: string): Promise<Uint8Array> {
 }
 
 // Streams audio/video directly into a MediaSource so playback starts immediately.
-async function openWithMediaSource(entry: FileEntry, mseMime: string) {
+// Returns false if MSE setup failed (caller should fall back to full-buffer).
+async function openWithMediaSource(entry: FileEntry, mseMime: string): Promise<boolean> {
   const mediaSource = new MediaSource()
   const blobUrl = URL.createObjectURL(mediaSource)
 
@@ -963,6 +980,10 @@ async function openWithMediaSource(entry: FileEntry, mseMime: string) {
   let isAppending = false
   let streamDone = false
   let sourceBuffer: SourceBuffer | null = null
+  // Aborted when the SourceBuffer fires an error (e.g. audio codec mismatch, non-fragmented
+  // MP4 in Firefox). Aborting cancels streamFileData so openWithMediaSource returns false
+  // and the caller falls back to full-buffer.
+  const sourceAbort = new AbortController()
 
   function drainQueue() {
     if (!sourceBuffer || isAppending || mediaSource.readyState !== 'open') return
@@ -985,11 +1006,24 @@ async function openWithMediaSource(entry: FileEntry, mseMime: string) {
       try {
         sourceBuffer = mediaSource.addSourceBuffer(mseMime)
         sourceBuffer.addEventListener('updateend', () => { isAppending = false; drainQueue() })
-        sourceBuffer.addEventListener('error', () => { isAppending = false })
-      } catch { /* unsupported codec at runtime */ }
+        sourceBuffer.addEventListener('error', () => {
+          isAppending = false
+          previewFileEntry.value = null
+          sourceAbort.abort()
+        })
+      } catch { /* unsupported codec at runtime — sourceBuffer stays null */ }
       resolve()
     }, { once: true })
   })
+
+  if (!sourceBuffer) {
+    URL.revokeObjectURL(blobUrl)
+    try { mediaSource.endOfStream() } catch { /* ignore */ }
+    previewBlobUrl.value = ''
+    previewVisible.value = false
+    previewFileEntry.value = null
+    return false
+  }
 
   try {
     await streamFileData(entry.path, (chunk, expectedTotal) => {
@@ -998,14 +1032,19 @@ async function openWithMediaSource(entry: FileEntry, mseMime: string) {
       previewReceivedBytes.value += chunk.length
       queue.push(chunk)
       drainQueue()
-    })
+    }, sourceAbort.signal)
     streamDone = true
     drainQueue()
   } catch (err) {
+    if (sourceAbort.signal.aborted) {
+      // SourceBuffer error aborted the stream — signal failure so caller uses full-buffer.
+      return false
+    }
     if (previewFileEntry.value?.path === entry.path) {
       previewError.value = err instanceof Error ? err.message : 'Failed to stream file'
     }
   }
+  return true
 }
 
 async function openFile(entry: FileEntry, isRetry = false) {
@@ -1035,13 +1074,14 @@ async function openFile(entry: FileEntry, isRetry = false) {
 
   // Audio / video: prefer MediaSource streaming (no memory limit needed)
   if (pt === 'audio' || pt === 'video') {
-    const mseMime = getMSEMimeType(effectiveName)
+    const mseMime = !isRetry ? getMSEMimeType(effectiveName) : null
     if (mseMime) {
       closePreview()
-      await openWithMediaSource(entry, mseMime)
-      return
+      const mseStarted = await openWithMediaSource(entry, mseMime)
+      if (mseStarted) return
+      // addSourceBuffer failed (codec unsupported at runtime) — fall through to full-buffer
     }
-    // Fallback for WAV/FLAC/MOV etc. that MSE doesn't support: full-buffer with size guard
+    // Fallback for formats MSE can't handle: full-buffer with size guard
     const limit = pt === 'audio' ? MAX_SIZE_AUDIO_FALLBACK : MAX_SIZE_VIDEO_FALLBACK
     if (entry.size > limit) {
       await downloadFileToClient(entry)
@@ -3119,8 +3159,20 @@ onUnmounted(() => {
 }
 
 .preview-video {
+  width: 100%;
   max-width: 100%;
   max-height: 72vh;
+}
+
+.preview-dialog--fullscreen .preview-video-wrap {
+  overflow: hidden;
+}
+
+.preview-dialog--fullscreen .preview-video {
+  max-height: 100%;
+  height: 100%;
+  width: 100%;
+  object-fit: contain;
 }
 
 .preview-pdf-wrap {
