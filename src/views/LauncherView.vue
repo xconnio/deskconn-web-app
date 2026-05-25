@@ -6,6 +6,7 @@ import { openFiles } from '../router/navigation'
 import { useMachinesStore } from '../stores/machines'
 import { useSettingsStore } from '../stores/settings'
 import TerminalPanel from '../components/TerminalPanel.vue'
+import WindowTitleBar from '../components/WindowTitleBar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -91,15 +92,10 @@ const apps = [
 
   <!-- Launcher -->
   <div v-else class="launcher-wrapper fade-in-up">
-    <div class="launcher-header">
-      <button class="tbar-btn" title="Close" @click="close">
-        <i class="bi bi-x-lg"></i>
-      </button>
-      <span class="launcher-machine-icon">
-        {{ machinesStore.desktops.find((d) => d.realm === realm)?.icon ?? '🖥️' }}
-      </span>
-      <h3 class="launcher-machine-name">{{ desktopName }}</h3>
-    </div>
+    <WindowTitleBar @close="close">
+      <span class="launcher-machine-icon">{{ machinesStore.desktops.find((d) => d.realm === realm)?.icon ?? '🖥️' }}</span>
+      <span class="launcher-machine-name">{{ desktopName }}</span>
+    </WindowTitleBar>
 
     <div class="launcher-body">
     <div class="launcher-grid">
@@ -136,49 +132,7 @@ const apps = [
   flex: 1;
 }
 
-.launcher-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.6rem 1rem;
-  border-bottom: 1px solid #e8ecf0;
-  flex-shrink: 0;
-}
 
-.tbar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: #64748b;
-  font-size: 0.75rem;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-  flex-shrink: 0;
-}
-
-.tbar-btn:hover {
-  background: #f1f5f9;
-  color: #111827;
-}
-
-.launcher-machine-icon {
-  font-size: 1.15rem;
-}
-
-.launcher-machine-name {
-  font-size: 1.15rem;
-  font-weight: 800;
-  color: #0f172a;
-  margin: 0;
-  letter-spacing: -0.03em;
-  white-space: nowrap;
-}
 
 .launcher-body {
   display: flex;
