@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { ref, shallowRef, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import WindowTitleBar from '@/components/WindowTitleBar.vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -18,28 +18,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const sessionCacheStore = useSessionCacheStore()
 const panelRef = ref<HTMLDivElement | null>(null)
-const terminalRef = ref<HTMLDivElement | null>(null)
 const keybarRef = ref<HTMLDivElement | null>(null)
-
-let term: Terminal | null = null
-let fitAddon: FitAddon | null = null
-let session: Session | null = null
-let channel: ProgressChannel | null = null
-let closed = false
-let keybarResizeObserver: ResizeObserver | null = null
-let previousBodyOverflow = ''
-let previousHtmlOverflow = ''
-let previousBodyOverscrollBehavior = ''
-let previousHtmlOverscrollBehavior = ''
-let touchScrollLastY: number | null = null
-
-// Encryption state — reset on each startShell call
-let encKeys: { encryptKey: Uint8Array; decryptKey: Uint8Array } | null = null
-let encryptionMode: 'pending' | 'enabled' | 'disabled' = 'pending'
-let clientPrivateKey: Uint8Array | null = null
-let clientPublicKey: Uint8Array | null = null
-let pendingInputs: Uint8Array[] = []
-let isFirstSizeSent = false
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -63,47 +42,134 @@ class ProgressChannel {
   }
 }
 
-function pushEncrypted(bytes: Uint8Array) {
-  if (!channel) return
-  const payload = encKeys ? encryptPayload(bytes, encKeys.encryptKey) : bytes
-  channel.push(new Progress([payload], {}, { progress: true }))
+interface TabState {
+  id: number
+  num: number
+  label: string
+  shellId: string
+  term: Terminal | null
+  fitAddon: FitAddon | null
+  session: Session | null
+  channel: ProgressChannel | null
+  closed: boolean
+  encKeys: { encryptKey: Uint8Array; decryptKey: Uint8Array } | null
+  encryptionMode: 'pending' | 'enabled' | 'disabled'
+  clientPrivateKey: Uint8Array | null
+  clientPublicKey: Uint8Array | null
+  pendingInputs: Uint8Array[]
+  isFirstSizeSent: boolean
 }
 
-const sendSize = () => {
-  if (!term || !channel) return
-  const { cols, rows } = term
+const tabs = shallowRef<TabState[]>([])
+const activeTabId = ref(-1)
+let nextTabId = 0
+const termElMap = new Map<number, HTMLDivElement>()
+
+const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value) ?? null)
+
+let keybarResizeObserver: ResizeObserver | null = null
+let previousBodyOverflow = ''
+let previousHtmlOverflow = ''
+let previousBodyOverscrollBehavior = ''
+let previousHtmlOverscrollBehavior = ''
+let touchScrollLastY: number | null = null
+
+const isMobile = computed(() => 'ontouchstart' in window || navigator.maxTouchPoints > 0)
+const ctrlActive = ref(false)
+const panelViewportHeight = ref<number | null>(null)
+const keybarHeight = ref(0)
+const pressedKeys = ref<string[]>([])
+const terminalInsetBottom = computed(() => (isMobile.value ? keybarHeight.value : 0))
+const terminalPanelStyle = computed(() =>
+  isMobile.value && panelViewportHeight.value !== null
+    ? { height: `${panelViewportHeight.value}px` }
+    : undefined,
+)
+
+function createTabState(): TabState {
+  const used = new Set(tabs.value.map(t => t.num))
+  let n = 1
+  while (used.has(n)) n++
+  return {
+    id: nextTabId++,
+    num: n,
+    label: `Terminal ${n}`,
+    shellId: '',
+    term: null,
+    fitAddon: null,
+    session: null,
+    channel: null,
+    closed: false,
+    encKeys: null,
+    encryptionMode: 'pending',
+    clientPrivateKey: null,
+    clientPublicKey: null,
+    pendingInputs: [],
+    isFirstSizeSent: false,
+  }
+}
+
+function registerTermEl(id: number, el: unknown) {
+  if (el instanceof HTMLDivElement) {
+    termElMap.set(id, el)
+  } else {
+    termElMap.delete(id)
+  }
+}
+
+function pushEncrypted(tab: TabState, bytes: Uint8Array) {
+  if (!tab.channel) return
+  const encrypted = tab.encKeys ? encryptPayload(bytes, tab.encKeys.encryptKey) : bytes
+  // Non-first shells must prefix every frame with "<shellId>:" so the server can route it.
+  let payload: Uint8Array
+  if (tab.shellId) {
+    const prefix = enc.encode(tab.shellId + ':')
+    payload = new Uint8Array(prefix.length + encrypted.length)
+    payload.set(prefix)
+    payload.set(encrypted, prefix.length)
+  } else {
+    payload = encrypted
+  }
+  tab.channel.push(new Progress([payload], {}, { progress: true }))
+}
+
+function sendSize(tab: TabState) {
+  if (!tab.term || !tab.channel) return
+  const { cols, rows } = tab.term
   const sizeStr = `SIZE:${cols}:${rows}`
 
-  if (!isFirstSizeSent) {
-    isFirstSizeSent = true
-    // First SIZE: append :KEY:<publicKey> for key exchange
+  if (!tab.isFirstSizeSent) {
+    tab.isFirstSizeSent = true
     const sizeBytes = enc.encode(sizeStr)
     const keyMarker = enc.encode(':KEY:')
-    const first = new Uint8Array(sizeBytes.length + keyMarker.length + clientPublicKey!.length)
+    const first = new Uint8Array(sizeBytes.length + keyMarker.length + tab.clientPublicKey!.length)
     first.set(sizeBytes, 0)
     first.set(keyMarker, sizeBytes.length)
-    first.set(clientPublicKey!, sizeBytes.length + keyMarker.length)
-    channel.push(new Progress([first], {}, { progress: true }))
+    first.set(tab.clientPublicKey!, sizeBytes.length + keyMarker.length)
+    tab.channel.push(new Progress([first], {}, { progress: true }))
     return
   }
 
-  // Subsequent resizes: encrypt if encryption is active, otherwise send as string
-  if (encryptionMode === 'enabled') {
-    pushEncrypted(enc.encode(sizeStr))
-  } else if (encryptionMode === 'disabled') {
-    channel.push(new Progress([sizeStr], {}, { progress: true }))
+  if (tab.encryptionMode === 'enabled') {
+    pushEncrypted(tab, enc.encode(sizeStr))
+  } else if (tab.encryptionMode === 'disabled') {
+    tab.channel.push(new Progress([sizeStr], {}, { progress: true }))
   }
-  // If still 'pending', drop the resize — the terminal isn't active yet
+}
+
+function handleResizeTab(tab: TabState) {
+  if (!tab.fitAddon) return
+  tab.fitAddon.fit()
+  sendSize(tab)
 }
 
 const handleResize = () => {
-  if (!fitAddon) return
-  fitAddon.fit()
-  sendSize()
+  const tab = activeTab.value
+  if (tab) handleResizeTab(tab)
 }
 
-const handleTerminalInput = (data: string) => {
-  if (closed || !channel) return
+function handleTerminalInput(tab: TabState, data: string) {
+  if (tab.closed || !tab.channel) return
 
   let input = data
   if (ctrlActive.value && data.length === 1) {
@@ -113,70 +179,64 @@ const handleTerminalInput = (data: string) => {
   }
 
   const bytes = enc.encode(input)
-  if (encryptionMode === 'pending') {
-    pendingInputs.push(bytes)
+  if (tab.encryptionMode === 'pending') {
+    tab.pendingInputs.push(bytes)
     return
   }
-  if (encryptionMode === 'enabled') {
-    pushEncrypted(bytes)
+  if (tab.encryptionMode === 'enabled') {
+    pushEncrypted(tab, bytes)
   } else {
-    channel.push(new Progress([input], {}, { progress: true }))
+    tab.channel.push(new Progress([input], {}, { progress: true }))
   }
 }
 
-function flushPendingInputs() {
-  for (const bytes of pendingInputs) {
-    if (encryptionMode === 'enabled') {
-      pushEncrypted(bytes)
+function flushPendingInputs(tab: TabState) {
+  for (const bytes of tab.pendingInputs) {
+    if (tab.encryptionMode === 'enabled') {
+      pushEncrypted(tab, bytes)
     } else {
-      channel?.push(new Progress([dec.decode(bytes)], {}, { progress: true }))
+      tab.channel?.push(new Progress([dec.decode(bytes)], {}, { progress: true }))
     }
   }
-  pendingInputs = []
+  tab.pendingInputs = []
 }
 
-function resetEncryptionState() {
-  encKeys = null
-  encryptionMode = 'pending'
-  clientPrivateKey = null
-  clientPublicKey = null
-  pendingInputs = []
-  isFirstSizeSent = false
+function resetEncryptionState(tab: TabState) {
+  tab.encKeys = null
+  tab.encryptionMode = 'pending'
+  tab.shellId = ''
+  tab.clientPrivateKey = null
+  tab.clientPublicKey = null
+  tab.pendingInputs = []
+  tab.isFirstSizeSent = false
 }
 
-const cleanup = () => {
-  if (closed) return
-  closed = true
-  window.removeEventListener('resize', handleResize)
-  window.visualViewport?.removeEventListener('resize', updateKeybarPosition)
-  window.visualViewport?.removeEventListener('scroll', updateKeybarPosition)
-  keybarResizeObserver?.disconnect()
-  keybarResizeObserver = null
-  clearTerminalTouchScroll()
-  unlockPageScroll()
-  term?.dispose()
+function cleanupTab(tab: TabState) {
+  if (tab.closed) return
+  tab.closed = true
+  tab.term?.dispose()
   // Non-progress frame unblocks the sender; without it the call lingers on the cached session.
-  channel?.push(new Progress([], {}, {}))
-  channel = null
-  session = null
+  // Pass the shell ID so the server routes cleanup to the correct PTY (not the caller-default).
+  tab.channel?.push(new Progress(tab.shellId ? [tab.shellId] : [], {}, {}))
+  tab.channel = null
+  tab.session = null
 }
 
-const startShell = async () => {
-  if (!session || !channel) return
+async function startShell(tab: TabState) {
+  if (!tab.session || !tab.channel) return
 
   let firstServerMessage = true
+  const pendingOutput: Uint8Array[] = []
 
   try {
-    await session.callProgressiveProgress(
+    await tab.session.callProgressiveProgress(
       'io.xconn.deskconn.deskconnd.shell',
-      async () => channel!.next(),
+      async () => tab.channel!.next(),
       async (progressResult: Result) => {
-        if (closed) return
+        if (tab.closed) return
         const args = progressResult.args
         if (!args || args.length === 0) {
-          channel?.push(new Progress([], {}, {}))
-          cleanup()
-          emit('close')
+          closeTab(tab.id)
           return
         }
 
@@ -192,53 +252,138 @@ const startShell = async () => {
             data.slice(0, keyPrefix.length).every((b, i) => b === keyPrefix[i])
 
           if (startsWithKey) {
-            const serverPublicKey = data.slice(keyPrefix.length)
-            encKeys = await deriveSessionKeys(clientPrivateKey!, serverPublicKey)
-            encryptionMode = 'enabled'
+            // X25519 public key is always 32 bytes. For non-first shells the server
+            // appends the assigned shell ID after the key; capture it so we can
+            // prefix every outgoing frame with "<shellId>:" for server-side routing.
+            const afterKey = data.slice(keyPrefix.length)
+            const serverPublicKey = afterKey.slice(0, 32)
+            if (afterKey.length > 32) {
+              tab.shellId = dec.decode(afterKey.slice(32))
+            }
+            // deriveSessionKeys is async — frames that arrive during this await are
+            // buffered in pendingOutput and flushed below once keys are ready.
+            tab.encKeys = await deriveSessionKeys(tab.clientPrivateKey!, serverPublicKey)
+            tab.encryptionMode = 'enabled'
+            for (const buffered of pendingOutput) {
+              tab.term?.write(decryptPayload(buffered, tab.encKeys.decryptKey))
+            }
+            pendingOutput.length = 0
           } else {
-            // Old server: no encryption
-            encryptionMode = 'disabled'
-            term?.write(data)
+            tab.encryptionMode = 'disabled'
+            tab.term?.write(data)
+            for (const buffered of pendingOutput) tab.term?.write(buffered)
+            pendingOutput.length = 0
           }
 
-          flushPendingInputs()
+          flushPendingInputs(tab)
           return
         }
 
-        if (encryptionMode === 'enabled' && encKeys) {
-          const plaintext = decryptPayload(data, encKeys.decryptKey)
-          term?.write(plaintext)
+        // Key derivation still in progress — buffer until encryption mode is known.
+        if (tab.encryptionMode === 'pending') {
+          pendingOutput.push(data)
+          return
+        }
+
+        if (tab.encryptionMode === 'enabled' && tab.encKeys) {
+          tab.term?.write(decryptPayload(data, tab.encKeys.decryptKey))
         } else {
-          term?.write(data)
+          tab.term?.write(data)
         }
       },
     )
   } catch (err) {
+    if (tab.closed) return
     if (err instanceof ApplicationError) {
-      term?.write(`Desktop is offline.`)
+      tab.term?.write(`Desktop is offline.`)
     } else {
-      term?.write(`Shell error: ${err}`)
+      tab.term?.write(`Shell error: ${err}`)
     }
   }
 }
 
-const closePanel = () => {
-  cleanup()
-  emit('close')
+async function initTab(tab: TabState) {
+  const el = termElMap.get(tab.id)
+  if (!el) return
+
+  tab.term = new Terminal({
+    cursorBlink: true,
+    cursorStyle: 'block',
+    convertEol: true,
+    scrollback: 10000,
+    fontSize: 14,
+    theme: { background: '#1e1e1e' },
+  })
+
+  tab.fitAddon = new FitAddon()
+  tab.term.loadAddon(tab.fitAddon)
+  tab.term.open(el)
+  tab.fitAddon.fit()
+  tab.term.focus()
+
+  try {
+    tab.session = await sessionCacheStore.acquire(props.realm)
+  } catch {
+    tab.term.writeln('Connection failed.')
+    return
+  }
+
+  if (!tab.session) {
+    tab.term.writeln('Connection failed.')
+    return
+  }
+
+  resetEncryptionState(tab)
+  const kp = createX25519KeyPair()
+  tab.clientPrivateKey = kp.privateKey
+  tab.clientPublicKey = kp.publicKey
+
+  tab.channel = new ProgressChannel()
+  tab.term.onData((data) => handleTerminalInput(tab, data))
+  handleResizeTab(tab)
+
+  await startShell(tab)
 }
 
-// Mobile keyboard toolbar
-const isMobile = computed(() => 'ontouchstart' in window || navigator.maxTouchPoints > 0)
-const ctrlActive = ref(false)
-const panelViewportHeight = ref<number | null>(null)
-const keybarHeight = ref(0)
-const pressedKeys = ref<string[]>([])
-const terminalInsetBottom = computed(() => (isMobile.value ? keybarHeight.value : 0))
-const terminalPanelStyle = computed(() =>
-  isMobile.value && panelViewportHeight.value !== null
-    ? { height: `${panelViewportHeight.value}px` }
-    : undefined,
-)
+async function addTab() {
+  const tab = createTabState()
+  tabs.value = [...tabs.value, tab]
+  activeTabId.value = tab.id
+  await nextTick()
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+  await initTab(tab)
+}
+
+async function switchTab(id: number) {
+  if (activeTabId.value === id) return
+  activeTabId.value = id
+  await nextTick()
+  const tab = tabs.value.find(t => t.id === id)
+  if (tab) {
+    tab.fitAddon?.fit()
+    tab.term?.focus()
+  }
+}
+
+function closeTab(id: number) {
+  const idx = tabs.value.findIndex(t => t.id === id)
+  if (idx === -1) return
+  cleanupTab(tabs.value[idx]!)
+  const remaining = tabs.value.filter(t => t.id !== id)
+  tabs.value = remaining
+  if (remaining.length === 0) {
+    unlockPageScroll()
+    emit('close')
+    return
+  }
+  void switchTab(remaining[Math.min(idx, remaining.length - 1)]!.id)
+}
+
+const closePanel = () => {
+  for (const tab of tabs.value) cleanupTab(tab)
+  unlockPageScroll()
+  emit('close')
+}
 
 const updateKeybarPosition = () => {
   requestAnimationFrame(() => {
@@ -315,7 +460,7 @@ const handleTerminalTouchStart = (event: TouchEvent) => {
 }
 
 const handleTerminalTouchMove = (event: TouchEvent) => {
-  if (!isMobile.value || !term || event.touches.length !== 1 || touchScrollLastY === null) return
+  if (!isMobile.value || event.touches.length !== 1 || touchScrollLastY === null) return
 
   const touch = event.touches.item(0)
   if (!touch) return
@@ -325,7 +470,7 @@ const handleTerminalTouchMove = (event: TouchEvent) => {
   if (Math.abs(deltaY) < 4) return
 
   event.preventDefault()
-  term.scrollLines(Math.round(-deltaY / 16))
+  activeTab.value?.term?.scrollLines(Math.round(-deltaY / 16))
   touchScrollLastY = nextY
 }
 
@@ -336,8 +481,9 @@ const pressMobileKey = (seq: string, label: string) => {
     ctrlActive.value = !ctrlActive.value
     return
   }
-  handleTerminalInput(seq)
-  term?.focus()
+  const tab = activeTab.value
+  if (tab) handleTerminalInput(tab, seq)
+  tab?.term?.focus()
 }
 
 const releaseMobileKey = (label: string) => {
@@ -345,27 +491,10 @@ const releaseMobileKey = (label: string) => {
 }
 
 onMounted(async () => {
-  if (!terminalRef.value) return
-
   if (isMobile.value) {
     lockPageScroll()
   }
 
-  term = new Terminal({
-    cursorBlink: true,
-    cursorStyle: 'block',
-    convertEol: true,
-    scrollback: 10000,
-    fontSize: 14,
-    theme: { background: '#1e1e1e' },
-  })
-
-  fitAddon = new FitAddon()
-  term.loadAddon(fitAddon)
-  term.open(terminalRef.value)
-  fitAddon.fit()
-
-  // Set up listeners before focus so the keyboard-open resize fires into them
   window.addEventListener('resize', handleResize)
   window.visualViewport?.addEventListener('resize', updateKeybarPosition)
   window.visualViewport?.addEventListener('scroll', updateKeybarPosition)
@@ -373,33 +502,19 @@ onMounted(async () => {
   observeKeybarHeight()
   updateKeybarPosition()
 
-  term.focus()
-
-  try {
-    session = await sessionCacheStore.acquire(props.realm)
-  } catch {
-    term.writeln('Connection failed.')
-    return
-  }
-
-  if (!session) {
-    term.writeln('Connection failed.')
-    return
-  }
-
-  resetEncryptionState()
-  const kp = createX25519KeyPair()
-  clientPrivateKey = kp.privateKey
-  clientPublicKey = kp.publicKey
-
-  channel = new ProgressChannel()
-  term.onData(handleTerminalInput)
-  handleResize()
-
-  await startShell()
+  await addTab()
 })
 
-onUnmounted(cleanup)
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+  window.visualViewport?.removeEventListener('resize', updateKeybarPosition)
+  window.visualViewport?.removeEventListener('scroll', updateKeybarPosition)
+  keybarResizeObserver?.disconnect()
+  keybarResizeObserver = null
+  clearTerminalTouchScroll()
+  unlockPageScroll()
+  for (const tab of tabs.value) cleanupTab(tab)
+})
 
 watch([terminalInsetBottom, panelViewportHeight], () => {
   requestAnimationFrame(() => {
@@ -414,14 +529,42 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
       <i class="bi bi-terminal"></i>
       <span>{{ desktopName }}</span>
     </WindowTitleBar>
+
+    <div class="tab-bar">
+      <div class="tabs-list">
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          class="tab-item"
+          :class="{ 'tab-active': tab.id === activeTabId }"
+          @click="switchTab(tab.id)"
+        >
+          <i class="bi bi-terminal-fill tab-icon"></i>
+          <span class="tab-label">{{ tab.label }}</span>
+          <span
+            class="tab-close"
+            role="button"
+            :title="`Close ${tab.label}`"
+            @click.stop="closeTab(tab.id)"
+          >&times;</span>
+        </button>
+        <button class="tab-add" title="New terminal" @click="addTab">+</button>
+      </div>
+    </div>
+
     <div
-      ref="terminalRef"
+      v-for="tab in tabs"
+      :key="tab.id"
+      v-show="tab.id === activeTabId"
       class="terminal-body"
       @touchstart="handleTerminalTouchStart"
       @touchmove="handleTerminalTouchMove"
       @touchend="clearTerminalTouchScroll"
       @touchcancel="clearTerminalTouchScroll"
-    ></div>
+    >
+      <div :ref="(el) => registerTermEl(tab.id, el)" class="terminal-mount"></div>
+    </div>
+
     <div
       v-if="isMobile"
       class="terminal-keybar-spacer"
@@ -577,6 +720,115 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
   overscroll-behavior: contain;
 }
 
+.tab-bar {
+  display: flex;
+  align-items: stretch;
+  background: #141414;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.tabs-list {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tab-item {
+  flex: 0 1 180px;
+  min-width: 40px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 0 10px;
+  height: 32px;
+  background: #141414;
+  border: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  color: #666;
+  font-size: 0.72rem;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background 0.12s, color 0.12s;
+}
+
+.tab-item:hover {
+  background: #1e1e1e;
+  color: #aaa;
+}
+
+.tab-item.tab-active {
+  background: #1e1e1e;
+  color: #e2e8f0;
+  box-shadow: inset 0 2px 0 #3b82f6;
+}
+
+.tab-icon {
+  font-size: 0.65rem;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.tab-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.tab-close {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  color: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s;
+  user-select: none;
+}
+
+.tab-item:hover .tab-close,
+.tab-item.tab-active .tab-close {
+  opacity: 0.5;
+}
+
+.tab-close:hover {
+  opacity: 1 !important;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.tab-add {
+  flex: 0 0 28px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: #555;
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+  border-radius: 3px;
+  margin: 2px 2px 2px 1px;
+}
+
+.tab-add:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ccc;
+}
 
 .terminal-body {
   flex: 1;
@@ -657,6 +909,11 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
 .mobile-key.ctrl-active.is-pressed,
 .mobile-key.ctrl-active:active {
   background: #1e40af;
+}
+
+.terminal-mount {
+  width: 100%;
+  height: 100%;
 }
 
 .terminal-body :deep(.xterm) {
