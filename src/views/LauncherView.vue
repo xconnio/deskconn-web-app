@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 
-import { openFiles } from '../router/navigation'
+import { openFiles, openIndexedFiles } from '../router/navigation'
 import { useMachinesStore } from '../stores/machines'
 import { useSettingsStore } from '../stores/settings'
 import TerminalPanel from '../components/TerminalPanel.vue'
@@ -50,15 +50,28 @@ watch(activeTerminal, (next, previous) => {
   hasTerminalHistoryEntry = true
 })
 
-onMounted(() => window.addEventListener('popstate', handlePopState))
-onUnmounted(() => window.removeEventListener('popstate', handlePopState))
+onMounted(() => {
+  window.addEventListener('popstate', handlePopState)
+  document.addEventListener('keydown', handleKeydown)
+})
+onUnmounted(() => {
+  window.removeEventListener('popstate', handlePopState)
+  document.removeEventListener('keydown', handleKeydown)
+})
 
 onBeforeRouteUpdate(() => {
   activeTerminal.value = false
   hasTerminalHistoryEntry = false
 })
 
+const launcherGridRef = ref<HTMLElement | null>(null)
 const selectedAppId = ref<string | null>(null)
+
+const notSupported = computed(() => !!route.query.notSupported)
+function dismissNotSupported() {
+  const rest = Object.fromEntries(Object.entries(route.query).filter(([k]) => k !== 'notSupported'))
+  router.replace({ params: route.params, query: rest })
+}
 
 const apps = [
   {
@@ -77,7 +90,69 @@ const apps = [
     iconBg: '#e2e8f0',
     action: () => openTerminal(),
   },
+  {
+    id: 'pictures',
+    label: 'Pictures',
+    icon: 'bi-images',
+    iconColor: '#ec4899',
+    iconBg: '#fce7f3',
+    action: () => openIndexedFiles(realm.value, 'pictures', desktopName.value),
+  },
+  {
+    id: 'videos',
+    label: 'Videos',
+    icon: 'bi-collection-play-fill',
+    iconColor: '#7c3aed',
+    iconBg: '#ede9fe',
+    action: () => openIndexedFiles(realm.value, 'videos', desktopName.value),
+  },
+  {
+    id: 'documents',
+    label: 'Documents',
+    icon: 'bi-file-earmark-richtext-fill',
+    iconColor: '#d97706',
+    iconBg: '#fef3c7',
+    action: () => openIndexedFiles(realm.value, 'documents', desktopName.value),
+  },
 ]
+
+function columnCount(): number {
+  if (!launcherGridRef.value) return 1
+  return window.getComputedStyle(launcherGridRef.value).gridTemplateColumns.split(' ').length
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  if (activeTerminal.value) return
+  const target = e.target as HTMLElement
+  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+
+  if (e.key === 'Escape') { close(); return }
+
+  const idx = apps.findIndex(a => a.id === selectedAppId.value)
+  const cols = columnCount()
+
+  switch (e.key) {
+    case 'ArrowDown':
+      e.preventDefault()
+      selectedAppId.value = apps[Math.min(idx < 0 ? 0 : idx + cols, apps.length - 1)]!.id
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      selectedAppId.value = apps[Math.max(0, idx < 0 ? apps.length - 1 : idx - cols)]!.id
+      break
+    case 'ArrowRight':
+      e.preventDefault()
+      selectedAppId.value = apps[Math.min(idx < 0 ? 0 : idx + 1, apps.length - 1)]!.id
+      break
+    case 'ArrowLeft':
+      e.preventDefault()
+      selectedAppId.value = apps[Math.max(0, idx < 0 ? 0 : idx - 1)]!.id
+      break
+    case 'Enter':
+      if (selectedAppId.value) apps.find(a => a.id === selectedAppId.value)?.action()
+      break
+  }
+}
 </script>
 
 <template>
@@ -97,8 +172,14 @@ const apps = [
       <span class="launcher-machine-name">{{ desktopName }}</span>
     </WindowTitleBar>
 
+    <div v-if="notSupported" class="not-supported-banner">
+      <i class="bi bi-exclamation-triangle-fill"></i>
+      <span>Not supported — please upgrade your backend.</span>
+      <button class="not-supported-dismiss" @click="dismissNotSupported">×</button>
+    </div>
+
     <div class="launcher-body">
-    <div class="launcher-grid">
+    <div ref="launcherGridRef" class="launcher-grid">
       <button
         v-for="app in apps"
         :key="app.id"
@@ -133,6 +214,29 @@ const apps = [
 }
 
 
+
+.not-supported-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 1rem;
+  background: #fef3c7;
+  border-bottom: 1px solid #fbbf24;
+  color: #92400e;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.not-supported-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #92400e;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0;
+}
 
 .launcher-body {
   display: flex;

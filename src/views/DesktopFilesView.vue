@@ -13,6 +13,10 @@ const desktopName = computed(() => {
   const queryName = route.query.name
   return typeof queryName === 'string' ? queryName : undefined
 })
+const initialPath = computed(() => {
+  const p = route.query.path
+  return typeof p === 'string' ? p : undefined
+})
 </script>
 
 <template>
@@ -24,6 +28,7 @@ const desktopName = computed(() => {
     <EmbeddedDesktopFiles
       :realm="realm"
       :desktop-name="desktopName"
+      :initial-path="initialPath"
     />
   </div>
 </template>

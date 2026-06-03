@@ -46,7 +46,10 @@ const isActive = (path: string) => {
 }
 
 const isMachinesRoute = () =>
-  route.path === '/' || route.name === 'desktop-launcher' || route.name === 'desktop-files'
+  route.path === '/' ||
+  route.name === 'desktop-launcher' ||
+  route.name === 'desktop-files' ||
+  route.name === 'desktop-index'
 
 const navigateToLauncher = (realm: string, name: string) => {
   if (
@@ -167,7 +170,7 @@ onMounted(async () => {
                 v-for="desktop in machinesStore.desktops"
                 :key="desktop.realm"
                 class="sidebar-subitem sidebar-subitem-clickable"
-                :class="{ 'sidebar-subitem-active': (route.name === 'desktop-launcher' || route.name === 'desktop-files') && route.params.realm === desktop.realm }"
+                :class="{ 'sidebar-subitem-active': (route.name === 'desktop-launcher' || route.name === 'desktop-files' || route.name === 'desktop-index') && route.params.realm === desktop.realm }"
                 @click="navigateToLauncher(desktop.realm, desktop.name)"
               >
                 <span class="sidebar-subitem-icon" aria-hidden="true">
