@@ -4,6 +4,7 @@ import { ApplicationError, type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSettingsStore } from '@/stores/settings'
+import { useEntryNavigation } from '@/composables/useEntryNavigation'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import {
   createX25519KeyPair,
@@ -12,6 +13,14 @@ import {
   decryptPayload,
   type EncryptionKeys,
 } from '@/utils/encryption'
+import {
+  type FilePreviewType,
+  formatSize,
+  getFilePreviewType,
+  getMimeType,
+  getMSEMimeType,
+  isFirefoxBrowser,
+} from '@/utils/fileTypes'
 
 const procedureKeyExchange = 'io.xconn.deskconn.deskconnd.key.exchange'
 const procedureFileBrowse = 'io.xconn.deskconn.deskconnd.file.browse'
@@ -25,6 +34,8 @@ const outsideHomeMessage = 'Access denied. You can only browse files inside the 
 const props = defineProps<{
   realm: string
   desktopName?: string
+  initialPath?: string
+  initialOpenFile?: string
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
@@ -56,8 +67,6 @@ const supportedFileProcedures = ref({
   delete: false,
   copy: false,
 })
-
-type FilePreviewType = 'image' | 'audio' | 'video' | 'text' | 'pdf' | 'none'
 
 const previewVisible = ref(false)
 const previewFullscreen = ref(false)
@@ -362,22 +371,6 @@ function formatDate(value?: string) {
   }).format(date)
 }
 
-function formatSize(size?: number) {
-  if (typeof size !== 'number') return '-'
-  if (size < 1024) return `${size} B`
-
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let value = size
-  let unitIndex = -1
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`
-}
-
 function iconClassForEntry(entry: FileEntry) {
   if (entry.is_dir) return 'bi-folder-fill'
   if (entry.is_symlink) return 'bi-signpost-split-fill'
@@ -410,29 +403,6 @@ function iconStyleForEntry(entry: FileEntry): { color: string; background: strin
   if (/\.(sh|bash|zsh|py|js|ts|jsx|tsx|go|rs|c|cpp|h|hpp|java|rb|php|vue|svelte|sql|css|html|htm)$/.test(lowered)) return { color: '#a855f7', background: '#f5f3ff' }
 
   return { color: '#94a3b8', background: '#f8fafc' }
-}
-
-function getFilePreviewType(name: string): FilePreviewType {
-  const ext = name.toLowerCase().split('.').pop() || ''
-  if (/^(png|jpg|jpeg|gif|webp|svg|bmp)$/.test(ext)) return 'image'
-  if (/^(mp3|ogg|wav|flac|aac|m4a|opus)$/.test(ext)) return 'audio'
-  if (/^(mp4|webm|mov|ogv)$/.test(ext)) return 'video'
-  if (ext === 'pdf') return 'pdf'
-  if (/^(txt|md|log|json|yaml|yml|toml|xml|ini|conf|env|sh|bash|zsh|py|js|ts|jsx|tsx|css|html|htm|go|rs|c|cpp|h|hpp|java|rb|php|csv|vue|svelte|sql)$/.test(ext)) return 'text'
-  return 'none'
-}
-
-function getMimeType(name: string): string {
-  const ext = name.toLowerCase().split('.').pop() || ''
-  const m: Record<string, string> = {
-    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-    gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp',
-    mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav',
-    flac: 'audio/flac', aac: 'audio/aac', m4a: 'audio/mp4', opus: 'audio/ogg',
-    mp4: 'video/mp4', webm: 'video/webm', mov: 'video/mp4', ogv: 'video/ogg',
-    pdf: 'application/pdf',
-  }
-  return m[ext] || 'application/octet-stream'
 }
 
 function normalizeComparablePath(path: string) {
@@ -643,7 +613,12 @@ async function initializeExplorer() {
 
   await detectFileOperationSupport()
 
-  await loadPath('')
+  await loadPath(props.initialPath ?? '')
+
+  if (props.initialOpenFile && currentBrowse.value) {
+    const target = currentBrowse.value.entries?.find(e => e.name === props.initialOpenFile)
+    if (target && !target.is_dir) await openFile(target)
+  }
 }
 
 async function goUp() {
@@ -784,41 +759,6 @@ function closePreview() {
 const MAX_SIZE_IMAGE_PDF = 100 * 1024 * 1024  // 100 MB
 const MAX_SIZE_AUDIO_FALLBACK = 50 * 1024 * 1024 // 50 MB (WAV/FLAC without MSE)
 const MAX_SIZE_VIDEO_FALLBACK = 200 * 1024 * 1024 // 200 MB (formats without MSE)
-
-// Returns the first supported MSE MIME+codec string for the file, used for both
-// MediaSource.isTypeSupported and addSourceBuffer. High-profile variants are tried
-// first so the declared codec matches what real-world videos actually contain —
-function getMSEMimeType(name: string): string | null {
-  if (!('MediaSource' in window)) return null
-  const ext = name.toLowerCase().split('.').pop() || ''
-
-  const candidates: Record<string, string[]> = {
-    // MP4/MOV are intentionally excluded from MSE: browsers vary in how strictly they
-    // validate the declared audio codec against the actual stream, and we can't know
-    // the audio codec before reading the file. All browsers play MP4/MOV reliably via
-    // the full-buffer blob URL path using their native decoder.
-    webm: [
-      'video/webm; codecs="vp9,opus"',
-      'video/webm; codecs="vp8,vorbis"',
-      'video/webm; codecs="vp9"',
-    ],
-    ogv: [
-      'video/ogg; codecs="theora,vorbis"',
-      'video/ogg; codecs="theora"',
-      'video/ogg',
-    ],
-    mp3:  ['audio/mpeg'],
-    ogg:  ['audio/ogg; codecs=vorbis', 'audio/ogg; codecs=opus', 'audio/ogg'],
-    opus: ['audio/ogg; codecs=opus'],
-    aac:  ['audio/mp4; codecs="mp4a.40.2"'],
-    m4a:  ['audio/mp4; codecs="mp4a.40.2"'],
-  }
-
-  for (const mime of candidates[ext] ?? []) {
-    if (MediaSource.isTypeSupported(mime)) return mime
-  }
-  return null
-}
 
 // Low-level stream: calls onChunk for each decrypted data chunk as it arrives.
 async function streamFileData(
@@ -1155,10 +1095,6 @@ async function downloadFileToClient(entry: FileEntry) {
     clearStall()
     onError(err)
   }
-}
-
-function isFirefoxBrowser() {
-  return /firefox/i.test(navigator.userAgent)
 }
 
 async function downloadFileWithSavePicker(
@@ -1689,16 +1625,13 @@ function handleEntryPrimaryAction(entry: FileEntry) {
   }
 }
 
-function gridColumnCount(): number {
-  if (!entryListRef.value) return 1
-  return window.getComputedStyle(entryListRef.value).gridTemplateColumns.split(' ').length
-}
-
-function scrollSelectedIntoView() {
-  nextTick(() => {
-    entryListRef.value?.querySelector<HTMLElement>('.entry-row.active')?.scrollIntoView({ block: 'nearest' })
-  })
-}
+const { handleNavKey } = useEntryNavigation({
+  entries: () => visibleEntries.value,
+  selected: selectedEntry,
+  listRef: entryListRef,
+  isGrid: () => isGridView.value,
+  onOpen: handleEntryPrimaryAction,
+})
 
 function handleGlobalKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement
@@ -1734,38 +1667,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
     return
   }
 
-  const entries = visibleEntries.value
-  if (!entries.length) return
-
-  const idx = selectedEntry.value ? entries.findIndex(e => e.path === selectedEntry.value!.path) : -1
-
-  const moveTo = (i: number) => {
-    selectedEntry.value = entries[Math.max(0, Math.min(i, entries.length - 1))] ?? null
-    scrollSelectedIntoView()
-  }
-
-  switch (e.key) {
-    case 'ArrowDown':
-      e.preventDefault()
-      moveTo(idx === -1 ? 0 : idx + (isGridView.value ? gridColumnCount() : 1))
-      break
-    case 'ArrowUp':
-      e.preventDefault()
-      moveTo(idx === -1 ? entries.length - 1 : idx - (isGridView.value ? gridColumnCount() : 1))
-      break
-    case 'ArrowRight':
-      e.preventDefault()
-      if (isGridView.value) moveTo(idx === -1 ? 0 : idx + 1)
-      else if (selectedEntry.value) handleEntryPrimaryAction(selectedEntry.value)
-      break
-    case 'ArrowLeft':
-      e.preventDefault()
-      if (isGridView.value) moveTo(idx <= 0 ? 0 : idx - 1)
-      break
-    case 'Enter':
-      if (selectedEntry.value) { e.preventDefault(); handleEntryPrimaryAction(selectedEntry.value) }
-      break
-  }
+  handleNavKey(e)
 }
 
 watch(showHiddenFiles, (enabled) => {

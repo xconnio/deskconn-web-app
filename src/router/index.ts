@@ -92,6 +92,12 @@ const router = createRouter({
       component: () => import('../views/DesktopFilesView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/desktops/:realm/index/:category',
+      name: 'desktop-index',
+      component: () => import('../views/IndexedFilesView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 
