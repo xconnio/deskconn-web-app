@@ -340,6 +340,11 @@ async function initTab(tab: TabState) {
 
   tab.channel = new ProgressChannel()
   tab.term.onData((data) => handleTerminalInput(tab, data))
+  tab.term.onTitleChange((title) => {
+    if (tab.closed || !title) return
+    tab.label = title
+    tabs.value = [...tabs.value]
+  })
   handleResizeTab(tab)
 
   await startShell(tab)
