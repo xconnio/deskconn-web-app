@@ -8,7 +8,7 @@ import { useMachinesStore } from '@/stores/machines'
 import { useSettingsStore } from '@/stores/settings'
 import WindowTitleBar from '@/components/WindowTitleBar.vue'
 import FilePreviewModal from '@/components/FilePreviewModal.vue'
-import { openLauncher } from '@/router/navigation'
+import { openLauncher, openFiles } from '@/router/navigation'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
 import {
   createX25519KeyPair,
@@ -62,6 +62,27 @@ const isGridView    = ref(window.innerWidth >= 768)
 
 const previewEntry = ref<IndexEntry | null>(null)
 const previewSession = shallowRef<Session | null>(null)
+
+const contextMenu = ref<{ x: number; y: number; entry: IndexEntry } | null>(null)
+
+function openContextMenu(e: MouseEvent, entry: IndexEntry) {
+  e.preventDefault()
+  contextMenu.value = { x: e.clientX, y: e.clientY, entry }
+}
+
+function closeContextMenu() {
+  contextMenu.value = null
+}
+
+function viewInFiles(entry: IndexEntry) {
+  const slash = entry.path.lastIndexOf('/')
+  const dir = slash > 0 ? entry.path.substring(0, slash) : '/'
+  openFiles(realm.value, desktopName.value, dir)
+}
+
+function handleContextMenuKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') closeContextMenu()
+}
 
 const previewModalProps = computed(() =>
   previewEntry.value && previewSession.value
@@ -265,7 +286,20 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="indexed-view fade-in-up">
+  <div class="indexed-view fade-in-up" @click="closeContextMenu" @keydown="handleContextMenuKeydown">
+    <Teleport to="body">
+      <div
+        v-if="contextMenu"
+        class="ctx-menu"
+        :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+        @click.stop
+      >
+        <button class="ctx-item" @click="viewInFiles(contextMenu.entry); closeContextMenu()">
+          <i class="bi bi-folder2-open"></i>
+          View in Files
+        </button>
+      </div>
+    </Teleport>
 
     <FilePreviewModal
       v-if="previewModalProps"
@@ -342,6 +376,8 @@ onUnmounted(() => {
             @dblclick="openEntry(entry)"
             @mouseenter="selectedEntry = entry"
             @mouseleave="selectedEntry = null"
+            @contextmenu.prevent.stop="openContextMenu($event, entry)"
+            :title="entry.path"
           >
             <div class="entry-main">
               <span
@@ -457,4 +493,35 @@ onUnmounted(() => {
   .entry-list.grid-view .entry-name { font-size: 0.69rem; font-weight: 600; text-align: center; white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; max-width: 100%; word-break: break-word; }
   .entry-list.grid-view .entry-meta, .entry-list.grid-view .entry-side { display: none; }
 }
+
+/* ── Context menu ── */
+:global(.ctx-menu) {
+  position: fixed;
+  z-index: 9999;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(71, 85, 105, 0.14);
+  padding: 0.3rem;
+  min-width: 160px;
+}
+:global(.ctx-item) {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: #1e293b;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+:global(.ctx-item:hover) { background: #f1f5f9; }
+:global(.ctx-item .bi) { font-size: 0.95rem; color: #2563eb; }
 </style>
