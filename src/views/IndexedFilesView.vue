@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, shallowRef, computed, onMounted, onUnmounted } from 'vue'
+import { ref, shallowRef, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { type Session } from 'xconn'
 
@@ -31,9 +31,13 @@ interface IndexEntry {
 }
 
 interface IndexQueryResult {
-  status:   'indexing' | 'ready'
-  entries?: IndexEntry[]
+  status:       'indexing' | 'ready'
+  entries?:     IndexEntry[]
+  next_cursor?: Record<string, string>
+  has_more?:    boolean
 }
+
+const PAGE_SIZE = 100
 
 type DocFilter = 'all' | 'pdf' | 'text' | 'json' | 'office'
 
@@ -52,6 +56,7 @@ const desktopName = computed(() => {
 
 const isConnecting  = ref(true)
 const isLoading     = ref(false)
+const isLoadingMore = ref(false)
 const error         = ref('')
 const indexStatus   = ref<'indexing' | 'ready' | null>(null)
 const entries       = ref<IndexEntry[]>([])
@@ -59,6 +64,12 @@ const docFilter     = ref<DocFilter>('all')
 const selectedEntry = ref<IndexEntry | null>(null)
 const entryListRef  = ref<HTMLElement | null>(null)
 const isGridView    = ref(window.innerWidth >= 768)
+
+const nextCursor = ref<Record<string, string> | undefined>(undefined)
+const hasMore    = ref(false)
+const activeSession = shallowRef<Session | null>(null)
+let activeKeys: EncryptionKeys | null = null
+let activeCategories: string[] = []
 
 const previewEntry = ref<IndexEntry | null>(null)
 const previewSession = shallowRef<Session | null>(null)
@@ -103,12 +114,10 @@ const viewConfig = computed(() => {
   }
 })
 
-const sortedEntries = computed(() =>
-  [...entries.value].sort((a, b) => new Date(b.mod_time).getTime() - new Date(a.mod_time).getTime())
-)
-
+// Entries arrive pre-sorted (newest first) from the backend, including
+// across pages, so no client-side sort is needed.
 const docFilterCounts = computed(() => {
-  const all = sortedEntries.value
+  const all = entries.value
   return {
     all:    all.length,
     pdf:    all.filter(e => e.category === 'pdfs').length,
@@ -119,7 +128,7 @@ const docFilterCounts = computed(() => {
 })
 
 const filteredDocEntries = computed(() => {
-  const all = sortedEntries.value
+  const all = entries.value
   switch (docFilter.value) {
     case 'pdf':    return all.filter(e => e.category === 'pdfs')
     case 'json':   return all.filter(e => e.name.toLowerCase().endsWith('.json'))
@@ -130,7 +139,7 @@ const filteredDocEntries = computed(() => {
 })
 
 const displayEntries = computed(() =>
-  category.value === 'documents' ? filteredDocEntries.value : sortedEntries.value
+  category.value === 'documents' ? filteredDocEntries.value : entries.value
 )
 
 function openEntry(entry: IndexEntry) {
@@ -199,14 +208,66 @@ function formatDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(d)
 }
 
-async function queryIndex(sess: Session, keys: EncryptionKeys, cat: string): Promise<IndexQueryResult> {
-  const payloadBytes = new TextEncoder().encode(JSON.stringify({ category: cat }))
+async function queryIndex(
+  sess: Session,
+  keys: EncryptionKeys,
+  categories: string[],
+  cursor?: Record<string, string>,
+): Promise<IndexQueryResult> {
+  const payload      = { categories, cursor, limit: PAGE_SIZE }
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(payload))
   const encrypted    = encryptPayload(payloadBytes, keys.encryptKey)
   const result       = await sess.call(procedureIndexQuery, [encrypted])
   const enc          = result.args?.[0] as Uint8Array
   if (!enc?.length) throw new Error('Empty response from index service')
   const decrypted    = decryptPayload(enc, keys.decryptKey)
   return JSON.parse(new TextDecoder().decode(decrypted)) as IndexQueryResult
+}
+
+// Older backends ignore `categories`/`cursor`/`limit` and return every
+// indexed entry across all categories in one shot. Filter client-side so
+// such responses still only show what this view asked for, and treat the
+// absence of has_more (older backends omit it) as "everything is here".
+function filterToCategories(list: IndexEntry[], categories: string[]): IndexEntry[] {
+  return list.filter((e) => categories.includes(e.category))
+}
+
+async function loadMore() {
+  if (!hasMore.value || isLoadingMore.value) return
+  if (!activeSession.value || !activeKeys) return
+
+  isLoadingMore.value = true
+  try {
+    const result = await queryIndex(activeSession.value, activeKeys, activeCategories, nextCursor.value)
+    const page = filterToCategories(result.entries ?? [], activeCategories)
+    entries.value = [...entries.value, ...page]
+    nextCursor.value = result.next_cursor
+    hasMore.value = result.has_more ?? false
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to load more files'
+  } finally {
+    isLoadingMore.value = false
+  }
+
+  // Keep filling the viewport if the loaded page didn't produce a scrollbar.
+  await nextTick()
+  maybeLoadMore()
+}
+
+function maybeLoadMore() {
+  const el = entryListRef.value
+  if (!el || !hasMore.value || isLoadingMore.value) return
+  if (el.scrollHeight <= el.clientHeight + 200) {
+    void loadMore()
+  }
+}
+
+function handleScroll() {
+  const el = entryListRef.value
+  if (!el) return
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+    void loadMore()
+  }
 }
 
 async function load() {
@@ -216,6 +277,10 @@ async function load() {
   indexStatus.value   = null
   entries.value       = []
   selectedEntry.value = null
+  nextCursor.value    = undefined
+  hasMore.value       = false
+  activeSession.value = null
+  activeKeys          = null
 
   let sess: Session | null = null
   try {
@@ -245,22 +310,17 @@ async function load() {
     const keys = await deriveSessionKeys(privateKey, serverPublicKey)
 
     const backendCat = viewConfig.value.backendCategory
-    if (backendCat !== null) {
-      const result  = await queryIndex(sess, keys, backendCat)
-      indexStatus.value = result.status
-      entries.value     = result.entries ?? []
-    } else {
-      const [pdfs, texts, docs] = await Promise.all([
-        queryIndex(sess, keys, 'pdfs'),
-        queryIndex(sess, keys, 'texts'),
-        queryIndex(sess, keys, 'documents'),
-      ])
-      if (pdfs.status === 'indexing' || texts.status === 'indexing' || docs.status === 'indexing') {
-        indexStatus.value = 'indexing'
-      } else {
-        indexStatus.value = 'ready'
-        entries.value = [...(pdfs.entries ?? []), ...(texts.entries ?? []), ...(docs.entries ?? [])]
-      }
+    const categories = backendCat !== null ? [backendCat] : ['pdfs', 'texts', 'documents']
+
+    const result = await queryIndex(sess, keys, categories)
+    indexStatus.value = result.status
+    if (result.status === 'ready') {
+      entries.value     = filterToCategories(result.entries ?? [], categories)
+      nextCursor.value  = result.next_cursor
+      hasMore.value     = result.has_more ?? false
+      activeSession.value = sess
+      activeKeys          = keys
+      activeCategories    = categories
     }
   } catch (err) {
     if (err instanceof Error && err.message.includes('no_such_procedure')) {
@@ -271,6 +331,9 @@ async function load() {
   } finally {
     isLoading.value = false
   }
+
+  await nextTick()
+  maybeLoadMore()
 }
 
 onMounted(() => {
@@ -366,6 +429,7 @@ onUnmounted(() => {
           ref="entryListRef"
           class="entry-list"
           :class="{ 'grid-view': isGridView }"
+          @scroll="handleScroll"
         >
           <button
             v-for="entry in displayEntries"
@@ -406,6 +470,10 @@ onUnmounted(() => {
               <i class="bi bi-chevron-right entry-chevron"></i>
             </div>
           </button>
+
+          <div v-if="isLoadingMore" class="load-more-indicator">
+            <i class="bi bi-arrow-repeat spin"></i> Loading more…
+          </div>
         </div>
       </div>
   </div>
@@ -481,6 +549,15 @@ onUnmounted(() => {
 .entry-name { color: #21313f; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
 .entry-meta { color: #778697; font-size: 0.8rem; white-space: nowrap; }
 .entry-chevron { color: #cbd5e1; font-size: 0.75rem; }
+
+/* ── Infinite scroll ── */
+.load-more-indicator {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+  padding: 0.85rem; font-size: 0.8rem; font-weight: 600; color: #94a3b8;
+}
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── Grid view (≥ 768 px) — identical to EmbeddedDesktopFiles ── */
 @media (min-width: 768px) {
