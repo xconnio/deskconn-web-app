@@ -71,7 +71,9 @@ const supportedFileProcedures = ref({
 })
 
 const previewVisible = ref(false)
+const previewTheater = ref(false)
 const previewFullscreen = ref(false)
+const previewDialogEl = ref<HTMLElement | null>(null)
 const previewFileEntry = ref<FileEntry | null>(null)
 const previewType = ref<FilePreviewType>('none')
 const previewBlobUrl = ref('')
@@ -759,12 +761,31 @@ function closePreview() {
     URL.revokeObjectURL(previewBlobUrl.value)
     previewBlobUrl.value = ''
   }
+  if (document.fullscreenElement === previewDialogEl.value) void document.exitFullscreen().catch(() => {})
   previewVisible.value = false
-  previewFullscreen.value = false
+  previewTheater.value = false
   previewTextContent.value = ''
   previewError.value = ''
   previewLoading.value = false
   previewFileEntry.value = null
+}
+
+function togglePreviewTheater() {
+  previewTheater.value = !previewTheater.value
+}
+
+async function togglePreviewFullscreen() {
+  const el = previewDialogEl.value
+  if (!el) return
+  if (document.fullscreenElement) {
+    await document.exitFullscreen().catch(() => {})
+  } else {
+    await el.requestFullscreen().catch(() => {})
+  }
+}
+
+function handlePreviewFullscreenChange() {
+  previewFullscreen.value = document.fullscreenElement === previewDialogEl.value
 }
 
 // Size limits for formats that must be fully buffered before display
@@ -1757,6 +1778,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement
 
   if (e.key === 'Escape') {
+    if (document.fullscreenElement === previewDialogEl.value) return
     if (fileSearchActive.value) { exitFileSearch(); return }
     if (searchMode.value) { exitSearchMode(); return }
     if (propertiesModalVisible.value) { closePropertiesModal(); return }
@@ -1821,6 +1843,7 @@ onMounted(async () => {
   updateViewMode()
   window.addEventListener('resize', updateViewMode)
   document.addEventListener('keydown', handleGlobalKeydown)
+  document.addEventListener('fullscreenchange', handlePreviewFullscreenChange)
   if (isFirefoxBrowser()) {
     void ensureDownloadServiceWorker().catch(() => {})
   }
@@ -1836,6 +1859,7 @@ watch(currentBrowse, (browse) => {
 onUnmounted(() => {
   window.removeEventListener('resize', updateViewMode)
   document.removeEventListener('keydown', handleGlobalKeydown)
+  document.removeEventListener('fullscreenchange', handlePreviewFullscreenChange)
   disconnectDesktopSession()
   closePreview()
   for (const url of Object.values(thumbnailUrls)) URL.revokeObjectURL(url)
@@ -2297,14 +2321,23 @@ onUnmounted(() => {
 
   <!-- File Preview Modal -->
   <div v-if="previewVisible" class="fs-overlay preview-overlay" @click.self="closePreview" @wheel.self.prevent="scrollPreviewBody">
-    <div class="preview-dialog" :class="{ 'preview-dialog--fullscreen': previewFullscreen }">
+    <div ref="previewDialogEl" class="preview-dialog" :class="{ 'preview-dialog--theater': previewTheater }">
       <div class="preview-header">
         <span class="preview-title">{{ previewFileEntry?.name }}</span>
         <div class="preview-header-actions">
           <button class="preview-close-btn" @click="downloadFromPreview" :disabled="previewLoading" title="Download">
             <i class="bi bi-download"></i>
           </button>
-          <button class="preview-close-btn" @click="previewFullscreen = !previewFullscreen" :title="previewFullscreen ? 'Restore' : 'Maximize'">
+          <button
+            v-if="!previewFullscreen"
+            class="preview-close-btn"
+            :class="{ 'preview-action-active': previewTheater }"
+            @click="togglePreviewTheater"
+            :title="previewTheater ? 'Exit theater mode' : 'Theater mode'"
+          >
+            <i class="bi bi-aspect-ratio"></i>
+          </button>
+          <button class="preview-close-btn" @click="togglePreviewFullscreen" :title="previewFullscreen ? 'Exit full screen' : 'Full screen'">
             <i class="bi" :class="previewFullscreen ? 'bi-arrows-angle-contract' : 'bi-arrows-angle-expand'"></i>
           </button>
           <button class="preview-close-btn" @click="closePreview" title="Close">
@@ -3045,7 +3078,7 @@ onUnmounted(() => {
   transition: padding 0.2s ease;
 }
 
-.preview-overlay:has(.preview-dialog--fullscreen) {
+.preview-overlay:has(.preview-dialog--theater) {
   padding: 0;
 }
 
@@ -3063,11 +3096,21 @@ onUnmounted(() => {
   transition: height 0.2s ease, max-height 0.2s ease, border-radius 0.2s ease;
 }
 
-.preview-dialog--fullscreen {
+.preview-dialog--theater {
   height: 100vh;
   max-height: 100vh;
   max-width: 100vw;
   border-radius: 0;
+}
+
+/* Native browser fullscreen (Fullscreen API) */
+.preview-dialog:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+  border-radius: 0;
+  background: #0d0d0d;
 }
 
 .preview-header {
@@ -3078,6 +3121,7 @@ onUnmounted(() => {
   border-bottom: 1px solid #e2e8f0;
   gap: 1rem;
   flex-shrink: 0;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 
 .preview-title {
@@ -3088,6 +3132,23 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  transition: color 0.2s ease;
+}
+
+/* In native fullscreen, overlay the header on top of the content instead of
+   pushing it down. */
+.preview-dialog:fullscreen .preview-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  border-bottom: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.6), transparent);
+}
+
+.preview-dialog:fullscreen .preview-title {
+  color: #fff;
 }
 
 .preview-header-actions {
@@ -3139,6 +3200,36 @@ onUnmounted(() => {
 .preview-close-btn:hover {
   background: #e2e8f0;
   color: #0f172a;
+}
+
+.preview-action-active {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.preview-action-active:hover {
+  background: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.preview-dialog:fullscreen .preview-close-btn {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.preview-dialog:fullscreen .preview-close-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.preview-dialog:fullscreen .preview-action-active {
+  background: rgba(96, 165, 250, 0.35);
+  color: #fff;
+}
+
+.preview-dialog:fullscreen .preview-action-active:hover {
+  background: rgba(96, 165, 250, 0.5);
+  color: #fff;
 }
 
 .preview-body {
@@ -3228,11 +3319,13 @@ onUnmounted(() => {
   max-height: 72vh;
 }
 
-.preview-dialog--fullscreen .preview-video-wrap {
+.preview-dialog--theater .preview-video-wrap,
+.preview-dialog:fullscreen .preview-video-wrap {
   overflow: hidden;
 }
 
-.preview-dialog--fullscreen .preview-video {
+.preview-dialog--theater .preview-video,
+.preview-dialog:fullscreen .preview-video {
   max-height: 100%;
   height: 100%;
   width: 100%;
