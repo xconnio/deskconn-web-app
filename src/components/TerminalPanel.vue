@@ -4,7 +4,7 @@ import WindowTitleBar from '@/components/WindowTitleBar.vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { ApplicationError, Progress, Result, Session } from 'xconn'
+import { Progress, Result, Session } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import {
   createX25519KeyPair,
@@ -12,6 +12,7 @@ import {
   encryptPayload,
   decryptPayload,
 } from '@/utils/encryption'
+import { DESKTOP_OFFLINE_MESSAGE, isDataChannelClosedError, isNoSuchProcedureException } from '@/utils/desktopError'
 
 const props = defineProps<{ realm: string; desktopName: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -294,8 +295,8 @@ async function startShell(tab: TabState) {
     )
   } catch (err) {
     if (tab.closed) return
-    if (err instanceof ApplicationError) {
-      tab.term?.write(`Desktop is offline.`)
+    if (isNoSuchProcedureException(err) || isDataChannelClosedError(err)) {
+      tab.term?.write(DESKTOP_OFFLINE_MESSAGE)
     } else {
       tab.term?.write(`Shell error: ${err}`)
     }

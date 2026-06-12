@@ -21,6 +21,7 @@ import {
   getMSEMimeType,
   isFirefoxBrowser,
 } from '@/utils/fileTypes'
+import { formatDesktopError, isNoSuchProcedureException } from '@/utils/desktopError'
 
 const procedureKeyExchange = 'io.xconn.deskconn.deskconnd.key.exchange'
 const procedureFileBrowse = 'io.xconn.deskconn.deskconnd.file.browse'
@@ -293,12 +294,14 @@ function parseBrowseResult(raw: unknown): FileBrowseResult {
 }
 
 function formatError(error: unknown) {
-  const fallback = 'Desktop is offline.'
   const invalidPathMessage = 'Invalid path.'
 
-  if (error instanceof ApplicationError) {
+  if (error instanceof ApplicationError || error instanceof Error) {
     const message = (error.message || '').toLowerCase()
-    if (message.includes('relative path escapes home')) {
+    if (
+      message.includes('relative path escapes home') ||
+      message.includes('outside the home directory')
+    ) {
       return outsideHomeMessage
     }
     if (
@@ -309,60 +312,9 @@ function formatError(error: unknown) {
     ) {
       return invalidPathMessage
     }
-    if (
-      message.includes('procedure') ||
-      message.includes('offline') ||
-      message.includes('not registered') ||
-      message.includes('network') ||
-      message.includes('transport')
-    ) {
-      return fallback
-    }
-
-    return error.message || fallback
-  }
-  if (error instanceof Error) {
-    const message = error.message || ''
-    const lowered = message.toLowerCase()
-    if (
-      lowered.includes('relative path escapes home') ||
-      lowered.includes('outside the home directory')
-    ) {
-      return outsideHomeMessage
-    }
-    if (
-      lowered.includes('no such file') ||
-      lowered.includes('not exist') ||
-      lowered.includes('invalid path') ||
-      lowered.includes('invalid argument')
-    ) {
-      return invalidPathMessage
-    }
-    if (
-      lowered.includes('procedure') ||
-      lowered.includes('offline') ||
-      lowered.includes('not registered') ||
-      lowered.includes('network') ||
-      lowered.includes('transport')
-    ) {
-      return fallback
-    }
-
-    return message
-  }
-  return fallback
-}
-
-function isNoSuchProcedureException(error: unknown) {
-  if (error instanceof ApplicationError) {
-    return (error.message || '').toLowerCase() === 'wamp.error.no_such_procedure'
   }
 
-  if (error instanceof Error) {
-    return (error.message || '').toLowerCase().includes('wamp.error.no_such_procedure')
-  }
-
-  return false
+  return formatDesktopError(error)
 }
 
 function formatDate(value?: string) {
