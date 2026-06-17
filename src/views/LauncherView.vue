@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, type Component } from 'vue'
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 
-import { openFiles, openIndexedFiles } from '../router/navigation'
 import { useMachinesStore } from '../stores/machines'
 import { useSettingsStore } from '../stores/settings'
+import { useWindowManager } from '../composables/useWindowManager'
+import EmbeddedDesktopFiles from '../components/EmbeddedDesktopFiles.vue'
+import EmbeddedIndexedFiles from '../components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '../components/TerminalPanel.vue'
+import FloatingWindow from '../components/FloatingWindow.vue'
+import WindowTaskbar from '../components/WindowTaskbar.vue'
 import WindowTitleBar from '../components/WindowTitleBar.vue'
 
 const route = useRoute()
@@ -22,50 +26,26 @@ const desktopName = computed(() => {
   return machinesStore.desktops.find((d) => d.realm === realm.value)?.name ?? realm.value
 })
 
-const activeTerminal = ref(false)
-let hasTerminalHistoryEntry = false
+const {
+  windows,
+  focusedId,
+  openWindow,
+  closeWindow,
+  focusWindow,
+  minimizeWindow,
+  restoreWindow,
+  toggleMaximize,
+  updateBounds,
+} = useWindowManager()
 
-const openTerminal = () => {
-  activeTerminal.value = true
-}
-
-const closeTerminal = () => {
-  if (!activeTerminal.value) return
-  if (hasTerminalHistoryEntry) {
-    window.history.back()
-    return
-  }
-  activeTerminal.value = false
-}
-
-const handlePopState = () => {
-  if (!activeTerminal.value) return
-  hasTerminalHistoryEntry = false
-  activeTerminal.value = false
-}
-
-watch(activeTerminal, (next, previous) => {
-  if (!next || previous) return
-  window.history.pushState({ ...window.history.state, deskconnTerminal: true }, '')
-  hasTerminalHistoryEntry = true
-})
-
-onMounted(() => {
-  window.addEventListener('popstate', handlePopState)
-  document.addEventListener('keydown', handleKeydown)
-})
-onUnmounted(() => {
-  window.removeEventListener('popstate', handlePopState)
-  document.removeEventListener('keydown', handleKeydown)
-})
-
-onBeforeRouteUpdate(() => {
-  activeTerminal.value = false
-  hasTerminalHistoryEntry = false
-})
-
+const launcherBodyRef = ref<HTMLElement | null>(null)
 const launcherGridRef = ref<HTMLElement | null>(null)
 const selectedAppId = ref<string | null>(null)
+
+const isMobile = ref(window.innerWidth < 768)
+function updateIsMobile() {
+  isMobile.value = window.innerWidth < 768
+}
 
 const notSupported = computed(() => !!route.query.notSupported)
 function dismissNotSupported() {
@@ -73,14 +53,23 @@ function dismissNotSupported() {
   router.replace({ params: route.params, query: rest })
 }
 
-const apps = [
+interface AppDef {
+  id: string
+  label: string
+  icon: string
+  iconColor: string
+  iconBg: string
+  width?: number
+  height?: number
+}
+
+const apps: AppDef[] = [
   {
     id: 'files',
     label: 'Files',
     icon: 'bi-folder2-open',
     iconColor: '#2563eb',
     iconBg: '#dbeafe',
-    action: () => openFiles(realm.value, desktopName.value),
   },
   {
     id: 'terminal',
@@ -88,7 +77,8 @@ const apps = [
     icon: 'bi-terminal',
     iconColor: '#334155',
     iconBg: '#e2e8f0',
-    action: () => openTerminal(),
+    width: 640,
+    height: 420,
   },
   {
     id: 'pictures',
@@ -96,7 +86,6 @@ const apps = [
     icon: 'bi-images',
     iconColor: '#ec4899',
     iconBg: '#fce7f3',
-    action: () => openIndexedFiles(realm.value, 'pictures', desktopName.value),
   },
   {
     id: 'videos',
@@ -104,7 +93,6 @@ const apps = [
     icon: 'bi-collection-play-fill',
     iconColor: '#7c3aed',
     iconBg: '#ede9fe',
-    action: () => openIndexedFiles(realm.value, 'videos', desktopName.value),
   },
   {
     id: 'documents',
@@ -112,9 +100,81 @@ const apps = [
     icon: 'bi-file-earmark-richtext-fill',
     iconColor: '#d97706',
     iconBg: '#fef3c7',
-    action: () => openIndexedFiles(realm.value, 'documents', desktopName.value),
   },
 ]
+
+function launchApp(app: AppDef, initialPath?: string) {
+  openWindow({
+    appId: app.id,
+    title: app.label,
+    icon: app.icon,
+    iconColor: app.iconColor,
+    iconBg: app.iconBg,
+    width: app.width,
+    height: app.height,
+    props: initialPath ? { initialPath } : {},
+  })
+}
+
+const appComponents: Record<string, Component> = {
+  files: EmbeddedDesktopFiles,
+  terminal: TerminalPanel,
+  pictures: EmbeddedIndexedFiles,
+  videos: EmbeddedIndexedFiles,
+  documents: EmbeddedIndexedFiles,
+}
+
+function windowProps(win: { id: string; appId: string; props: Record<string, unknown> }) {
+  const focused = focusedId.value === win.id
+  switch (win.appId) {
+    case 'files':
+      return {
+        realm: realm.value,
+        desktopName: desktopName.value,
+        initialPath: win.props.initialPath as string | undefined,
+        focused,
+      }
+    case 'terminal':
+      return {
+        realm: realm.value,
+        desktopName: desktopName.value,
+        embedded: true,
+      }
+    default:
+      return {
+        realm: realm.value,
+        category: win.appId,
+        desktopName: desktopName.value,
+        focused,
+      }
+  }
+}
+
+function onOpenFiles(path: string) {
+  const filesApp = apps.find((a) => a.id === 'files')!
+  launchApp(filesApp, path)
+}
+
+function onToggleMaximize(id: string) {
+  const el = launcherBodyRef.value
+  toggleMaximize(id, { width: el?.clientWidth ?? 0, height: el?.clientHeight ?? 0 })
+}
+
+function onTaskbarActivate(id: string) {
+  const win = windows.value.find((w) => w.id === id)
+  if (!win) return
+  if (win.minimized) {
+    restoreWindow(id)
+  } else if (focusedId.value === id) {
+    minimizeWindow(id)
+  } else {
+    focusWindow(id)
+  }
+}
+
+onBeforeRouteUpdate(() => {
+  for (const win of [...windows.value]) closeWindow(win.id)
+})
 
 function columnCount(): number {
   if (!launcherGridRef.value) return 1
@@ -122,11 +182,20 @@ function columnCount(): number {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (activeTerminal.value) return
+  if (e.key === 'Escape') {
+    if (focusedId.value) {
+      closeWindow(focusedId.value)
+    } else {
+      close()
+    }
+    return
+  }
+
+  // A focused window owns the keyboard while it's open.
+  if (focusedId.value) return
+
   const target = e.target as HTMLElement
   if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
-
-  if (e.key === 'Escape') { close(); return }
 
   const idx = apps.findIndex(a => a.id === selectedAppId.value)
   const cols = columnCount()
@@ -148,25 +217,26 @@ function handleKeydown(e: KeyboardEvent) {
       e.preventDefault()
       selectedAppId.value = apps[Math.max(0, idx < 0 ? 0 : idx - 1)]!.id
       break
-    case 'Enter':
-      if (selectedAppId.value) apps.find(a => a.id === selectedAppId.value)?.action()
+    case 'Enter': {
+      const app = apps.find(a => a.id === selectedAppId.value)
+      if (app) launchApp(app)
       break
+    }
   }
 }
+
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+  window.addEventListener('resize', updateIsMobile)
+})
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('resize', updateIsMobile)
+})
 </script>
 
 <template>
-  <!-- Terminal overlay -->
-  <div v-if="activeTerminal" class="terminal-view fade-in-up">
-    <TerminalPanel
-      :realm="realm"
-      :desktop-name="desktopName"
-      @close="closeTerminal"
-    />
-  </div>
-
-  <!-- Launcher -->
-  <div v-else class="launcher-wrapper fade-in-up">
+  <div class="launcher-wrapper fade-in-up">
     <WindowTitleBar @close="close">
       <span class="launcher-machine-icon">{{ machinesStore.desktops.find((d) => d.realm === realm)?.icon ?? '🖥️' }}</span>
       <span class="launcher-machine-name">{{ desktopName }}</span>
@@ -178,42 +248,74 @@ function handleKeydown(e: KeyboardEvent) {
       <button class="not-supported-dismiss" @click="dismissNotSupported">×</button>
     </div>
 
-    <div class="launcher-body">
-    <div ref="launcherGridRef" class="launcher-grid">
-      <button
-        v-for="app in apps"
-        :key="app.id"
-        class="app-tile"
-        :class="{ 'app-tile-selected': selectedAppId === app.id }"
-        @click="settingsStore.singleClickOpen ? app.action() : (selectedAppId = app.id)"
-        @dblclick="app.action()"
-      >
-        <div
-          class="app-tile-card"
-          :style="{ color: app.iconColor, background: app.iconBg }"
+    <div ref="launcherBodyRef" class="launcher-body">
+      <div ref="launcherGridRef" class="launcher-grid">
+        <button
+          v-for="app in apps"
+          :key="app.id"
+          class="app-tile"
+          :class="{ 'app-tile-selected': selectedAppId === app.id }"
+          @click="settingsStore.singleClickOpen ? launchApp(app) : (selectedAppId = app.id)"
+          @dblclick="launchApp(app)"
         >
-          <i class="bi" :class="app.icon"></i>
-        </div>
-        <span class="app-tile-label">{{ app.label }}</span>
-      </button>
+          <div
+            class="app-tile-card"
+            :style="{ color: app.iconColor, background: app.iconBg }"
+          >
+            <i class="bi" :class="app.icon"></i>
+          </div>
+          <span class="app-tile-label">{{ app.label }}</span>
+        </button>
+      </div>
+
+      <div class="windows-layer">
+        <FloatingWindow
+          v-for="win in windows"
+          :key="win.id"
+          :title="win.title"
+          :icon="win.icon"
+          :icon-color="win.iconColor"
+          :icon-bg="win.iconBg"
+          :x="win.x"
+          :y="win.y"
+          :width="win.width"
+          :height="win.height"
+          :z-index="win.zIndex"
+          :minimized="win.minimized"
+          :maximized="win.maximized"
+          :focused="focusedId === win.id"
+          :mobile="isMobile"
+          @close="closeWindow(win.id)"
+          @focus="focusWindow(win.id)"
+          @minimize="minimizeWindow(win.id)"
+          @toggle-maximize="onToggleMaximize(win.id)"
+          @update:bounds="updateBounds(win.id, $event)"
+        >
+          <component
+            :is="appComponents[win.appId]"
+            v-bind="windowProps(win)"
+            @close="closeWindow(win.id)"
+            @open-files="onOpenFiles"
+          />
+        </FloatingWindow>
+      </div>
     </div>
-    </div>
+
+    <WindowTaskbar
+      :windows="windows"
+      :focused-id="focusedId"
+      @activate="onTaskbarActivate"
+      @close="closeWindow"
+    />
   </div>
 </template>
 
 <style scoped>
-.terminal-view {
-  display: flex;
-  flex: 1;
-}
-
 .launcher-wrapper {
   display: flex;
   flex-direction: column;
   flex: 1;
 }
-
-
 
 .not-supported-banner {
   display: flex;
@@ -239,11 +341,25 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 .launcher-body {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   padding: 1rem;
   flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.windows-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.windows-layer :deep(.floating-window) {
+  pointer-events: auto;
 }
 
 .launcher-grid {
