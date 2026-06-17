@@ -39,6 +39,7 @@ const props = defineProps<{
   desktopName?: string
   initialPath?: string
   initialOpenFile?: string
+  focused?: boolean
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
@@ -1727,6 +1728,8 @@ const { handleNavKey } = useEntryNavigation({
 })
 
 function handleGlobalKeydown(e: KeyboardEvent) {
+  if (!props.focused) return
+
   const target = e.target as HTMLElement
 
   if (e.key === 'Escape') {
@@ -2035,6 +2038,7 @@ onUnmounted(() => {
             ref="entryListRef"
             class="entry-list"
             :class="{ 'entry-list-loading': isLoading, 'grid-view': isGridView }"
+            @click.self="selectedEntry = null"
             @contextmenu.self.prevent.stop="openBackgroundMenu($event)"
           >
             <button
@@ -2095,12 +2099,13 @@ onUnmounted(() => {
 
           </template>
 
-          <div v-if="selectionStatus" class="selection-status">
-            {{ selectionStatus }}
-          </div>
         </section>
 
       </div>
+    </div>
+
+    <div class="selection-status">
+      {{ selectionStatus }}
     </div>
   </div>
 
@@ -2406,10 +2411,18 @@ onUnmounted(() => {
 .embedded-explorer {
   background: transparent;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
 }
 
 .explorer-shell {
   max-width: none;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .toolbar-card,
@@ -2644,22 +2657,35 @@ onUnmounted(() => {
 }
 
 .selection-status {
-  margin-top: 0.6rem;
-  text-align: right;
-  font-size: 0.78rem;
-  color: #7a8fa3;
-  padding: 0 0.25rem;
+  position: absolute;
+  bottom: 0.75rem;
+  right: 0.85rem;
+  pointer-events: none;
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: #475569;
+  background: rgba(241, 245, 249, 0.92);
+  border: 1px solid #e2e8f0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
   white-space: nowrap;
+  max-width: calc(100% - 1.5rem);
   overflow: hidden;
   text-overflow: ellipsis;
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.selection-status:not(:empty) {
+  opacity: 1;
 }
 
 .entry-list {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  max-height: 65vh;
-  overflow: auto;
+  overflow: visible;
   padding-right: 0.25rem;
   transition: opacity 0.15s ease;
 }
@@ -2681,14 +2707,12 @@ onUnmounted(() => {
   background: #fff;
   padding: 0.95rem 1rem;
   transition:
-    transform 0.18s ease,
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .entry-row:hover,
 .entry-row.active {
-  transform: translateY(-1px);
   border-color: rgba(0, 0, 0, 0.2);
   box-shadow: 0 10px 24px rgba(71, 85, 105, 0.08);
 }

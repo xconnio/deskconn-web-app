@@ -14,12 +14,32 @@ import {
 } from '@/utils/encryption'
 import { DESKTOP_OFFLINE_MESSAGE, isDataChannelClosedError, isNoSuchProcedureException } from '@/utils/desktopError'
 
-const props = defineProps<{ realm: string; desktopName: string }>()
+const props = defineProps<{ realm: string; desktopName: string; embedded?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const sessionCacheStore = useSessionCacheStore()
 const panelRef = ref<HTMLDivElement | null>(null)
 const keybarRef = ref<HTMLDivElement | null>(null)
+const tabsListRef = ref<HTMLDivElement | null>(null)
+const tabsScrollLeft = ref(0)
+const tabsScrollMax = ref(0)
+
+function updateTabsScroll() {
+  const el = tabsListRef.value
+  if (!el) return
+  tabsScrollLeft.value = el.scrollLeft
+  tabsScrollMax.value = Math.max(0, el.scrollWidth - el.clientWidth)
+}
+
+function scrollTabsBy(delta: number) {
+  tabsListRef.value?.scrollBy({ left: delta, behavior: 'smooth' })
+}
+
+async function scrollActiveTabIntoView() {
+  await nextTick()
+  const el = tabsListRef.value?.querySelector<HTMLElement>('.tab-active')
+  el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+}
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -69,6 +89,7 @@ const termElMap = new Map<number, HTMLDivElement>()
 const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value) ?? null)
 
 let keybarResizeObserver: ResizeObserver | null = null
+let panelResizeObserver: ResizeObserver | null = null
 let previousBodyOverflow = ''
 let previousHtmlOverflow = ''
 let previousBodyOverscrollBehavior = ''
@@ -357,6 +378,7 @@ async function addTab() {
   activeTabId.value = tab.id
   await nextTick()
   await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+  void scrollActiveTabIntoView()
   await initTab(tab)
 }
 
@@ -369,6 +391,7 @@ async function switchTab(id: number) {
     tab.fitAddon?.fit()
     tab.term?.focus()
   }
+  void scrollActiveTabIntoView()
 }
 
 function closeTab(id: number) {
@@ -398,6 +421,17 @@ const updateKeybarPosition = () => {
     panelViewportHeight.value = Math.max(0, viewportHeight - Math.max(panelTop, 0))
     keybarHeight.value = keybarRef.value?.offsetHeight ?? keybarHeight.value
   })
+}
+
+const observePanelSize = () => {
+  if (!panelRef.value || typeof ResizeObserver === 'undefined') return
+
+  panelResizeObserver?.disconnect()
+  panelResizeObserver = new ResizeObserver(() => {
+    if (activeTab.value) handleResizeTab(activeTab.value)
+    updateTabsScroll()
+  })
+  panelResizeObserver.observe(panelRef.value)
 }
 
 const observeKeybarHeight = () => {
@@ -496,27 +530,46 @@ const releaseMobileKey = (label: string) => {
   setKeyPressed(label, false)
 }
 
+function handleTabShortcut(e: KeyboardEvent) {
+  if (!e.altKey || e.ctrlKey || e.metaKey) return
+  const n = parseInt(e.key, 10)
+  if (n >= 1 && n <= 9) {
+    const tab = tabs.value[n - 1]
+    if (tab) {
+      e.preventDefault()
+      e.stopPropagation()
+      void switchTab(tab.id)
+    }
+  }
+}
+
 onMounted(async () => {
   if (isMobile.value) {
     lockPageScroll()
   }
 
+  window.addEventListener('keydown', handleTabShortcut, true)
   window.addEventListener('resize', handleResize)
   window.visualViewport?.addEventListener('resize', updateKeybarPosition)
   window.visualViewport?.addEventListener('scroll', updateKeybarPosition)
   await nextTick()
   observeKeybarHeight()
+  observePanelSize()
   updateKeybarPosition()
 
   await addTab()
+  requestAnimationFrame(updateTabsScroll)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handleTabShortcut, true)
   window.removeEventListener('resize', handleResize)
   window.visualViewport?.removeEventListener('resize', updateKeybarPosition)
   window.visualViewport?.removeEventListener('scroll', updateKeybarPosition)
   keybarResizeObserver?.disconnect()
   keybarResizeObserver = null
+  panelResizeObserver?.disconnect()
+  panelResizeObserver = null
   clearTerminalTouchScroll()
   unlockPageScroll()
   for (const tab of tabs.value) cleanupTab(tab)
@@ -527,17 +580,28 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
     handleResize()
   })
 })
+
+watch(() => tabs.value.length, async () => {
+  await nextTick()
+  requestAnimationFrame(updateTabsScroll)
+})
 </script>
 
 <template>
   <div ref="panelRef" class="terminal-panel" :style="terminalPanelStyle">
-    <WindowTitleBar @close="closePanel">
+    <WindowTitleBar v-if="!embedded" @close="closePanel">
       <i class="bi bi-terminal"></i>
       <span>{{ desktopName }}</span>
     </WindowTitleBar>
 
     <div class="tab-bar">
-      <div class="tabs-list">
+      <button
+        v-if="tabsScrollMax > 0"
+        class="tab-scroll-btn"
+        :disabled="tabsScrollLeft <= 0"
+        @click="scrollTabsBy(-160)"
+      ><i class="bi bi-chevron-left"></i></button>
+      <div ref="tabsListRef" class="tabs-list" @scroll="updateTabsScroll">
         <button
           v-for="tab in tabs"
           :key="tab.id"
@@ -554,8 +618,14 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
             @click.stop="closeTab(tab.id)"
           >&times;</span>
         </button>
-        <button class="tab-add" title="New terminal" @click="addTab">+</button>
       </div>
+      <button class="tab-add" title="New terminal" @click="addTab">+</button>
+      <button
+        v-if="tabsScrollMax > 0"
+        class="tab-scroll-btn"
+        :disabled="tabsScrollLeft >= tabsScrollMax"
+        @click="scrollTabsBy(160)"
+      ><i class="bi bi-chevron-right"></i></button>
     </div>
 
     <div
@@ -738,14 +808,19 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
 .tabs-list {
   display: flex;
   align-items: stretch;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs-list::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-item {
-  flex: 0 1 180px;
-  min-width: 40px;
+  flex: 0 1 160px;
+  min-width: 80px;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -799,20 +874,46 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.4;
   transition: opacity 0.1s, background 0.1s;
   user-select: none;
-}
-
-.tab-item:hover .tab-close,
-.tab-item.tab-active .tab-close {
-  opacity: 0.5;
 }
 
 .tab-close:hover {
   opacity: 1 !important;
   background: rgba(255, 255, 255, 0.12);
   border-radius: 3px;
+}
+
+.tab-scroll-btn {
+  flex: 0 0 28px;
+  height: 32px;
+  padding: 0;
+  background: #141414;
+  border: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  color: #aaa;
+  font-size: 0.65rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+
+.tab-scroll-btn:last-child {
+  border-right: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tab-scroll-btn:hover:not(:disabled) {
+  background: #1e1e1e;
+  color: #ccc;
+}
+
+.tab-scroll-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
 }
 
 .tab-add {
