@@ -58,6 +58,29 @@ const settingsStore = useSettingsStore()
                 </div>
               </div>
             </div>
+
+            <hr class="settings-divider" />
+
+            <div class="d-flex align-items-center justify-content-between">
+              <div>
+                <p class="mb-0 fw-semibold">Use remote wallpaper</p>
+              </div>
+              <div class="ms-4 flex-shrink-0">
+                <div class="form-check form-switch mb-0">
+                  <input
+                    class="form-check-input settings-toggle"
+                    type="checkbox"
+                    role="switch"
+                    id="remoteWallpaperToggle"
+                    :checked="settingsStore.useRemoteWallpaper"
+                    @change="settingsStore.setUseRemoteWallpaper(($event.target as HTMLInputElement).checked)"
+                  />
+                  <label class="form-check-label visually-hidden" for="remoteWallpaperToggle">
+                    Use remote wallpaper
+                  </label>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

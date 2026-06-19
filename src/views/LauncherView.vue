@@ -2,8 +2,19 @@
 import { ref, onMounted, onUnmounted, computed, type Component } from 'vue'
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 
+interface WallpaperCacheEntry { url: string; hash: number }
+const wallpaperCache = new Map<string, WallpaperCacheEntry>()
+
+function wallpaperHash(data: Uint8Array): number {
+  let h = 0
+  const step = Math.max(1, Math.floor(data.length / 128))
+  for (let i = 0; i < data.length; i += step) h = (h * 31 + data[i]!) >>> 0
+  return (h * 31 + data.length) >>> 0
+}
+
 import { useMachinesStore } from '../stores/machines'
 import { useSettingsStore } from '../stores/settings'
+import { useSessionCacheStore } from '../stores/sessionCache'
 import { useWindowManager } from '../composables/useWindowManager'
 import EmbeddedDesktopFiles from '../components/EmbeddedDesktopFiles.vue'
 import EmbeddedIndexedFiles from '../components/EmbeddedIndexedFiles.vue'
@@ -16,6 +27,7 @@ const route = useRoute()
 const router = useRouter()
 const machinesStore = useMachinesStore()
 const settingsStore = useSettingsStore()
+const sessionCacheStore = useSessionCacheStore()
 
 const close = () => router.push('/')
 
@@ -41,6 +53,43 @@ const {
 const launcherBodyRef = ref<HTMLElement | null>(null)
 const launcherGridRef = ref<HTMLElement | null>(null)
 const selectedAppId = ref<string | null>(null)
+const wallpaperUrl = ref<string | null>(null)
+
+async function fetchWallpaper(forRealm?: string) {
+  if (!settingsStore.useRemoteWallpaper) {
+    wallpaperUrl.value = null
+    return
+  }
+  const targetRealm = forRealm ?? realm.value
+
+  // Show cached wallpaper immediately while the RPC runs in background
+  const cached = wallpaperCache.get(targetRealm)
+  wallpaperUrl.value = cached?.url ?? null
+
+  try {
+    const session = await sessionCacheStore.acquire(targetRealm)
+    if (!session) return
+    const result = await session.call('io.xconn.deskconn.deskconnd.wallpaper.get')
+    const mimeType = result.args?.[0] as string
+    const data = result.args?.[1] as Uint8Array
+    if (!data?.length) return
+
+    const hash = wallpaperHash(data)
+    const existing = wallpaperCache.get(targetRealm)
+
+    // Wallpaper unchanged — nothing to do
+    if (existing?.hash === hash) return
+
+    const newUrl = URL.createObjectURL(new Blob([data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer], { type: mimeType }))
+    if (existing) URL.revokeObjectURL(existing.url)
+    wallpaperCache.set(targetRealm, { url: newUrl, hash })
+
+    // Only apply if we're still viewing this realm
+    if (realm.value === targetRealm) wallpaperUrl.value = newUrl
+  } catch {
+    // silently ignore — wallpaper is optional
+  }
+}
 
 const isMobile = ref(window.innerWidth < 768)
 function updateIsMobile() {
@@ -172,8 +221,9 @@ function onTaskbarActivate(id: string) {
   }
 }
 
-onBeforeRouteUpdate(() => {
+onBeforeRouteUpdate((to) => {
   for (const win of [...windows.value]) closeWindow(win.id)
+  fetchWallpaper(to.params.realm as string)
 })
 
 function columnCount(): number {
@@ -228,6 +278,7 @@ function handleKeydown(e: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateIsMobile)
+  fetchWallpaper()
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
@@ -248,7 +299,12 @@ onUnmounted(() => {
       <button class="not-supported-dismiss" @click="dismissNotSupported">×</button>
     </div>
 
-    <div ref="launcherBodyRef" class="launcher-body">
+    <div
+      ref="launcherBodyRef"
+      class="launcher-body"
+      :class="{ 'has-wallpaper': !!wallpaperUrl }"
+      :style="wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}"
+    >
       <div ref="launcherGridRef" class="launcher-grid">
         <button
           v-for="app in apps"
@@ -396,6 +452,18 @@ onUnmounted(() => {
   border-color: rgba(59, 130, 246, 0.28);
 }
 
+.has-wallpaper .app-tile:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(6px);
+}
+
+.has-wallpaper .app-tile-selected {
+  background: rgba(219, 234, 254, 0.45);
+  border-color: rgba(59, 130, 246, 0.5);
+  backdrop-filter: blur(6px);
+}
+
 .app-tile-card {
   width: 52px;
   height: 52px;
@@ -422,5 +490,12 @@ onUnmounted(() => {
   line-height: 1.35;
   max-width: 100%;
   word-break: break-word;
+}
+
+.has-wallpaper .app-tile-label {
+  color: #fff;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.8),
+    0 0 8px rgba(0, 0, 0, 0.6);
 }
 </style>
