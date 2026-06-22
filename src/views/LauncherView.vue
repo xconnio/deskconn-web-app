@@ -2,16 +2,6 @@
 import { ref, onMounted, onUnmounted, computed, type Component } from 'vue'
 import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 
-interface WallpaperCacheEntry { url: string; hash: number }
-const wallpaperCache = new Map<string, WallpaperCacheEntry>()
-
-function wallpaperHash(data: Uint8Array): number {
-  let h = 0
-  const step = Math.max(1, Math.floor(data.length / 128))
-  for (let i = 0; i < data.length; i += step) h = (h * 31 + data[i]!) >>> 0
-  return (h * 31 + data.length) >>> 0
-}
-
 import { useMachinesStore } from '../stores/machines'
 import { useSettingsStore } from '../stores/settings'
 import { useSessionCacheStore } from '../stores/sessionCache'
@@ -21,6 +11,7 @@ import EmbeddedIndexedFiles from '../components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '../components/TerminalPanel.vue'
 import FloatingWindow from '../components/FloatingWindow.vue'
 import WindowTaskbar from '../components/WindowTaskbar.vue'
+import { loadCachedWallpaper, storeWallpaper } from '../composables/useWallpaperCache'
 
 const route = useRoute()
 const router = useRouter()
@@ -53,6 +44,14 @@ const launcherBodyRef = ref<HTMLElement | null>(null)
 const launcherGridRef = ref<HTMLElement | null>(null)
 const selectedAppId = ref<string | null>(null)
 const wallpaperUrl = ref<string | null>(null)
+let activeWallpaperObjUrl: string | null = null
+
+function applyWallpaperUrl(url: string | null, forRealm: string) {
+  if (realm.value !== forRealm) return
+  if (activeWallpaperObjUrl && activeWallpaperObjUrl !== url) URL.revokeObjectURL(activeWallpaperObjUrl)
+  activeWallpaperObjUrl = url
+  wallpaperUrl.value = url
+}
 
 async function fetchWallpaper(forRealm?: string) {
   if (!settingsStore.useRemoteWallpaper) {
@@ -61,30 +60,26 @@ async function fetchWallpaper(forRealm?: string) {
   }
   const targetRealm = forRealm ?? realm.value
 
-  // Show cached wallpaper immediately while the RPC runs in background
-  const cached = wallpaperCache.get(targetRealm)
-  wallpaperUrl.value = cached?.url ?? null
+  // Show persisted wallpaper immediately without any network call
+  const cached = await loadCachedWallpaper(targetRealm)
+  applyWallpaperUrl(cached?.url ?? null, targetRealm)
 
   try {
     const session = await sessionCacheStore.acquire(targetRealm)
     if (!session) return
+
+    // Cheap md5 check — only download the full image when it has changed
+    const checksumResult = await session.call('io.xconn.deskconn.deskconnd.wallpaper.checksum')
+    const remoteChecksum = checksumResult.args?.[0] as string
+    if (cached?.checksum === remoteChecksum) return
+
     const result = await session.call('io.xconn.deskconn.deskconnd.wallpaper.get')
     const mimeType = result.args?.[0] as string
     const data = result.args?.[1] as Uint8Array
     if (!data?.length) return
 
-    const hash = wallpaperHash(data)
-    const existing = wallpaperCache.get(targetRealm)
-
-    // Wallpaper unchanged — nothing to do
-    if (existing?.hash === hash) return
-
-    const newUrl = URL.createObjectURL(new Blob([data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer], { type: mimeType }))
-    if (existing) URL.revokeObjectURL(existing.url)
-    wallpaperCache.set(targetRealm, { url: newUrl, hash })
-
-    // Only apply if we're still viewing this realm
-    if (realm.value === targetRealm) wallpaperUrl.value = newUrl
+    const newUrl = await storeWallpaper(targetRealm, data, mimeType, remoteChecksum)
+    applyWallpaperUrl(newUrl, targetRealm)
   } catch {
     // silently ignore — wallpaper is optional
   }
@@ -282,6 +277,7 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', updateIsMobile)
+  if (activeWallpaperObjUrl) URL.revokeObjectURL(activeWallpaperObjUrl)
 })
 </script>
 
