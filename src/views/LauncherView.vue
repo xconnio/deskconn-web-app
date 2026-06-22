@@ -21,7 +21,6 @@ import EmbeddedIndexedFiles from '../components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '../components/TerminalPanel.vue'
 import FloatingWindow from '../components/FloatingWindow.vue'
 import WindowTaskbar from '../components/WindowTaskbar.vue'
-import WindowTitleBar from '../components/WindowTitleBar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -288,11 +287,6 @@ onUnmounted(() => {
 
 <template>
   <div class="launcher-wrapper fade-in-up">
-    <WindowTitleBar @close="close">
-      <span class="launcher-machine-icon">{{ machinesStore.desktops.find((d) => d.realm === realm)?.icon ?? '🖥️' }}</span>
-      <span class="launcher-machine-name">{{ desktopName }}</span>
-    </WindowTitleBar>
-
     <div v-if="notSupported" class="not-supported-banner">
       <i class="bi bi-exclamation-triangle-fill"></i>
       <span>Not supported — please upgrade your backend.</span>
@@ -355,14 +349,14 @@ onUnmounted(() => {
           />
         </FloatingWindow>
       </div>
-    </div>
 
-    <WindowTaskbar
-      :windows="windows"
-      :focused-id="focusedId"
-      @activate="onTaskbarActivate"
-      @close="closeWindow"
-    />
+      <WindowTaskbar
+        :windows="windows"
+        :focused-id="focusedId"
+        @activate="onTaskbarActivate"
+        @close="closeWindow"
+      />
+    </div>
   </div>
 </template>
 
@@ -401,7 +395,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: 1rem;
+  padding: 1rem 1rem 5rem;
   flex: 1;
   min-height: 0;
   overflow: auto;
