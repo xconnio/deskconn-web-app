@@ -13,7 +13,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="windows.length" class="window-taskbar">
+  <div class="window-taskbar">
     <button
       v-for="win in windows"
       :key="win.id"
@@ -34,14 +34,23 @@ const emit = defineEmits<{
 
 <style scoped>
 .window-taskbar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 0.4rem;
   padding: 0.5rem 0.75rem;
-  border-top: 1px solid #e8ecf0;
-  background: #f8fafc;
-  flex-shrink: 0;
+  background: rgba(248, 250, 252, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(232, 236, 240, 0.8);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
+  z-index: 10;
   overflow-x: auto;
+  min-height: 2.75rem;
+  pointer-events: auto;
 }
 
 .taskbar-chip {

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, shallowRef, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
-import WindowTitleBar from '@/components/WindowTitleBar.vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -408,11 +407,6 @@ function closeTab(id: number) {
   void switchTab(remaining[Math.min(idx, remaining.length - 1)]!.id)
 }
 
-const closePanel = () => {
-  for (const tab of tabs.value) cleanupTab(tab)
-  unlockPageScroll()
-  emit('close')
-}
 
 const updateKeybarPosition = () => {
   requestAnimationFrame(() => {
@@ -589,11 +583,6 @@ watch(() => tabs.value.length, async () => {
 
 <template>
   <div ref="panelRef" class="terminal-panel" :style="terminalPanelStyle">
-    <WindowTitleBar v-if="!embedded" @close="closePanel">
-      <i class="bi bi-terminal"></i>
-      <span>{{ desktopName }}</span>
-    </WindowTitleBar>
-
     <div class="tab-bar">
       <button
         v-if="tabsScrollMax > 0"
