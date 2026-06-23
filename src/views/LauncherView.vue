@@ -8,6 +8,7 @@ import { useSessionCacheStore } from '../stores/sessionCache'
 import { useWindowManager } from '../composables/useWindowManager'
 import EmbeddedDesktopFiles from '../components/EmbeddedDesktopFiles.vue'
 import EmbeddedIndexedFiles from '../components/EmbeddedIndexedFiles.vue'
+import ScreenshotPanel from '../components/ScreenshotPanel.vue'
 import TerminalPanel from '../components/TerminalPanel.vue'
 import FloatingWindow from '../components/FloatingWindow.vue'
 import WindowTaskbar from '../components/WindowTaskbar.vue'
@@ -144,9 +145,24 @@ const apps: AppDef[] = [
     iconColor: '#d97706',
     iconBg: '#fef3c7',
   },
+  {
+    id: 'screenshot',
+    label: 'Screenshot',
+    icon: 'bi-camera',
+    iconColor: '#0891b2',
+    iconBg: '#cffafe',
+    width: 720,
+    height: 480,
+  },
 ]
 
+const screenshotOpen = ref(false)
+
 function launchApp(app: AppDef, initialPath?: string) {
+  if (app.id === 'screenshot') {
+    screenshotOpen.value = true
+    return
+  }
   openWindow({
     appId: app.id,
     title: app.label,
