@@ -4,6 +4,7 @@ import { useRoute, useRouter, onBeforeRouteUpdate } from 'vue-router'
 
 import { useMachinesStore } from '../stores/machines'
 import { useSettingsStore } from '../stores/settings'
+import { useSessionCacheStore } from '../stores/sessionCache'
 import { useWindowManager } from '../composables/useWindowManager'
 import EmbeddedDesktopFiles from '../components/EmbeddedDesktopFiles.vue'
 import EmbeddedIndexedFiles from '../components/EmbeddedIndexedFiles.vue'
@@ -11,12 +12,13 @@ import ScreenshotPanel from '../components/ScreenshotPanel.vue'
 import TerminalPanel from '../components/TerminalPanel.vue'
 import FloatingWindow from '../components/FloatingWindow.vue'
 import WindowTaskbar from '../components/WindowTaskbar.vue'
-import WindowTitleBar from '../components/WindowTitleBar.vue'
+import { loadCachedWallpaper, storeWallpaper } from '../composables/useWallpaperCache'
 
 const route = useRoute()
 const router = useRouter()
 const machinesStore = useMachinesStore()
 const settingsStore = useSettingsStore()
+const sessionCacheStore = useSessionCacheStore()
 
 const close = () => router.push('/')
 
@@ -42,6 +44,47 @@ const {
 const launcherBodyRef = ref<HTMLElement | null>(null)
 const launcherGridRef = ref<HTMLElement | null>(null)
 const selectedAppId = ref<string | null>(null)
+const wallpaperUrl = ref<string | null>(null)
+let activeWallpaperObjUrl: string | null = null
+
+function applyWallpaperUrl(url: string | null, forRealm: string) {
+  if (realm.value !== forRealm) return
+  if (activeWallpaperObjUrl && activeWallpaperObjUrl !== url) URL.revokeObjectURL(activeWallpaperObjUrl)
+  activeWallpaperObjUrl = url
+  wallpaperUrl.value = url
+}
+
+async function fetchWallpaper(forRealm?: string) {
+  if (!settingsStore.useRemoteWallpaper) {
+    wallpaperUrl.value = null
+    return
+  }
+  const targetRealm = forRealm ?? realm.value
+
+  // Show persisted wallpaper immediately without any network call
+  const cached = await loadCachedWallpaper(targetRealm)
+  applyWallpaperUrl(cached?.url ?? null, targetRealm)
+
+  try {
+    const session = await sessionCacheStore.acquire(targetRealm)
+    if (!session) return
+
+    // Cheap md5 check — only download the full image when it has changed
+    const checksumResult = await session.call('io.xconn.deskconn.deskconnd.wallpaper.checksum')
+    const remoteChecksum = checksumResult.args?.[0] as string
+    if (cached?.checksum === remoteChecksum) return
+
+    const result = await session.call('io.xconn.deskconn.deskconnd.wallpaper.get')
+    const mimeType = result.args?.[0] as string
+    const data = result.args?.[1] as Uint8Array
+    if (!data?.length) return
+
+    const newUrl = await storeWallpaper(targetRealm, data, mimeType, remoteChecksum)
+    applyWallpaperUrl(newUrl, targetRealm)
+  } catch {
+    // silently ignore — wallpaper is optional
+  }
+}
 
 const isMobile = ref(window.innerWidth < 768)
 function updateIsMobile() {
@@ -188,8 +231,9 @@ function onTaskbarActivate(id: string) {
   }
 }
 
-onBeforeRouteUpdate(() => {
+onBeforeRouteUpdate((to) => {
   for (const win of [...windows.value]) closeWindow(win.id)
+  fetchWallpaper(to.params.realm as string)
 })
 
 function columnCount(): number {
@@ -244,27 +288,29 @@ function handleKeydown(e: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateIsMobile)
+  fetchWallpaper()
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', updateIsMobile)
+  if (activeWallpaperObjUrl) URL.revokeObjectURL(activeWallpaperObjUrl)
 })
 </script>
 
 <template>
   <div class="launcher-wrapper fade-in-up">
-    <WindowTitleBar @close="close">
-      <span class="launcher-machine-icon">{{ machinesStore.desktops.find((d) => d.realm === realm)?.icon ?? '🖥️' }}</span>
-      <span class="launcher-machine-name">{{ desktopName }}</span>
-    </WindowTitleBar>
-
     <div v-if="notSupported" class="not-supported-banner">
       <i class="bi bi-exclamation-triangle-fill"></i>
       <span>Not supported — please upgrade your backend.</span>
       <button class="not-supported-dismiss" @click="dismissNotSupported">×</button>
     </div>
 
-    <div ref="launcherBodyRef" class="launcher-body">
+    <div
+      ref="launcherBodyRef"
+      class="launcher-body"
+      :class="{ 'has-wallpaper': !!wallpaperUrl }"
+      :style="wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}"
+    >
       <div ref="launcherGridRef" class="launcher-grid">
         <button
           v-for="app in apps"
@@ -315,16 +361,14 @@ onUnmounted(() => {
           />
         </FloatingWindow>
       </div>
+
+      <WindowTaskbar
+        :windows="windows"
+        :focused-id="focusedId"
+        @activate="onTaskbarActivate"
+        @close="closeWindow"
+      />
     </div>
-
-    <ScreenshotPanel v-if="screenshotOpen" :realm="realm" @close="screenshotOpen = false" />
-
-    <WindowTaskbar
-      :windows="windows"
-      :focused-id="focusedId"
-      @activate="onTaskbarActivate"
-      @close="closeWindow"
-    />
   </div>
 </template>
 
@@ -363,7 +407,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: 1rem;
+  padding: 1rem 1rem 5rem;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -414,6 +458,18 @@ onUnmounted(() => {
   border-color: rgba(59, 130, 246, 0.28);
 }
 
+.has-wallpaper .app-tile:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(6px);
+}
+
+.has-wallpaper .app-tile-selected {
+  background: rgba(219, 234, 254, 0.45);
+  border-color: rgba(59, 130, 246, 0.5);
+  backdrop-filter: blur(6px);
+}
+
 .app-tile-card {
   width: 52px;
   height: 52px;
@@ -440,5 +496,12 @@ onUnmounted(() => {
   line-height: 1.35;
   max-width: 100%;
   word-break: break-word;
+}
+
+.has-wallpaper .app-tile-label {
+  color: #fff;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.8),
+    0 0 8px rgba(0, 0, 0, 0.6);
 }
 </style>
