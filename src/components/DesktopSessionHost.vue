@@ -13,6 +13,7 @@ import TerminalPanel from '@/components/TerminalPanel.vue'
 import ResourceMonitor from '@/components/ResourceMonitor.vue'
 import DesktopSettingsPanel from '@/components/DesktopSettingsPanel.vue'
 import FilePreviewModal from '@/components/FilePreviewModal.vue'
+import ScreenshotPanel from '@/components/ScreenshotPanel.vue'
 import FloatingWindow from '@/components/FloatingWindow.vue'
 import AppDock from '@/components/AppDock.vue'
 import { loadCachedWallpaper, storeWallpaper } from '@/composables/useWallpaperCache'
@@ -123,6 +124,7 @@ function updateIsMobile() {
 // Vertical docks are awkward on narrow screens — always use the bottom dock there.
 // Position is per-machine (see stores/settings.ts), set via the in-dock Settings app.
 const dockPosition = computed(() => (isMobile.value ? 'bottom' : settingsStore.getDockPosition(props.realm)))
+const screenshotOpen = ref(false)
 
 interface AppDef {
   id: string
@@ -185,6 +187,13 @@ const apps: AppDef[] = [
     height: 500,
   },
   {
+    id: 'screenshot',
+    label: 'Screenshot',
+    icon: 'bi-camera',
+    iconColor: '#0891b2',
+    iconBg: '#cffafe',
+  },
+  {
     id: 'settings',
     label: 'Settings',
     icon: 'bi-gear',
@@ -221,6 +230,11 @@ const dockApps = computed(() => {
 })
 
 function launchApp(app: AppDef, initialPath?: string) {
+  if (app.id === 'screenshot') {
+    screenshotOpen.value = true
+    return
+  }
+
   openWindow({
     appId: app.id,
     title: app.label,
@@ -474,6 +488,8 @@ onUnmounted(() => {
         @exit="close"
       />
     </div>
+
+    <ScreenshotPanel v-if="screenshotOpen" :realm="realm" @close="screenshotOpen = false" />
 
     <div v-if="isConnecting" class="connecting-overlay">
       <div class="connecting-spinner"></div>
