@@ -9,6 +9,7 @@ import { useWindowManager } from '../composables/useWindowManager'
 import EmbeddedDesktopFiles from '../components/EmbeddedDesktopFiles.vue'
 import EmbeddedIndexedFiles from '../components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '../components/TerminalPanel.vue'
+import ResourceMonitor from '../components/ResourceMonitor.vue'
 import FloatingWindow from '../components/FloatingWindow.vue'
 import WindowTaskbar from '../components/WindowTaskbar.vue'
 import { loadCachedWallpaper, storeWallpaper } from '../composables/useWallpaperCache'
@@ -144,6 +145,15 @@ const apps: AppDef[] = [
     iconColor: '#d97706',
     iconBg: '#fef3c7',
   },
+  {
+    id: 'resource-monitor',
+    label: 'Resource Monitor',
+    icon: 'bi-bar-chart-line-fill',
+    iconColor: '#0891b2',
+    iconBg: '#cffafe',
+    width: 480,
+    height: 500,
+  },
 ]
 
 function launchApp(app: AppDef, initialPath?: string) {
@@ -165,6 +175,7 @@ const appComponents: Record<string, Component> = {
   pictures: EmbeddedIndexedFiles,
   videos: EmbeddedIndexedFiles,
   documents: EmbeddedIndexedFiles,
+  'resource-monitor': ResourceMonitor,
 }
 
 function windowProps(win: { id: string; appId: string; props: Record<string, unknown> }) {
@@ -182,6 +193,12 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
         realm: realm.value,
         desktopName: desktopName.value,
         embedded: true,
+      }
+    case 'resource-monitor':
+      return {
+        realm: realm.value,
+        desktopName: desktopName.value,
+        focused,
       }
     default:
       return {
