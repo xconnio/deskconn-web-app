@@ -63,6 +63,28 @@ const settingsStore = useSettingsStore()
 
             <div class="d-flex align-items-center justify-content-between">
               <div>
+                <p class="mb-0 fw-semibold">Resource Monitor refresh interval</p>
+              </div>
+              <div class="ms-4 flex-shrink-0">
+                <select
+                  class="form-select form-select-sm settings-select"
+                  :value="settingsStore.resourceMonitorInterval"
+                  @change="settingsStore.setResourceMonitorInterval(parseInt(($event.target as HTMLSelectElement).value, 10))"
+                >
+                  <option value="1">1 second</option>
+                  <option value="5">5 seconds</option>
+                  <option value="10">10 seconds</option>
+                  <option value="15">15 seconds</option>
+                  <option value="30">30 seconds</option>
+                  <option value="60">60 seconds</option>
+                </select>
+              </div>
+            </div>
+
+            <hr class="settings-divider" />
+
+            <div class="d-flex align-items-center justify-content-between">
+              <div>
                 <p class="mb-0 fw-semibold">Use remote wallpaper</p>
               </div>
               <div class="ms-4 flex-shrink-0">
@@ -98,5 +120,10 @@ const settingsStore = useSettingsStore()
 .settings-divider {
   margin: 1rem 0;
   border-color: #e8ecf0;
+}
+
+.settings-select {
+  min-width: 120px;
+  cursor: pointer;
 }
 </style>
