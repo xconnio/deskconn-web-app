@@ -1,19 +1,22 @@
 <script setup lang="ts">
 /**
  * Standalone file preview + download modal.
- * Accepts an established session and a file entry; downloads and previews the
- * file using the exact same protocol as EmbeddedDesktopFiles (per-file key
- * exchange, H/D framing, MediaSource streaming for audio/video).
+ * Accepts an established session and a file entry. Images/pdf/text use the
+ * WAMP-based full-buffer download (per-file key exchange, H/D framing).
+ * Audio/video play natively via a same-origin URL backed by a Service Worker
+ * Range-request proxy (see sw-download.ts), which forwards range reads over a
+ * raw WebRTC data channel (see services/fileStream.ts) — this requires a
+ * direct P2P connection to the device.
  */
 import { ref, onMounted, onUnmounted } from 'vue'
 import { type Session } from 'xconn'
 import { createX25519KeyPair, deriveSessionKeys, decryptPayload } from '@/utils/encryption'
+import { canStreamRanges, requestRange } from '@/services/fileStream'
 import {
   type FilePreviewType,
   formatSize,
   getFilePreviewType,
   getMimeType,
-  getMSEMimeType,
   isFirefoxBrowser,
 } from '@/utils/fileTypes'
 
@@ -152,65 +155,81 @@ async function fetchFileData(remotePath: string): Promise<Uint8Array> {
   return combined
 }
 
-async function openWithMediaSource(mseMime: string): Promise<boolean> {
-  const mediaSource = new MediaSource()
-  const blobUrl = URL.createObjectURL(mediaSource)
+// Bridges range-request messages coming from the stream service worker (see
+// sw-download.ts) to the raw WebRTC data channel range protocol (fileStream.ts).
+// Multiple range requests (e.g. a browser probing both the start and end of an
+// MP4 for its moov box) can be in flight concurrently, each tagged with its own
+// reqID and served by its own data channel.
+function startStreamBridge(port: MessagePort, session: Session, path: string): () => void {
+  const controllers = new Map<number, AbortController>()
 
-  previewType.value = getFilePreviewType(props.entry.name) as FilePreviewType
-  previewBlobUrl.value = blobUrl
-  previewLoading.value = false
-  previewExpectedBytes.value = props.entry.size
-  previewReceivedBytes.value = 0
-  previewError.value = ''
-
-  const queue: Uint8Array[] = []
-  let isAppending = false
-  let streamDone = false
-  let sourceBuffer: SourceBuffer | null = null
-  const sourceAbort = new AbortController()
-
-  function drainQueue() {
-    if (!sourceBuffer || isAppending || mediaSource.readyState !== 'open') return
-    if (queue.length === 0) {
-      if (streamDone) { try { mediaSource.endOfStream() } catch { /* already ended */ } }
-      return
+  async function handleRangeRequest(reqID: number, offset: number, length: number) {
+    const controller = new AbortController()
+    controllers.set(reqID, controller)
+    try {
+      const { stream } = await requestRange(session, path, offset, length, controller.signal)
+      const reader = stream.getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const buf = value.slice().buffer
+        port.postMessage({ type: 'chunk', reqID, chunk: buf }, [buf])
+      }
+      port.postMessage({ type: 'range-done', reqID })
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        port.postMessage({ type: 'error', reqID, message: err instanceof Error ? err.message : 'Stream failed' })
+      }
+    } finally {
+      controllers.delete(reqID)
     }
-    isAppending = true
-    try { sourceBuffer.appendBuffer(queue.shift()!.slice()) } catch { isAppending = false }
   }
 
-  await new Promise<void>(resolve => {
-    mediaSource.addEventListener('sourceopen', () => {
-      try {
-        sourceBuffer = mediaSource.addSourceBuffer(mseMime)
-        sourceBuffer.addEventListener('updateend', () => { isAppending = false; drainQueue() })
-        sourceBuffer.addEventListener('error', () => { isAppending = false; sourceAbort.abort() })
-      } catch { /* unsupported at runtime */ }
-      resolve()
-    }, { once: true })
-  })
-
-  if (!sourceBuffer) {
-    URL.revokeObjectURL(blobUrl)
-    try { mediaSource.endOfStream() } catch { /* ignore */ }
-    previewBlobUrl.value = ''
-    return false
+  port.onmessage = (event: MessageEvent) => {
+    const data = event.data ?? {}
+    if (data.type === 'range-request') { void handleRangeRequest(data.reqID, data.offset, data.length); return }
+    if (data.type === 'cancel') controllers.get(data.reqID)?.abort()
   }
+  port.start()
 
-  try {
-    await streamFileData(props.entry.path, (chunk, expectedTotal) => {
-      if (!mounted) return
-      if (expectedTotal > 0) previewExpectedBytes.value = expectedTotal
-      previewReceivedBytes.value += chunk.length
-      queue.push(chunk)
-      drainQueue()
-    }, sourceAbort.signal)
-    streamDone = true
-    drainQueue()
-  } catch (err) {
-    if (sourceAbort.signal.aborted) return false
-    if (mounted) previewError.value = err instanceof Error ? err.message : 'Failed to stream file'
+  return () => {
+    for (const controller of controllers.values()) controller.abort()
+    port.close()
   }
+}
+
+let activeStreamCleanup: (() => void) | null = null
+
+function stopActiveStream() {
+  activeStreamCleanup?.()
+  activeStreamCleanup = null
+}
+
+// Plays audio/video natively via the stream service worker acting as a local
+// Range-request proxy backed by the WebRTC data channel: the <video>/<audio>
+// element gets a same-origin URL and the browser's own media engine handles
+// buffering and seeking exactly like it would for a regular HTTP video URL.
+// Returns false if there's no direct WebRTC connection to stream over.
+async function openStreamedMedia(pt: FilePreviewType): Promise<boolean> {
+  if (!canStreamRanges(props.session)) return false
+
+  const sw = downloadServiceWorker ?? await ensureDownloadServiceWorker()
+  if (!sw) return false
+
+  stopActiveStream()
+
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const mc = new MessageChannel()
+  const stopBridge = startStreamBridge(mc.port1, props.session, props.entry.path)
+  activeStreamCleanup = () => { stopBridge(); sw.postMessage({ type: 'stream-close', id }) }
+
+  sw.postMessage({ type: 'stream-init', id, size: props.entry.size, mimeType: getMimeType(props.entry.name) }, [mc.port2])
+
+  if (previewBlobUrl.value) { URL.revokeObjectURL(previewBlobUrl.value); previewBlobUrl.value = '' }
+  previewType.value = pt
+  previewBlobUrl.value = `/_stream/${id}/${encodeURIComponent(props.entry.name)}`
+  previewLoading.value = false
+  previewError.value = ''
   return true
 }
 
@@ -218,8 +237,6 @@ async function openFile(isRetry = false) {
   if (!isRetry) mediaRetryUsed.value = false
   const pt = getFilePreviewType(props.entry.name)
   const MAX_IMG_PDF = 100 * 1024 * 1024
-  const MAX_AUDIO_FALLBACK = 50 * 1024 * 1024
-  const MAX_VIDEO_FALLBACK = 200 * 1024 * 1024
 
   if (pt === 'none' || (pt === 'text' && props.entry.size > 5 * 1024 * 1024)) {
     await downloadFileToClient(); return
@@ -227,17 +244,19 @@ async function openFile(isRetry = false) {
   if ((pt === 'image' || pt === 'pdf') && props.entry.size > MAX_IMG_PDF) {
     await downloadFileToClient(); return
   }
-  if (pt === 'audio' || pt === 'video') {
-    const mseMime = !isRetry ? getMSEMimeType(props.entry.name) : null
-    if (mseMime) {
-      if (previewBlobUrl.value) { URL.revokeObjectURL(previewBlobUrl.value); previewBlobUrl.value = '' }
-      const ok = await openWithMediaSource(mseMime)
-      if (ok) return
-    }
-    const limit = pt === 'audio' ? MAX_AUDIO_FALLBACK : MAX_VIDEO_FALLBACK
-    if (props.entry.size > limit) { await downloadFileToClient(); return }
+  if ((pt === 'audio' || pt === 'video') && !isRetry) {
+    const streamed = await openStreamedMedia(pt)
+    if (streamed) return
+    if (previewBlobUrl.value) { URL.revokeObjectURL(previewBlobUrl.value); previewBlobUrl.value = '' }
+    previewType.value = pt
+    previewLoading.value = false
+    previewError.value = 'Live preview requires a direct connection to this device. Use the Download button above.'
+    return
   }
 
+  // Full-buffer fallback: images/pdf/text, and audio/video retried once after a
+  // playback error (see handleMediaError).
+  stopActiveStream()
   if (previewBlobUrl.value) { URL.revokeObjectURL(previewBlobUrl.value); previewBlobUrl.value = '' }
   previewType.value = pt
   previewLoading.value = true
@@ -481,6 +500,7 @@ onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
   if (document.fullscreenElement === previewDialogEl.value) void document.exitFullscreen().catch(() => {})
   if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value)
+  stopActiveStream()
 })
 </script>
 
@@ -534,11 +554,11 @@ onUnmounted(() => {
         <div v-else-if="previewType === 'audio' && previewBlobUrl" class="preview-audio-wrap">
           <div class="audio-icon"><i class="bi bi-music-note-beamed"></i></div>
           <p class="audio-name">{{ entry.name }}</p>
-          <audio :src="previewBlobUrl" controls class="preview-audio" @error="handleMediaError" />
+          <audio :src="previewBlobUrl" controls autoplay class="preview-audio" @error="handleMediaError" />
         </div>
 
         <div v-else-if="previewType === 'video' && previewBlobUrl" class="preview-video-wrap">
-          <video :src="previewBlobUrl" controls class="preview-video" @error="handleMediaError" />
+          <video :src="previewBlobUrl" controls autoplay class="preview-video" @error="handleMediaError" />
         </div>
 
         <div v-else-if="previewType === 'pdf' && previewBlobUrl" class="preview-pdf-wrap">

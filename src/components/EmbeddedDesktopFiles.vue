@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
 import { ApplicationError, Progress, type Result, type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSettingsStore } from '@/stores/settings'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
+import FilePreviewModal from '@/components/FilePreviewModal.vue'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import {
   createX25519KeyPair,
@@ -13,14 +14,7 @@ import {
   decryptPayload,
   type EncryptionKeys,
 } from '@/utils/encryption'
-import {
-  type FilePreviewType,
-  formatSize,
-  getFilePreviewType,
-  getMimeType,
-  getMSEMimeType,
-  isFirefoxBrowser,
-} from '@/utils/fileTypes'
+import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
 import { formatDesktopError, isNoSuchProcedureException } from '@/utils/desktopError'
 
 const procedureKeyExchange = 'io.xconn.deskconn.deskconnd.key.exchange'
@@ -45,7 +39,7 @@ const props = defineProps<{
 const sessionCacheStore = useSessionCacheStore()
 const settingsStore = useSettingsStore()
 
-const session = ref<Session | null>(null)
+const session = shallowRef<Session | null>(null)
 const encryptionKeys = ref<EncryptionKeys | null>(null)
 const isConnecting = ref(true)
 const isLoading = ref(false)
@@ -72,20 +66,7 @@ const supportedFileProcedures = ref({
   copy: false,
 })
 
-const previewVisible = ref(false)
-const previewTheater = ref(false)
-const previewFullscreen = ref(false)
-const previewDialogEl = ref<HTMLElement | null>(null)
-const previewFileEntry = ref<FileEntry | null>(null)
-const previewType = ref<FilePreviewType>('none')
-const previewBlobUrl = ref('')
-const previewTextContent = ref('')
-const previewError = ref('')
-const previewLoading = ref(false)
-const mediaRetryUsed = ref(false)
-const previewExpectedBytes = ref(0)
-const previewReceivedBytes = ref(0)
-const previewBodyEl = ref<HTMLElement | null>(null)
+const previewEntry = ref<FileEntry | null>(null)
 const navHistory = ref<string[]>([])
 const navHistoryIndex = ref(-1)
 
@@ -119,15 +100,6 @@ const selectionStatus = computed(() => {
   }
   return `"${entry.name}" selected (${formatSize(entry.size)})`
 })
-
-function scrollPreviewBody(e: WheelEvent) {
-  const body = previewBodyEl.value
-  if (!body) return
-  const child = Array.from(body.children).find(
-    (el) => (el as HTMLElement).scrollHeight > (el as HTMLElement).clientHeight
-  ) as HTMLElement | undefined
-  ;(child ?? body).scrollTop += e.deltaY
-}
 
 const isGridView = ref(false)
 const backgroundMenuVisible = ref(false)
@@ -404,7 +376,7 @@ function resetExplorerState() {
   }
   clipboard.value = null
   closeActionSheet()
-  closePreview()
+  previewEntry.value = null
   searchGeneration++
   fileSearchActive.value = false
   fileSearchQuery.value = ''
@@ -584,7 +556,7 @@ async function initializeExplorer() {
 
   if (props.initialOpenFile && currentBrowse.value) {
     const target = currentBrowse.value.entries?.find(e => e.name === props.initialOpenFile)
-    if (target && !target.is_dir) await openFile(target)
+    if (target && !target.is_dir) openPreview(target)
   }
 }
 
@@ -659,7 +631,7 @@ async function openEntry(entry: FileEntry) {
     navHistoryIndex.value = prevIndex
     if (prevBrowse) pathInput.value = prevBrowse.path
 
-    await openFile(resolvedPath ? { ...entry, path: resolvedPath } : entry)
+    openPreview(resolvedPath ? { ...entry, path: resolvedPath } : entry)
     return
   }
 
@@ -709,44 +681,17 @@ function closeActionSheet() {
   operationError.value = ''
 }
 
-function closePreview() {
-  if (previewBlobUrl.value) {
-    URL.revokeObjectURL(previewBlobUrl.value)
-    previewBlobUrl.value = ''
-  }
-  if (document.fullscreenElement === previewDialogEl.value) void document.exitFullscreen().catch(() => {})
-  previewVisible.value = false
-  previewTheater.value = false
-  previewTextContent.value = ''
-  previewError.value = ''
-  previewLoading.value = false
-  previewFileEntry.value = null
+// Opens a file in the shared FilePreviewModal (handles type detection, streaming
+// audio/video over WebRTC, and buffered preview for images/pdf/text internally).
+function openPreview(entry: FileEntry) {
+  if (entry.is_dir) return
+  selectEntry(entry)
+  previewEntry.value = entry
 }
-
-function togglePreviewTheater() {
-  previewTheater.value = !previewTheater.value
-}
-
-async function togglePreviewFullscreen() {
-  const el = previewDialogEl.value
-  if (!el) return
-  if (document.fullscreenElement) {
-    await document.exitFullscreen().catch(() => {})
-  } else {
-    await el.requestFullscreen().catch(() => {})
-  }
-}
-
-function handlePreviewFullscreenChange() {
-  previewFullscreen.value = document.fullscreenElement === previewDialogEl.value
-}
-
-// Size limits for formats that must be fully buffered before display
-const MAX_SIZE_IMAGE_PDF = 100 * 1024 * 1024  // 100 MB
-const MAX_SIZE_AUDIO_FALLBACK = 50 * 1024 * 1024 // 50 MB (WAV/FLAC without MSE)
-const MAX_SIZE_VIDEO_FALLBACK = 200 * 1024 * 1024 // 200 MB (formats without MSE)
 
 // Low-level stream: calls onChunk for each decrypted data chunk as it arrives.
+// Used by the download-to-disk flow below (preview streaming lives in
+// FilePreviewModal.vue).
 async function streamFileData(
   remotePath: string,
   onChunk: (chunk: Uint8Array, expectedTotal: number) => void | Promise<void>,
@@ -864,187 +809,6 @@ async function streamFileData(
   }
 
   if (streamError) throw streamError instanceof Error ? streamError : new Error('Stream failed')
-}
-
-// Collects all chunks into a single Uint8Array (for images, PDF, text).
-async function fetchFileData(remotePath: string): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = []
-  let total = 0
-
-  await streamFileData(remotePath, (chunk, expectedTotal) => {
-    chunks.push(chunk)
-    total += chunk.length
-    previewExpectedBytes.value = expectedTotal
-    previewReceivedBytes.value = total
-  })
-
-  const combined = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    combined.set(chunk, offset)
-    offset += chunk.length
-  }
-  return combined
-}
-
-// Streams audio/video directly into a MediaSource so playback starts immediately.
-// Returns false if MSE setup failed (caller should fall back to full-buffer).
-async function openWithMediaSource(entry: FileEntry, mseMime: string): Promise<boolean> {
-  const mediaSource = new MediaSource()
-  const blobUrl = URL.createObjectURL(mediaSource)
-
-  previewFileEntry.value = entry
-  previewType.value = getFilePreviewType(entry.name) as FilePreviewType
-  previewBlobUrl.value = blobUrl
-  previewVisible.value = true
-  previewLoading.value = false  // player is shown immediately; browser shows buffering state
-  previewExpectedBytes.value = entry.size
-  previewReceivedBytes.value = 0
-  previewError.value = ''
-
-  const queue: Uint8Array[] = []
-  let isAppending = false
-  let streamDone = false
-  let sourceBuffer: SourceBuffer | null = null
-  // Aborted when the SourceBuffer fires an error (e.g. audio codec mismatch, non-fragmented
-  // MP4 in Firefox). Aborting cancels streamFileData so openWithMediaSource returns false
-  // and the caller falls back to full-buffer.
-  const sourceAbort = new AbortController()
-
-  function drainQueue() {
-    if (!sourceBuffer || isAppending || mediaSource.readyState !== 'open') return
-    if (queue.length === 0) {
-      if (streamDone) {
-        try { mediaSource.endOfStream() } catch { /* already ended */ }
-      }
-      return
-    }
-    isAppending = true
-    try {
-      sourceBuffer.appendBuffer(queue.shift()!.slice())
-    } catch {
-      isAppending = false
-    }
-  }
-
-  await new Promise<void>(resolve => {
-    mediaSource.addEventListener('sourceopen', () => {
-      try {
-        sourceBuffer = mediaSource.addSourceBuffer(mseMime)
-        sourceBuffer.addEventListener('updateend', () => { isAppending = false; drainQueue() })
-        sourceBuffer.addEventListener('error', () => {
-          isAppending = false
-          previewFileEntry.value = null
-          sourceAbort.abort()
-        })
-      } catch { /* unsupported codec at runtime — sourceBuffer stays null */ }
-      resolve()
-    }, { once: true })
-  })
-
-  if (!sourceBuffer) {
-    URL.revokeObjectURL(blobUrl)
-    try { mediaSource.endOfStream() } catch { /* ignore */ }
-    previewBlobUrl.value = ''
-    previewVisible.value = false
-    previewFileEntry.value = null
-    return false
-  }
-
-  try {
-    await streamFileData(entry.path, (chunk, expectedTotal) => {
-      if (previewFileEntry.value?.path !== entry.path) return
-      if (expectedTotal > 0) previewExpectedBytes.value = expectedTotal
-      previewReceivedBytes.value += chunk.length
-      queue.push(chunk)
-      drainQueue()
-    }, sourceAbort.signal)
-    streamDone = true
-    drainQueue()
-  } catch (err) {
-    if (sourceAbort.signal.aborted) {
-      // SourceBuffer error aborted the stream — signal failure so caller uses full-buffer.
-      return false
-    }
-    if (previewFileEntry.value?.path === entry.path) {
-      previewError.value = err instanceof Error ? err.message : 'Failed to stream file'
-    }
-  }
-  return true
-}
-
-async function openFile(entry: FileEntry, isRetry = false) {
-  if (entry.is_dir) return
-  selectEntry(entry)
-  if (!isRetry) mediaRetryUsed.value = false
-
-  // For symlinks use the target filename for extension-based type detection,
-  // since the symlink name itself may have no extension.
-  const effectiveName = entry.is_symlink && entry.link_target
-    ? (entry.link_target.replace(/\/$/, '').split('/').pop() || entry.name)
-    : entry.name
-
-  const pt = getFilePreviewType(effectiveName)
-
-  // Unrecognised or oversized text → download directly
-  if (pt === 'none' || (pt === 'text' && entry.size > 5 * 1024 * 1024)) {
-    await downloadFileToClient(entry)
-    return
-  }
-
-  // Image / PDF: enforce memory limit
-  if ((pt === 'image' || pt === 'pdf') && entry.size > MAX_SIZE_IMAGE_PDF) {
-    await downloadFileToClient(entry)
-    return
-  }
-
-  // Audio / video: prefer MediaSource streaming (no memory limit needed)
-  if (pt === 'audio' || pt === 'video') {
-    const mseMime = !isRetry ? getMSEMimeType(effectiveName) : null
-    if (mseMime) {
-      closePreview()
-      const mseStarted = await openWithMediaSource(entry, mseMime)
-      if (mseStarted) return
-      // addSourceBuffer failed (codec unsupported at runtime) — fall through to full-buffer
-    }
-    // Fallback for formats MSE can't handle: full-buffer with size guard
-    const limit = pt === 'audio' ? MAX_SIZE_AUDIO_FALLBACK : MAX_SIZE_VIDEO_FALLBACK
-    if (entry.size > limit) {
-      await downloadFileToClient(entry)
-      return
-    }
-  }
-
-  // Full-buffer path for images, PDF, text, and MSE-unsupported audio/video
-  closePreview()
-  previewFileEntry.value = entry
-  previewType.value = pt
-  previewVisible.value = true
-  previewLoading.value = true
-  previewExpectedBytes.value = entry.size
-  previewReceivedBytes.value = 0
-  previewError.value = ''
-
-  try {
-    const data = await fetchFileData(entry.path)
-    if (previewFileEntry.value?.path !== entry.path) return
-
-    if (pt === 'text') {
-      previewTextContent.value = new TextDecoder('utf-8', { fatal: false }).decode(data)
-    } else {
-      const mime = getMimeType(effectiveName)
-      const blob = new Blob([data.slice()], { type: mime })
-      previewBlobUrl.value = URL.createObjectURL(blob)
-    }
-  } catch (err) {
-    if (previewFileEntry.value?.path === entry.path) {
-      previewError.value = err instanceof Error ? err.message : 'Failed to load file'
-    }
-  } finally {
-    if (previewFileEntry.value?.path === entry.path) {
-      previewLoading.value = false
-    }
-  }
 }
 
 async function downloadFileToClient(entry: FileEntry) {
@@ -1464,58 +1228,14 @@ async function openSearchResult(entry: FileEntry) {
   }
   const parentDir = entry.path.slice(0, entry.path.lastIndexOf('/')) || '/'
   await loadPath(parentDir)
-  await openFile(entry)
-}
-
-function handleMediaError(event: Event) {
-  const media = event.target as HTMLMediaElement
-  if (!media.error) return
-  const entry = previewFileEntry.value
-  if (!entry) return
-  if (!mediaRetryUsed.value) {
-    mediaRetryUsed.value = true
-    openFile(entry, true)
-  } else {
-    previewError.value = 'This file could not be played. Use the Download button above.'
-  }
-}
-
-function downloadFromPreview() {
-  if (!previewFileEntry.value) return
-  const entry = previewFileEntry.value
-  // For audio/video, previewBlobUrl may be a MediaSource URL (not a real blob),
-  // so always trigger a proper download for these types.
-  if (previewType.value === 'audio' || previewType.value === 'video') {
-    downloadFileToClient(entry)
-    return
-  }
-  if (previewBlobUrl.value) {
-    const a = document.createElement('a')
-    a.href = previewBlobUrl.value
-    a.download = entry.name
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-  } else if (previewTextContent.value) {
-    const blob = new Blob([previewTextContent.value], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = entry.name
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  } else {
-    downloadFileToClient(entry)
-  }
+  openPreview(entry)
 }
 
 async function openActionSheetEntry() {
   if (!actionSheetEntry.value || actionSheetEntry.value.is_dir) return
   const entry = actionSheetEntry.value
   closeActionSheet()
-  await openFile(entry)
+  openPreview(entry)
 }
 
 async function downloadActionSheetEntry() {
@@ -1715,7 +1435,7 @@ function handleEntryPrimaryAction(entry: FileEntry) {
   if (entry.is_dir || entry.is_symlink) {
     openEntry(entry)
   } else {
-    openFile(entry)
+    openPreview(entry)
   }
 }
 
@@ -1733,7 +1453,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement
 
   if (e.key === 'Escape') {
-    if (document.fullscreenElement === previewDialogEl.value) return
+    if (document.fullscreenElement) return // FilePreviewModal handles its own fullscreen exit
     if (fileSearchActive.value) { exitFileSearch(); return }
     if (searchMode.value) { exitSearchMode(); return }
     if (propertiesModalVisible.value) { closePropertiesModal(); return }
@@ -1781,8 +1501,8 @@ watch(
   },
 )
 
-watch(previewVisible, (visible) => {
-  document.body.style.overflow = visible ? 'hidden' : ''
+watch(previewEntry, (entry) => {
+  document.body.style.overflow = entry ? 'hidden' : ''
 })
 
 function applyThumbnails(entries: FileEntry[]) {
@@ -1798,7 +1518,6 @@ onMounted(async () => {
   updateViewMode()
   window.addEventListener('resize', updateViewMode)
   document.addEventListener('keydown', handleGlobalKeydown)
-  document.addEventListener('fullscreenchange', handlePreviewFullscreenChange)
   if (isFirefoxBrowser()) {
     void ensureDownloadServiceWorker().catch(() => {})
   }
@@ -1814,9 +1533,8 @@ watch(currentBrowse, (browse) => {
 onUnmounted(() => {
   window.removeEventListener('resize', updateViewMode)
   document.removeEventListener('keydown', handleGlobalKeydown)
-  document.removeEventListener('fullscreenchange', handlePreviewFullscreenChange)
   disconnectDesktopSession()
-  closePreview()
+  previewEntry.value = null
   for (const url of Object.values(thumbnailUrls)) URL.revokeObjectURL(url)
 })
 
@@ -2276,80 +1994,12 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <!-- File Preview Modal -->
-  <div v-if="previewVisible" class="fs-overlay preview-overlay" @click.self="closePreview" @wheel.self.prevent="scrollPreviewBody">
-    <div ref="previewDialogEl" class="preview-dialog" :class="{ 'preview-dialog--theater': previewTheater }">
-      <div class="preview-header">
-        <span class="preview-title">{{ previewFileEntry?.name }}</span>
-        <div class="preview-header-actions">
-          <button class="preview-close-btn" @click="downloadFromPreview" :disabled="previewLoading" title="Download">
-            <i class="bi bi-download"></i>
-          </button>
-          <button
-            v-if="!previewFullscreen"
-            class="preview-close-btn"
-            :class="{ 'preview-action-active': previewTheater }"
-            @click="togglePreviewTheater"
-            :title="previewTheater ? 'Exit theater mode' : 'Theater mode'"
-          >
-            <i class="bi bi-aspect-ratio"></i>
-          </button>
-          <button class="preview-close-btn" @click="togglePreviewFullscreen" :title="previewFullscreen ? 'Exit full screen' : 'Full screen'">
-            <i class="bi" :class="previewFullscreen ? 'bi-arrows-angle-contract' : 'bi-arrows-angle-expand'"></i>
-          </button>
-          <button class="preview-close-btn" @click="closePreview" title="Close">
-            <i class="bi bi-x-lg"></i>
-          </button>
-        </div>
-      </div>
-
-      <div class="preview-body" ref="previewBodyEl">
-        <!-- Loading state -->
-        <div v-if="previewLoading" class="preview-state">
-          <div class="spinner-border mb-3" role="status">
-            <span class="visually-hidden">Loading…</span>
-          </div>
-          <p v-if="previewExpectedBytes > 0" class="preview-progress-text">
-            {{ formatSize(previewReceivedBytes) }} / {{ formatSize(previewExpectedBytes) }}
-          </p>
-          <p v-else class="preview-progress-text">Loading…</p>
-        </div>
-
-        <!-- Error state -->
-        <div v-else-if="previewError" class="preview-state">
-          <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
-          <p class="mb-0">{{ previewError }}</p>
-        </div>
-
-        <!-- Image -->
-        <div v-else-if="previewType === 'image' && previewBlobUrl" class="preview-image-wrap">
-          <img :src="previewBlobUrl" :alt="previewFileEntry?.name" class="preview-image" />
-        </div>
-
-        <!-- Audio -->
-        <div v-else-if="previewType === 'audio' && previewBlobUrl" class="preview-audio-wrap">
-          <div class="audio-icon"><i class="bi bi-music-note-beamed"></i></div>
-          <p class="audio-name">{{ previewFileEntry?.name }}</p>
-          <audio :src="previewBlobUrl" controls class="preview-audio" @error="handleMediaError" />
-        </div>
-
-        <!-- Video -->
-        <div v-else-if="previewType === 'video' && previewBlobUrl" class="preview-video-wrap">
-          <video :src="previewBlobUrl" controls class="preview-video" @error="handleMediaError" />
-        </div>
-
-        <!-- PDF -->
-        <div v-else-if="previewType === 'pdf' && previewBlobUrl" class="preview-pdf-wrap">
-          <iframe :src="previewBlobUrl" class="preview-pdf" />
-        </div>
-
-        <!-- Text -->
-        <div v-else-if="previewType === 'text'" class="preview-text-wrap">
-          <pre class="preview-text">{{ previewTextContent }}</pre>
-        </div>
-      </div>
-    </div>
-  </div>
+  <FilePreviewModal
+    v-if="previewEntry && session"
+    :session="session"
+    :entry="previewEntry"
+    @close="previewEntry = null"
+  />
 
   <Transition name="dl-toast">
     <div v-if="downloadProgress" class="dl-toast">
@@ -3048,116 +2698,8 @@ onUnmounted(() => {
 }
 
 /* ── Preview modal ── */
-.preview-overlay {
-  align-items: center;
-  padding: 1rem;
-  transition: padding 0.2s ease;
-}
-
-.preview-overlay:has(.preview-dialog--theater) {
-  padding: 0;
-}
-
-.preview-dialog {
-  background: #fff;
-  border-radius: 12px;
-  width: 100%;
-  max-width: 960px;
-  display: flex;
-  flex-direction: column;
-  height: 85vh;
-  max-height: 90vh;
-  animation: dialog-pop 0.18s ease;
-  overflow: hidden;
-  transition: height 0.2s ease, max-height 0.2s ease, border-radius 0.2s ease;
-}
-
-.preview-dialog--theater {
-  height: 100vh;
-  max-height: 100vh;
-  max-width: 100vw;
-  border-radius: 0;
-}
-
-/* Native browser fullscreen (Fullscreen API) */
-.preview-dialog:fullscreen {
-  width: 100vw;
-  height: 100vh;
-  max-width: 100vw;
-  max-height: 100vh;
-  border-radius: 0;
-  background: #0d0d0d;
-}
-
-.preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.3rem 1rem;
-  border-bottom: 1px solid #e2e8f0;
-  gap: 1rem;
-  flex-shrink: 0;
-  transition: background 0.2s ease, border-color 0.2s ease;
-}
-
-.preview-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #21313f;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  transition: color 0.2s ease;
-}
-
-/* In native fullscreen, overlay the header on top of the content instead of
-   pushing it down. */
-.preview-dialog:fullscreen .preview-header {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 1;
-  border-bottom: none;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.6), transparent);
-}
-
-.preview-dialog:fullscreen .preview-title {
-  color: #fff;
-}
-
-.preview-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-shrink: 0;
-}
-
-.preview-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.45rem 0.9rem;
-  border-radius: 999px;
-  border: 0;
-  background: #2c2e33;
-  color: #fff;
-  font-size: 0.82rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.preview-action-btn:hover:not(:disabled) {
-  background: #1a1b1e;
-}
-
-.preview-action-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
+/* Video/audio/image/pdf/text preview now lives entirely in FilePreviewModal.vue;
+   .preview-close-btn is kept here since the properties modal reuses it. */
 .preview-close-btn {
   width: 36px;
   height: 36px;
@@ -3176,166 +2718,6 @@ onUnmounted(() => {
 .preview-close-btn:hover {
   background: #e2e8f0;
   color: #0f172a;
-}
-
-.preview-action-active {
-  background: #dbeafe;
-  color: #2563eb;
-}
-
-.preview-action-active:hover {
-  background: #bfdbfe;
-  color: #1d4ed8;
-}
-
-.preview-dialog:fullscreen .preview-close-btn {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-}
-
-.preview-dialog:fullscreen .preview-close-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-  color: #fff;
-}
-
-.preview-dialog:fullscreen .preview-action-active {
-  background: rgba(96, 165, 250, 0.35);
-  color: #fff;
-}
-
-.preview-dialog:fullscreen .preview-action-active:hover {
-  background: rgba(96, 165, 250, 0.5);
-  color: #fff;
-}
-
-.preview-body {
-  flex: 1;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.preview-state {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  text-align: center;
-  padding: 2rem;
-  color: #617182;
-  min-height: 220px;
-}
-
-.preview-progress-text {
-  font-size: 0.85rem;
-  color: #94a3b8;
-  margin: 0;
-}
-
-.preview-image-wrap {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  background: #0d0d0d;
-  min-height: 300px;
-}
-
-.preview-image {
-  max-width: 100%;
-  max-height: 72vh;
-  object-fit: contain;
-  border-radius: 6px;
-}
-
-.preview-audio-wrap {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 1.25rem;
-  padding: 3rem 2rem;
-}
-
-.audio-icon {
-  font-size: 4rem;
-  color: #94a3b8;
-  line-height: 1;
-}
-
-.audio-name {
-  font-weight: 600;
-  color: #21313f;
-  text-align: center;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.preview-audio {
-  width: 100%;
-  max-width: 420px;
-}
-
-.preview-video-wrap {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #0d0d0d;
-  min-height: 300px;
-}
-
-.preview-video {
-  width: 100%;
-  max-width: 100%;
-  max-height: 72vh;
-}
-
-.preview-dialog--theater .preview-video-wrap,
-.preview-dialog:fullscreen .preview-video-wrap {
-  overflow: hidden;
-}
-
-.preview-dialog--theater .preview-video,
-.preview-dialog:fullscreen .preview-video {
-  max-height: 100%;
-  height: 100%;
-  width: 100%;
-  object-fit: contain;
-}
-
-.preview-pdf-wrap {
-  flex: 1;
-  display: flex;
-  min-height: 60vh;
-}
-
-.preview-pdf {
-  width: 100%;
-  height: 100%;
-  min-height: 60vh;
-  border: 0;
-}
-
-.preview-text-wrap {
-  flex: 1;
-  overflow: auto;
-  background: #272822;
-  padding: 1.25rem;
-}
-
-.preview-text {
-  margin: 0;
-  font-size: 0.82rem;
-  line-height: 1.65;
-  color: #f8f8f2;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 
 /* ── Desktop grid view (≥ 768px) ── */

@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { type WampSession } from '../services/wamp'
 import { authService } from '../services/authService'
+import { registerWebRTCSession } from '../services/rtcRegistry'
 import { SecureStorage } from '../services/storageService'
 import { generateDeviceID, generateKeys } from '../utils/crypto'
 import { type User } from '../types'
@@ -205,7 +206,13 @@ export const useAuthStore = defineStore('auth', () => {
     const creds = await getLoggedInUserCreds()
     if (!creds) return false
 
-    return await authService.shellWebRTCDesktop(creds.authId, creds.privateKey, realm)
+    const [webrtcSession, webrtc] = await authService.shellWebRTCDesktop(
+      creds.authId,
+      creds.privateKey,
+      realm,
+    )
+    registerWebRTCSession(webrtcSession, webrtc)
+    return webrtcSession
   }
 
   async function shell(realm: string) {
