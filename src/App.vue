@@ -1,15 +1,38 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, defineAsyncComponent } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from './stores/auth'
 import { useMachinesStore } from './stores/machines'
+import { useDesktopSessionsStore } from './stores/desktopSessions'
+import { useSessionCacheStore } from './stores/sessionCache'
 import { openLauncher } from './router/navigation'
+
+const DesktopSessionHost = defineAsyncComponent(() => import('./components/DesktopSessionHost.vue'))
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const machinesStore = useMachinesStore()
+const desktopSessionsStore = useDesktopSessionsStore()
+const sessionCacheStore = useSessionCacheStore()
+
+const activeRealm = computed(() =>
+  route.name === 'desktop-launcher' ? (route.params.realm as string) : null,
+)
+
+const renderedRealms = computed(() => {
+  const set = new Set(desktopSessionsStore.knownRealms)
+  if (activeRealm.value) set.add(activeRealm.value)
+  return [...set].filter(
+    (r) => r === activeRealm.value || desktopSessionsStore.hasOpenWindows(r),
+  )
+})
+
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (!desktopSessionsStore.anyOpenWindowsAnywhere() && !sessionCacheStore.isAnyActive()) return
+  e.preventDefault()
+}
 
 const sidebarCollapsed = ref(false)
 const mobileOpen = ref(false)
@@ -82,6 +105,8 @@ watch(
 )
 
 onMounted(async () => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
+
   try {
     const success = await authStore.autoLogin()
     if (success) {
@@ -99,6 +124,10 @@ onMounted(async () => {
       router.push('/login')
     }
   }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 </script>
 
@@ -241,6 +270,13 @@ onMounted(async () => {
       :class="{ 'has-topbar': !route.meta.hideNavbar && authStore.isAuthenticated }"
     >
       <RouterView />
+      <DesktopSessionHost
+        v-for="r in renderedRealms"
+        :key="r"
+        :realm="r"
+        :active="r === activeRealm"
+        v-show="r === activeRealm"
+      />
     </main>
 
   </div>
