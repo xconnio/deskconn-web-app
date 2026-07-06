@@ -32,41 +32,6 @@ export function getMimeType(name: string): string {
   return m[ext] || 'application/octet-stream'
 }
 
-// Returns the first supported MSE MIME+codec string for the file, used for both
-// MediaSource.isTypeSupported and addSourceBuffer. High-profile variants are tried
-// first so the declared codec matches what real-world videos actually contain.
-export function getMSEMimeType(name: string): string | null {
-  if (!('MediaSource' in window)) return null
-  const ext = name.toLowerCase().split('.').pop() || ''
-
-  const candidates: Record<string, string[]> = {
-    // MP4/MOV are intentionally excluded from MSE: browsers vary in how strictly they
-    // validate the declared audio codec against the actual stream, and we can't know
-    // the audio codec before reading the file. All browsers play MP4/MOV reliably via
-    // the full-buffer blob URL path using their native decoder.
-    webm: [
-      'video/webm; codecs="vp9,opus"',
-      'video/webm; codecs="vp8,vorbis"',
-      'video/webm; codecs="vp9"',
-    ],
-    ogv: [
-      'video/ogg; codecs="theora,vorbis"',
-      'video/ogg; codecs="theora"',
-      'video/ogg',
-    ],
-    mp3:  ['audio/mpeg'],
-    ogg:  ['audio/ogg; codecs=vorbis', 'audio/ogg; codecs=opus', 'audio/ogg'],
-    opus: ['audio/ogg; codecs=opus'],
-    aac:  ['audio/mp4; codecs="mp4a.40.2"'],
-    m4a:  ['audio/mp4; codecs="mp4a.40.2"'],
-  }
-
-  for (const mime of candidates[ext] ?? []) {
-    if (MediaSource.isTypeSupported(mime)) return mime
-  }
-  return null
-}
-
 export function isFirefoxBrowser(): boolean {
   return /firefox/i.test(navigator.userAgent)
 }
