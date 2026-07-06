@@ -64,10 +64,22 @@ export function useWindowManager() {
     focusedId.value = top?.id ?? null
   }
 
-  function openWindow(options: OpenWindowOptions): string {
+  function openWindow(options: OpenWindowOptions, container?: { width: number; height: number }): string {
     const id = `win-${nextId++}`
     const offset = (cascadeIndex % CASCADE_LIMIT) * CASCADE_STEP
     cascadeIndex++
+
+    const width = options.width ?? DEFAULT_WIDTH
+    const height = options.height ?? DEFAULT_HEIGHT
+    let x = 24 + offset
+    let y = 24 + offset
+
+    // Keep the cascade from placing a new window's bottom edge behind the
+    // taskbar — container excludes the taskbar's height (see caller).
+    if (container) {
+      x = Math.max(0, Math.min(x, container.width - width))
+      y = Math.max(0, Math.min(y, container.height - height))
+    }
 
     const win: AppWindow = {
       id,
@@ -76,10 +88,10 @@ export function useWindowManager() {
       icon: options.icon,
       iconColor: options.iconColor,
       iconBg: options.iconBg,
-      x: 24 + offset,
-      y: 24 + offset,
-      width: options.width ?? DEFAULT_WIDTH,
-      height: options.height ?? DEFAULT_HEIGHT,
+      x,
+      y,
+      width,
+      height,
       zIndex: ++nextZ,
       minimized: false,
       maximized: false,
