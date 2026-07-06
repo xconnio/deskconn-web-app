@@ -78,6 +78,7 @@ interface TabState {
   clientPublicKey: Uint8Array | null
   pendingInputs: Uint8Array[]
   isFirstSizeSent: boolean
+  prevShellId: string | null
 }
 
 const tabs = shallowRef<TabState[]>([])
@@ -107,7 +108,7 @@ const terminalPanelStyle = computed(() =>
     : undefined,
 )
 
-function createTabState(): TabState {
+function createTabState(prevShellId: string | null): TabState {
   const used = new Set(tabs.value.map(t => t.num))
   let n = 1
   while (used.has(n)) n++
@@ -127,6 +128,7 @@ function createTabState(): TabState {
     clientPublicKey: null,
     pendingInputs: [],
     isFirstSizeSent: false,
+    prevShellId,
   }
 }
 
@@ -136,6 +138,13 @@ function registerTermEl(id: number, el: unknown) {
   } else {
     termElMap.delete(id)
   }
+}
+
+// The server only echoes a shell ID for the 2nd+ shell; the 1st shell's ID is the session ID.
+function effectiveShellId(tab: TabState): string | null {
+  if (tab.shellId) return tab.shellId
+  const sessionID = tab.session?.details.sessionID
+  return sessionID !== undefined ? String(sessionID) : null
 }
 
 function pushEncrypted(tab: TabState, bytes: Uint8Array) {
@@ -167,7 +176,8 @@ function sendSize(tab: TabState) {
     first.set(sizeBytes, 0)
     first.set(keyMarker, sizeBytes.length)
     first.set(tab.clientPublicKey!, sizeBytes.length + keyMarker.length)
-    tab.channel.push(new Progress([first], {}, { progress: true }))
+    const kwargs = tab.prevShellId ? { 'prev-shell': tab.prevShellId } : {}
+    tab.channel.push(new Progress([first], kwargs, { progress: true }))
     return
   }
 
@@ -372,7 +382,7 @@ async function initTab(tab: TabState) {
 }
 
 async function addTab() {
-  const tab = createTabState()
+  const tab = createTabState(activeTab.value ? effectiveShellId(activeTab.value) : null)
   tabs.value = [...tabs.value, tab]
   activeTabId.value = tab.id
   await nextTick()
