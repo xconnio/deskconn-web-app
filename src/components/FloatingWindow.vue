@@ -146,7 +146,7 @@ function startResize(e: PointerEvent, dir: string) {
   <div
     ref="rootEl"
     class="floating-window"
-    :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized }"
+    :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized, 'is-maximized': maximized }"
     :style="mobile ? { zIndex } : {
       left: x + 'px',
       top: y + 'px',
@@ -221,6 +221,10 @@ function startResize(e: PointerEvent, dir: string) {
   height: 100% !important;
   border-radius: 0;
   border: none;
+}
+
+.floating-window.is-maximized {
+  border-radius: 0;
 }
 
 .fwin-titlebar {
