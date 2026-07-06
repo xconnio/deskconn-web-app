@@ -156,7 +156,7 @@ function launchApp(app: AppDef, initialPath?: string) {
     width: app.width,
     height: app.height,
     props: initialPath ? { initialPath } : {},
-  })
+  }, maximizedContainerSize())
 }
 
 const appComponents: Record<string, Component> = {
@@ -206,10 +206,15 @@ function onOpenFiles(path: string) {
   launchApp(filesApp, path)
 }
 
+const taskbarHeight = ref(0)
+
+function measureTaskbarHeight() {
+  taskbarHeight.value = launcherBodyRef.value?.querySelector<HTMLElement>('.window-taskbar')?.offsetHeight ?? 0
+}
+
 function maximizedContainerSize() {
   const el = launcherBodyRef.value
-  const taskbarHeight = el?.querySelector<HTMLElement>('.window-taskbar')?.offsetHeight ?? 0
-  return { width: el?.clientWidth ?? 0, height: (el?.clientHeight ?? 0) - taskbarHeight }
+  return { width: el?.clientWidth ?? 0, height: (el?.clientHeight ?? 0) - taskbarHeight.value }
 }
 
 function onToggleMaximize(id: string) {
@@ -289,9 +294,11 @@ onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateIsMobile)
   fetchWallpaper()
+  measureTaskbarHeight()
 
   if (launcherBodyRef.value && typeof ResizeObserver !== 'undefined') {
     launcherBodyResizeObserver = new ResizeObserver(() => {
+      measureTaskbarHeight()
       syncMaximizedBounds(maximizedContainerSize())
     })
     launcherBodyResizeObserver.observe(launcherBodyRef.value)
@@ -349,6 +356,7 @@ onUnmounted(() => {
           :maximized="win.maximized"
           :focused="focusedId === win.id"
           :mobile="isMobile"
+          :bottom-inset="taskbarHeight"
           @close="closeWindow(win.id)"
           @focus="focusWindow(win.id)"
           @minimize="minimizeWindow(win.id)"

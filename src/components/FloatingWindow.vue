@@ -17,6 +17,7 @@ const props = defineProps<{
   maximized: boolean
   focused: boolean
   mobile: boolean
+  bottomInset?: number
 }>()
 
 const emit = defineEmits<{
@@ -62,7 +63,7 @@ function startDrag(e: PointerEvent) {
 
     if (container) {
       const maxX = Math.max(0, container.clientWidth - props.width)
-      const maxY = Math.max(0, container.clientHeight - props.height)
+      const maxY = Math.max(0, container.clientHeight - (props.bottomInset ?? 0) - props.height)
       x = Math.min(Math.max(x, 0), maxX)
       y = Math.min(Math.max(y, 0), maxY)
     }
@@ -107,7 +108,7 @@ function startResize(e: PointerEvent, dir: string) {
     }
     if (dir.includes('s')) {
       let height = Math.max(MIN_HEIGHT, originH + dy)
-      if (container) height = Math.min(height, container.clientHeight - originY)
+      if (container) height = Math.min(height, container.clientHeight - (props.bottomInset ?? 0) - originY)
       bounds.height = height
     }
     if (dir.includes('w')) {
