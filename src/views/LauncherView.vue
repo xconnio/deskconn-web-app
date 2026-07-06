@@ -194,6 +194,7 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
         realm: realm.value,
         desktopName: desktopName.value,
         embedded: true,
+        focused,
       }
     case 'resource-monitor':
       return {

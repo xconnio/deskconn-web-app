@@ -10,6 +10,11 @@ const emit = defineEmits<{
   activate: [id: string]
   close: [id: string]
 }>()
+
+function onChipMousedown(id: string, e: MouseEvent) {
+  if ((e.target as HTMLElement).closest('.chip-close')) return
+  emit('activate', id)
+}
 </script>
 
 <template>
@@ -19,7 +24,7 @@ const emit = defineEmits<{
       :key="win.id"
       class="taskbar-chip"
       :class="{ 'chip-active': !win.minimized && focusedId === win.id }"
-      @click="emit('activate', win.id)"
+      @mousedown.prevent="onChipMousedown(win.id, $event)"
     >
       <span class="chip-icon" :style="{ color: win.iconColor, background: win.iconBg }">
         <i class="bi" :class="win.icon"></i>

@@ -13,7 +13,7 @@ import {
 } from '@/utils/encryption'
 import { DESKTOP_OFFLINE_MESSAGE, isDataChannelClosedError, isNoSuchProcedureException } from '@/utils/desktopError'
 
-const props = defineProps<{ realm: string; desktopName: string; embedded?: boolean }>()
+const props = defineProps<{ realm: string; desktopName: string; embedded?: boolean; focused?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const sessionCacheStore = useSessionCacheStore()
@@ -593,6 +593,11 @@ watch(() => tabs.value.length, async () => {
   await nextTick()
   requestAnimationFrame(updateTabsScroll)
 })
+
+// Window focus doesn't move DOM focus, so refocus xterm ourselves.
+watch(() => props.focused, (focused) => {
+  if (focused) activeTab.value?.term?.focus()
+}, { flush: 'post' })
 </script>
 
 <template>
