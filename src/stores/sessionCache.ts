@@ -32,5 +32,9 @@ export const useSessionCacheStore = defineStore('sessionCache', () => {
     }
   }
 
-  return { acquire, invalidateAll }
+  function isActive(realm: string): boolean {
+    return cache.get(realm)?.isConnected() ?? false
+  }
+
+  return { acquire, invalidateAll, isActive }
 })

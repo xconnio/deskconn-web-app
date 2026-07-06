@@ -286,14 +286,25 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  const hasSession = sessionCacheStore.isActive(realm.value)
+  const hasOpenApps = windows.value.length > 0
+  if (!hasSession && !hasOpenApps) return
+
+  e.preventDefault()
+  e.returnValue = ''
+}
+
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateIsMobile)
+  window.addEventListener('beforeunload', handleBeforeUnload)
   fetchWallpaper()
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', updateIsMobile)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   if (activeWallpaperObjUrl) URL.revokeObjectURL(activeWallpaperObjUrl)
 })
 </script>
