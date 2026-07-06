@@ -165,13 +165,13 @@ function startResize(e: PointerEvent, dir: string) {
       </span>
       <span class="fwin-title">{{ title }}</span>
       <div class="fwin-controls">
-        <button class="fwin-btn" title="Minimize" @click="$emit('minimize')">
+        <button class="fwin-btn" title="Minimize" @mousedown.prevent @click="$emit('minimize')">
           <i class="bi bi-dash-lg"></i>
         </button>
-        <button v-if="!mobile" class="fwin-btn" :title="maximized ? 'Restore' : 'Maximize'" @click="$emit('toggle-maximize')">
+        <button v-if="!mobile" class="fwin-btn" :title="maximized ? 'Restore' : 'Maximize'" @mousedown.prevent @click="$emit('toggle-maximize')">
           <i class="bi" :class="maximized ? 'bi-copy' : 'bi-square'"></i>
         </button>
-        <button class="fwin-btn fwin-btn-close" title="Close" @click="$emit('close')">
+        <button class="fwin-btn fwin-btn-close" title="Close" @mousedown.prevent @click="$emit('close')">
           <i class="bi bi-x-lg"></i>
         </button>
       </div>

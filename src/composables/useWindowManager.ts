@@ -141,6 +141,19 @@ export function useWindowManager() {
     Object.assign(win, bounds)
   }
 
+  // Keeps maximized windows filling the container when it resizes (e.g. the
+  // sidebar collapsing/expanding) — toggleMaximize only sizes them once, at the
+  // moment they're maximized.
+  function syncMaximizedBounds(container: { width: number; height: number }) {
+    for (const win of windows.value) {
+      if (!win.maximized) continue
+      win.x = 0
+      win.y = 0
+      win.width = container.width
+      win.height = container.height
+    }
+  }
+
   return {
     windows,
     focusedId,
@@ -151,5 +164,6 @@ export function useWindowManager() {
     restoreWindow,
     toggleMaximize,
     updateBounds,
+    syncMaximizedBounds,
   }
 }
