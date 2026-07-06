@@ -39,9 +39,12 @@ function restoreSelection() {
 }
 
 function startDrag(e: PointerEvent) {
-  if (props.mobile || props.maximized) return
   const target = e.target as HTMLElement
   if (target.closest('.fwin-controls')) return
+  // Titlebar isn't a focusable element, but the browser's default pointerdown
+  // action still shifts focus to it (blurring whatever had it, e.g. the terminal).
+  e.preventDefault()
+  if (props.mobile || props.maximized) return
 
   emit('focus')
 
