@@ -381,8 +381,12 @@ async function addTab() {
   await initTab(tab)
 }
 
-async function switchTab(id: number) {
-  if (activeTabId.value === id) return
+async function switchTab(id: number, e?: MouseEvent) {
+  if ((e?.target as HTMLElement | undefined)?.closest('.tab-close')) return
+  if (activeTabId.value === id) {
+    activeTab.value?.term?.focus()
+    return
+  }
   activeTabId.value = id
   await nextTick()
   const tab = tabs.value.find(t => t.id === id)
@@ -596,7 +600,7 @@ watch(() => tabs.value.length, async () => {
           :key="tab.id"
           class="tab-item"
           :class="{ 'tab-active': tab.id === activeTabId }"
-          @click="switchTab(tab.id)"
+          @mousedown.prevent="switchTab(tab.id, $event)"
         >
           <i class="bi bi-terminal-fill tab-icon"></i>
           <span class="tab-label">{{ tab.label }}</span>
