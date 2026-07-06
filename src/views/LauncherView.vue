@@ -39,6 +39,7 @@ const {
   restoreWindow,
   toggleMaximize,
   updateBounds,
+  syncMaximizedBounds,
 } = useWindowManager()
 
 const launcherBodyRef = ref<HTMLElement | null>(null)
@@ -215,9 +216,14 @@ function onOpenFiles(path: string) {
   launchApp(filesApp, path)
 }
 
-function onToggleMaximize(id: string) {
+function maximizedContainerSize() {
   const el = launcherBodyRef.value
-  toggleMaximize(id, { width: el?.clientWidth ?? 0, height: el?.clientHeight ?? 0 })
+  const taskbarHeight = el?.querySelector<HTMLElement>('.window-taskbar')?.offsetHeight ?? 0
+  return { width: el?.clientWidth ?? 0, height: (el?.clientHeight ?? 0) - taskbarHeight }
+}
+
+function onToggleMaximize(id: string) {
+  toggleMaximize(id, maximizedContainerSize())
 }
 
 function onTaskbarActivate(id: string) {
@@ -295,16 +301,26 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
   e.returnValue = ''
 }
 
+let launcherBodyResizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateIsMobile)
   window.addEventListener('beforeunload', handleBeforeUnload)
   fetchWallpaper()
+
+  if (launcherBodyRef.value && typeof ResizeObserver !== 'undefined') {
+    launcherBodyResizeObserver = new ResizeObserver(() => {
+      syncMaximizedBounds(maximizedContainerSize())
+    })
+    launcherBodyResizeObserver.observe(launcherBodyRef.value)
+  }
 })
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', updateIsMobile)
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  launcherBodyResizeObserver?.disconnect()
   if (activeWallpaperObjUrl) URL.revokeObjectURL(activeWallpaperObjUrl)
 })
 </script>
