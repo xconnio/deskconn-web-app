@@ -17,7 +17,9 @@ const props = defineProps<{
   maximized: boolean
   focused: boolean
   mobile: boolean
-  bottomInset?: number
+  insetLeft?: number
+  insetRight?: number
+  insetBottom?: number
 }>()
 
 const emit = defineEmits<{
@@ -62,9 +64,10 @@ function startDrag(e: PointerEvent) {
     let y = originY + (ev.clientY - startY)
 
     if (container) {
-      const maxX = Math.max(0, container.clientWidth - props.width)
-      const maxY = Math.max(0, container.clientHeight - (props.bottomInset ?? 0) - props.height)
-      x = Math.min(Math.max(x, 0), maxX)
+      const minX = props.insetLeft ?? 0
+      const maxX = Math.max(minX, container.clientWidth - (props.insetRight ?? 0) - props.width)
+      const maxY = Math.max(0, container.clientHeight - (props.insetBottom ?? 0) - props.height)
+      x = Math.min(Math.max(x, minX), maxX)
       y = Math.min(Math.max(y, 0), maxY)
     }
 
@@ -103,20 +106,21 @@ function startResize(e: PointerEvent, dir: string) {
 
     if (dir.includes('e')) {
       let width = Math.max(MIN_WIDTH, originW + dx)
-      if (container) width = Math.min(width, container.clientWidth - originX)
+      if (container) width = Math.min(width, container.clientWidth - (props.insetRight ?? 0) - originX)
       bounds.width = width
     }
     if (dir.includes('s')) {
       let height = Math.max(MIN_HEIGHT, originH + dy)
-      if (container) height = Math.min(height, container.clientHeight - (props.bottomInset ?? 0) - originY)
+      if (container) height = Math.min(height, container.clientHeight - (props.insetBottom ?? 0) - originY)
       bounds.height = height
     }
     if (dir.includes('w')) {
       let width = Math.max(MIN_WIDTH, originW - dx)
       let x = originX + (originW - width)
-      if (x < 0) {
-        x = 0
-        width = originX + originW
+      const minX = props.insetLeft ?? 0
+      if (x < minX) {
+        x = minX
+        width = originX + originW - minX
       }
       bounds.width = width
       bounds.x = x
@@ -201,7 +205,7 @@ function startResize(e: PointerEvent, dir: string) {
   display: flex;
   flex-direction: column;
   background: #fff;
-  border-radius: 10px;
+  border-radius: 0;
   border: 1px solid #e2e8f0;
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
   overflow: hidden;
@@ -223,12 +227,7 @@ function startResize(e: PointerEvent, dir: string) {
   inset: 0;
   width: 100% !important;
   height: 100% !important;
-  border-radius: 0;
   border: none;
-}
-
-.floating-window.is-maximized {
-  border-radius: 0;
 }
 
 .fwin-titlebar {

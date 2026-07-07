@@ -36,6 +36,13 @@ export interface OpenWindowOptions {
   height?: number
 }
 
+export interface ContainerRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 const DEFAULT_WIDTH = 720
 const DEFAULT_HEIGHT = 480
 const CASCADE_STEP = 28
@@ -64,21 +71,23 @@ export function useWindowManager() {
     focusedId.value = top?.id ?? null
   }
 
-  function openWindow(options: OpenWindowOptions, container?: { width: number; height: number }): string {
+  function openWindow(options: OpenWindowOptions, container?: ContainerRect): string {
     const id = `win-${nextId++}`
     const offset = (cascadeIndex % CASCADE_LIMIT) * CASCADE_STEP
     cascadeIndex++
 
     const width = options.width ?? DEFAULT_WIDTH
     const height = options.height ?? DEFAULT_HEIGHT
-    let x = 24 + offset
-    let y = 24 + offset
+    const originX = container?.x ?? 0
+    const originY = container?.y ?? 0
+    let x = originX + 24 + offset
+    let y = originY + 24 + offset
 
     // Keep the cascade from placing a new window's bottom edge behind the
-    // taskbar — container excludes the taskbar's height (see caller).
+    // dock — container excludes the dock's thickness (see caller).
     if (container) {
-      x = Math.max(0, Math.min(x, container.width - width))
-      y = Math.max(0, Math.min(y, container.height - height))
+      x = Math.max(originX, Math.min(x, originX + container.width - width))
+      y = Math.max(originY, Math.min(y, originY + container.height - height))
     }
 
     const win: AppWindow = {
@@ -122,7 +131,7 @@ export function useWindowManager() {
     focusWindow(id)
   }
 
-  function toggleMaximize(id: string, container: { width: number; height: number }) {
+  function toggleMaximize(id: string, container: ContainerRect) {
     const win = windows.value.find((w) => w.id === id)
     if (!win) return
 
@@ -137,8 +146,8 @@ export function useWindowManager() {
       win.prevBounds = undefined
     } else {
       win.prevBounds = { x: win.x, y: win.y, width: win.width, height: win.height }
-      win.x = 0
-      win.y = 0
+      win.x = container.x
+      win.y = container.y
       win.width = container.width
       win.height = container.height
       win.maximized = true
@@ -156,11 +165,11 @@ export function useWindowManager() {
   // Keeps maximized windows filling the container when it resizes (e.g. the
   // sidebar collapsing/expanding) — toggleMaximize only sizes them once, at the
   // moment they're maximized.
-  function syncMaximizedBounds(container: { width: number; height: number }) {
+  function syncMaximizedBounds(container: ContainerRect) {
     for (const win of windows.value) {
       if (!win.maximized) continue
-      win.x = 0
-      win.y = 0
+      win.x = container.x
+      win.y = container.y
       win.width = container.width
       win.height = container.height
     }

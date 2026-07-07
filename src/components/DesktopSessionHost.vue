@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch, type Component } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { useMachinesStore } from '@/stores/machines'
@@ -10,8 +10,9 @@ import EmbeddedDesktopFiles from '@/components/EmbeddedDesktopFiles.vue'
 import EmbeddedIndexedFiles from '@/components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 import ResourceMonitor from '@/components/ResourceMonitor.vue'
+import DesktopSettingsPanel from '@/components/DesktopSettingsPanel.vue'
 import FloatingWindow from '@/components/FloatingWindow.vue'
-import WindowTaskbar from '@/components/WindowTaskbar.vue'
+import AppDock from '@/components/AppDock.vue'
 import { loadCachedWallpaper, storeWallpaper } from '@/composables/useWallpaperCache'
 
 const props = defineProps<{ realm: string; active: boolean }>()
@@ -40,8 +41,6 @@ const {
 } = desktopSessionsStore.getOrCreate(props.realm)
 
 const launcherBodyRef = ref<HTMLElement | null>(null)
-const launcherGridRef = ref<HTMLElement | null>(null)
-const selectedAppId = ref<string | null>(null)
 const wallpaperUrl = ref<string | null>(null)
 let activeWallpaperObjUrl: string | null = null
 
@@ -82,10 +81,44 @@ async function fetchWallpaper() {
   }
 }
 
+// Blurs the desktop until the backend session is actually up — independent
+// of the wallpaper fetch above, which is opt-in via a setting and shouldn't
+// gate this.
+const isConnecting = ref(true)
+
+// A WAMP session can connect fine even when the machine itself is offline;
+// pinging deskconnd is what actually confirms it's reachable.
+const isOffline = ref(false)
+
+async function ensureConnected() {
+  try {
+    const session = await sessionCacheStore.acquire(props.realm)
+    if (!session) {
+      isOffline.value = true
+      return
+    }
+    await session.call('io.xconn.deskconn.deskconnd.ping')
+  } catch {
+    isOffline.value = true
+  } finally {
+    isConnecting.value = false
+  }
+
+  // Otherwise the stale session gets reused next time, stuck on whatever
+  // fallback transport it originally connected with.
+  if (isOffline.value) {
+    sessionCacheStore.invalidate(props.realm)
+  }
+}
+
 const isMobile = ref(window.innerWidth < 768)
 function updateIsMobile() {
   isMobile.value = window.innerWidth < 768
 }
+
+// Vertical docks are awkward on narrow screens — always use the bottom dock there.
+// Position is per-machine (see stores/settings.ts), set via the in-dock Settings app.
+const dockPosition = computed(() => (isMobile.value ? 'bottom' : settingsStore.getDockPosition(props.realm)))
 
 interface AppDef {
   id: string
@@ -144,6 +177,13 @@ const apps: AppDef[] = [
     width: 480,
     height: 500,
   },
+  {
+    id: 'settings',
+    label: 'Settings',
+    icon: 'bi-gear',
+    iconColor: '#475569',
+    iconBg: '#e2e8f0',
+  },
 ]
 
 function launchApp(app: AppDef, initialPath?: string) {
@@ -166,6 +206,7 @@ const appComponents: Record<string, Component> = {
   videos: EmbeddedIndexedFiles,
   documents: EmbeddedIndexedFiles,
   'resource-monitor': ResourceMonitor,
+  settings: DesktopSettingsPanel,
 }
 
 function windowProps(win: { id: string; appId: string; props: Record<string, unknown> }) {
@@ -191,6 +232,11 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
         desktopName: desktopName.value,
         focused,
       }
+    case 'settings':
+      return {
+        realm: props.realm,
+        focused,
+      }
     default:
       return {
         realm: props.realm,
@@ -206,22 +252,40 @@ function onOpenFiles(path: string) {
   launchApp(filesApp, path)
 }
 
-const taskbarHeight = ref(0)
+const dockThickness = ref(0)
 
-function measureTaskbarHeight() {
-  taskbarHeight.value = launcherBodyRef.value?.querySelector<HTMLElement>('.window-taskbar')?.offsetHeight ?? 0
+function measureDockThickness() {
+  const dockEl = launcherBodyRef.value?.querySelector<HTMLElement>('.dock')
+  if (!dockEl) {
+    dockThickness.value = 0
+    return
+  }
+  dockThickness.value = dockPosition.value === 'bottom' ? dockEl.offsetHeight : dockEl.offsetWidth
 }
 
 function maximizedContainerSize() {
   const el = launcherBodyRef.value
-  return { width: el?.clientWidth ?? 0, height: (el?.clientHeight ?? 0) - taskbarHeight.value }
+  const cw = el?.clientWidth ?? 0
+  const ch = el?.clientHeight ?? 0
+  switch (dockPosition.value) {
+    case 'left':
+      return { x: dockThickness.value, y: 0, width: cw - dockThickness.value, height: ch }
+    case 'right':
+      return { x: 0, y: 0, width: cw - dockThickness.value, height: ch }
+    default:
+      return { x: 0, y: 0, width: cw, height: ch - dockThickness.value }
+  }
 }
+
+const insetLeft = computed(() => (dockPosition.value === 'left' ? dockThickness.value : 0))
+const insetRight = computed(() => (dockPosition.value === 'right' ? dockThickness.value : 0))
+const insetBottom = computed(() => (dockPosition.value === 'bottom' ? dockThickness.value : 0))
 
 function onToggleMaximize(id: string) {
   toggleMaximize(id, maximizedContainerSize())
 }
 
-function onTaskbarActivate(id: string) {
+function onActivateWindow(id: string) {
   const win = windows.value.find((w) => w.id === id)
   if (!win) return
   if (win.minimized) {
@@ -233,9 +297,10 @@ function onTaskbarActivate(id: string) {
   }
 }
 
-function columnCount(): number {
-  if (!launcherGridRef.value) return 1
-  return window.getComputedStyle(launcherGridRef.value).gridTemplateColumns.split(' ').length
+function handleLaunch(appId: string) {
+  if (isOffline.value) return
+  const app = apps.find((a) => a.id === appId)
+  if (app) launchApp(app)
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -247,40 +312,6 @@ function handleKeydown(e: KeyboardEvent) {
     } else {
       close()
     }
-    return
-  }
-
-  // A focused window owns the keyboard while it's open.
-  if (focusedId.value) return
-
-  const target = e.target as HTMLElement
-  if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
-
-  const idx = apps.findIndex(a => a.id === selectedAppId.value)
-  const cols = columnCount()
-
-  switch (e.key) {
-    case 'ArrowDown':
-      e.preventDefault()
-      selectedAppId.value = apps[Math.min(idx < 0 ? 0 : idx + cols, apps.length - 1)]!.id
-      break
-    case 'ArrowUp':
-      e.preventDefault()
-      selectedAppId.value = apps[Math.max(0, idx < 0 ? apps.length - 1 : idx - cols)]!.id
-      break
-    case 'ArrowRight':
-      e.preventDefault()
-      selectedAppId.value = apps[Math.min(idx < 0 ? 0 : idx + 1, apps.length - 1)]!.id
-      break
-    case 'ArrowLeft':
-      e.preventDefault()
-      selectedAppId.value = apps[Math.max(0, idx < 0 ? 0 : idx - 1)]!.id
-      break
-    case 'Enter': {
-      const app = apps.find(a => a.id === selectedAppId.value)
-      if (app) launchApp(app)
-      break
-    }
   }
 }
 
@@ -288,17 +319,24 @@ watch(() => props.active, (active) => {
   if (active) syncMaximizedBounds(maximizedContainerSize())
 })
 
+watch(dockPosition, async () => {
+  await nextTick()
+  measureDockThickness()
+  syncMaximizedBounds(maximizedContainerSize())
+})
+
 let launcherBodyResizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateIsMobile)
+  ensureConnected()
   fetchWallpaper()
-  measureTaskbarHeight()
+  measureDockThickness()
 
   if (launcherBodyRef.value && typeof ResizeObserver !== 'undefined') {
     launcherBodyResizeObserver = new ResizeObserver(() => {
-      measureTaskbarHeight()
+      measureDockThickness()
       syncMaximizedBounds(maximizedContainerSize())
     })
     launcherBodyResizeObserver.observe(launcherBodyRef.value)
@@ -314,31 +352,17 @@ onUnmounted(() => {
 
 <template>
   <div class="launcher-wrapper fade-in-up">
+    <div v-if="isOffline" class="offline-banner">
+      <i class="bi bi-wifi-off"></i>
+      <span>{{ desktopName }} is offline — apps aren't available right now.</span>
+    </div>
+
     <div
       ref="launcherBodyRef"
       class="launcher-body"
-      :class="{ 'has-wallpaper': !!wallpaperUrl }"
+      :class="{ 'has-wallpaper': !!wallpaperUrl, 'is-connecting': isConnecting }"
       :style="wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}"
     >
-      <div ref="launcherGridRef" class="launcher-grid">
-        <button
-          v-for="app in apps"
-          :key="app.id"
-          class="app-tile"
-          :class="{ 'app-tile-selected': selectedAppId === app.id }"
-          @click="settingsStore.singleClickOpen ? launchApp(app) : (selectedAppId = app.id)"
-          @dblclick="launchApp(app)"
-        >
-          <div
-            class="app-tile-card"
-            :style="{ color: app.iconColor, background: app.iconBg }"
-          >
-            <i class="bi" :class="app.icon"></i>
-          </div>
-          <span class="app-tile-label">{{ app.label }}</span>
-        </button>
-      </div>
-
       <div class="windows-layer">
         <FloatingWindow
           v-for="win in windows"
@@ -356,7 +380,9 @@ onUnmounted(() => {
           :maximized="win.maximized"
           :focused="focusedId === win.id"
           :mobile="isMobile"
-          :bottom-inset="taskbarHeight"
+          :inset-left="insetLeft"
+          :inset-right="insetRight"
+          :inset-bottom="insetBottom"
           @close="closeWindow(win.id)"
           @focus="focusWindow(win.id)"
           @minimize="minimizeWindow(win.id)"
@@ -372,33 +398,61 @@ onUnmounted(() => {
         </FloatingWindow>
       </div>
 
-      <WindowTaskbar
+      <AppDock
+        :realm="realm"
+        :apps="apps"
         :windows="windows"
         :focused-id="focusedId"
-        @activate="onTaskbarActivate"
+        :position="dockPosition"
+        :offline="isOffline"
+        @launch="handleLaunch"
+        @activate="onActivateWindow"
         @close="closeWindow"
+        @exit="close"
       />
+    </div>
+
+    <div v-if="isConnecting" class="connecting-overlay">
+      <div class="connecting-spinner"></div>
+      <p>Connecting to {{ desktopName }}…</p>
     </div>
   </div>
 </template>
 
 <style scoped>
 .launcher-wrapper {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
 }
 
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 1rem;
+  background: #fef3c7;
+  border-bottom: 1px solid #fbbf24;
+  color: #92400e;
+  font-size: 0.8rem;
+  font-weight: 500;
+  flex-shrink: 0;
+  z-index: 60;
+}
+
 .launcher-body {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 1rem 1rem 5rem;
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  transition: filter 0.2s ease;
+}
+
+.launcher-body.is-connecting {
+  filter: blur(6px);
+  pointer-events: none;
 }
 
 .windows-layer {
@@ -412,84 +466,32 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-.launcher-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
-  gap: 0.2rem;
-  width: 100%;
-  align-content: start;
-  padding: 0.35rem;
-}
-
-.app-tile {
+.connecting-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
-  padding: 0.8rem 0.4rem 0.7rem;
-  gap: 0.5rem;
-  border: 1.5px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.13s ease, border-color 0.13s ease;
-}
-
-.app-tile:hover {
-  background: rgba(241, 245, 249, 0.9);
-  border-color: rgba(0, 0, 0, 0.07);
-}
-
-.app-tile-selected {
-  background: #dbeafe;
-  border-color: rgba(59, 130, 246, 0.28);
-}
-
-.has-wallpaper .app-tile:hover {
-  background: rgba(255, 255, 255, 0.25);
-  border-color: rgba(255, 255, 255, 0.4);
-  backdrop-filter: blur(6px);
-}
-
-.has-wallpaper .app-tile-selected {
-  background: rgba(219, 234, 254, 0.45);
-  border-color: rgba(59, 130, 246, 0.5);
-  backdrop-filter: blur(6px);
-}
-
-.app-tile-card {
-  width: 52px;
-  height: 52px;
-  border-radius: 12px;
-  background-size: cover;
-  background-position: center;
-  display: flex;
-  align-items: center;
   justify-content: center;
-  font-size: 1.65rem;
-  flex-shrink: 0;
-}
-
-.app-tile-label {
-  font-size: 0.69rem;
+  gap: 0.75rem;
+  color: #334155;
   font-weight: 600;
-  color: #21313f;
-  text-align: center;
-  white-space: normal;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-height: 1.35;
-  max-width: 100%;
-  word-break: break-word;
+  pointer-events: none;
 }
 
-.has-wallpaper .app-tile-label {
-  color: #fff;
-  text-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.8),
-    0 0 8px rgba(0, 0, 0, 0.6);
+.connecting-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(51, 65, 85, 0.2);
+  border-top-color: #334155;
+  border-radius: 50%;
+  animation: connecting-spin 0.8s linear infinite;
+}
+
+@keyframes connecting-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

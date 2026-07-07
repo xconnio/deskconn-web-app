@@ -103,6 +103,19 @@ const settingsStore = useSettingsStore()
                 </div>
               </div>
             </div>
+
+          </div>
+        </div>
+
+        <div class="card border-0 shadow-sm mt-4">
+          <div class="card-body py-4 d-flex align-items-center justify-content-between">
+            <div>
+              <p class="mb-1 fw-semibold">Access Management</p>
+              <p class="mb-0 text-muted small">Manage who can access your machines</p>
+            </div>
+            <RouterLink to="/access-management" class="btn btn-outline-secondary btn-sm flex-shrink-0">
+              Manage <i class="bi bi-arrow-right"></i>
+            </RouterLink>
           </div>
         </div>
       </div>
