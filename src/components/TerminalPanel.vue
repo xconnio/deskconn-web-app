@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, shallowRef, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { ref, shallowRef, onMounted, onUnmounted, computed, inject, nextTick, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { Progress, Result, Session } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
+import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 import {
   createX25519KeyPair,
   deriveSessionKeys,
@@ -17,6 +18,11 @@ const props = defineProps<{ realm: string; desktopName: string; embedded?: boole
 const emit = defineEmits<{ close: [] }>()
 
 const sessionCacheStore = useSessionCacheStore()
+
+// Absent when there's no FloatingWindow ancestor — the tab bar then renders
+// inline instead of teleporting (see floatingWindowToolbar.ts).
+const toolbarHostRef = inject(floatingWindowToolbarKey)
+const toolbarTarget = computed(() => toolbarHostRef?.value ?? null)
 const panelRef = ref<HTMLDivElement | null>(null)
 const keybarRef = ref<HTMLDivElement | null>(null)
 const tabsListRef = ref<HTMLDivElement | null>(null)
@@ -602,39 +608,40 @@ watch(() => props.focused, (focused) => {
 
 <template>
   <div ref="panelRef" class="terminal-panel" :style="terminalPanelStyle">
-    <div class="tab-bar">
-      <button
-        v-if="tabsScrollMax > 0"
-        class="tab-scroll-btn"
-        :disabled="tabsScrollLeft <= 0"
-        @click="scrollTabsBy(-160)"
-      ><i class="bi bi-chevron-left"></i></button>
-      <div ref="tabsListRef" class="tabs-list" @scroll="updateTabsScroll">
+    <Teleport :to="toolbarTarget ?? 'body'" :disabled="!toolbarTarget">
+      <div class="tab-bar">
         <button
-          v-for="tab in tabs"
-          :key="tab.id"
-          class="tab-item"
-          :class="{ 'tab-active': tab.id === activeTabId }"
-          @mousedown.prevent="switchTab(tab.id, $event)"
-        >
-          <i class="bi bi-terminal-fill tab-icon"></i>
-          <span class="tab-label">{{ tab.label }}</span>
-          <span
-            class="tab-close"
-            role="button"
-            :title="`Close ${tab.label}`"
-            @click.stop="closeTab(tab.id)"
-          >&times;</span>
-        </button>
+          v-if="tabsScrollMax > 0"
+          class="tab-scroll-btn"
+          :disabled="tabsScrollLeft <= 0"
+          @click="scrollTabsBy(-160)"
+        ><i class="bi bi-chevron-left"></i></button>
+        <div ref="tabsListRef" class="tabs-list" @scroll="updateTabsScroll">
+          <button
+            v-for="tab in tabs"
+            :key="tab.id"
+            class="tab-item"
+            :class="{ 'tab-active': tab.id === activeTabId }"
+            @mousedown.prevent="switchTab(tab.id, $event)"
+          >
+            <span class="tab-label">{{ tab.label }}</span>
+            <span
+              class="tab-close"
+              role="button"
+              :title="`Close ${tab.label}`"
+              @click.stop="closeTab(tab.id)"
+            >&times;</span>
+          </button>
+        </div>
+        <button class="tab-add" title="New terminal" @click="addTab">+</button>
+        <button
+          v-if="tabsScrollMax > 0"
+          class="tab-scroll-btn"
+          :disabled="tabsScrollLeft >= tabsScrollMax"
+          @click="scrollTabsBy(160)"
+        ><i class="bi bi-chevron-right"></i></button>
       </div>
-      <button class="tab-add" title="New terminal" @click="addTab">+</button>
-      <button
-        v-if="tabsScrollMax > 0"
-        class="tab-scroll-btn"
-        :disabled="tabsScrollLeft >= tabsScrollMax"
-        @click="scrollTabsBy(160)"
-      ><i class="bi bi-chevron-right"></i></button>
-    </div>
+    </Teleport>
 
     <div
       v-for="tab in tabs"
@@ -804,13 +811,17 @@ watch(() => props.focused, (focused) => {
   overscroll-behavior: contain;
 }
 
+/* Terminal only ever renders inside a FloatingWindow, so the tab bar always
+   teleports into its titlebar — bleeds into the titlebar's padding to fill
+   it edge-to-edge, and shrinks to fit .fwin-toolbar-host (tabs-list's own
+   overflow-x:auto handles scrolling once this is constrained). */
 .tab-bar {
   display: flex;
   align-items: stretch;
-  background: #141414;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-  flex-shrink: 0;
   overflow: hidden;
+  margin: -0.25rem 0 -0.25rem -0.6rem;
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .tabs-list {
@@ -826,6 +837,8 @@ watch(() => props.focused, (focused) => {
   display: none;
 }
 
+/* GNOME/Yaru style: inactive tabs blend into the bar, the active tab gets
+   a lighter "pressed in" panel with an accent underline. */
 .tab-item {
   flex: 0 1 160px;
   min-width: 80px;
@@ -834,10 +847,10 @@ watch(() => props.focused, (focused) => {
   gap: 5px;
   padding: 0 8px 0 10px;
   height: 32px;
-  background: #141414;
+  background: transparent;
   border: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  color: #666;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  color: #a9a9a9;
   font-size: 0.72rem;
   font-family: inherit;
   cursor: pointer;
@@ -847,20 +860,14 @@ watch(() => props.focused, (focused) => {
 }
 
 .tab-item:hover {
-  background: #1e1e1e;
-  color: #aaa;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
 }
 
 .tab-item.tab-active {
-  background: #1e1e1e;
-  color: #e2e8f0;
-  box-shadow: inset 0 2px 0 #3b82f6;
-}
-
-.tab-icon {
-  font-size: 0.65rem;
-  flex-shrink: 0;
-  opacity: 0.7;
+  background: #4a4a4a;
+  color: #fff;
+  box-shadow: inset 0 -2px 0 #ec4899;
 }
 
 .tab-label {
@@ -889,18 +896,17 @@ watch(() => props.focused, (focused) => {
 
 .tab-close:hover {
   opacity: 1 !important;
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .tab-scroll-btn {
   flex: 0 0 28px;
   height: 32px;
   padding: 0;
-  background: #141414;
+  background: transparent;
   border: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  color: #aaa;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  color: #a9a9a9;
   font-size: 0.65rem;
   cursor: pointer;
   display: flex;
@@ -911,12 +917,12 @@ watch(() => props.focused, (focused) => {
 
 .tab-scroll-btn:last-child {
   border-right: none;
-  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .tab-scroll-btn:hover:not(:disabled) {
-  background: #1e1e1e;
-  color: #ccc;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
 }
 
 .tab-scroll-btn:disabled {
@@ -929,7 +935,7 @@ watch(() => props.focused, (focused) => {
   height: 32px;
   background: transparent;
   border: none;
-  color: #555;
+  color: #a9a9a9;
   font-size: 1.1rem;
   cursor: pointer;
   display: flex;
@@ -942,7 +948,7 @@ watch(() => props.focused, (focused) => {
 
 .tab-add:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: #ccc;
+  color: #e2e8f0;
 }
 
 .terminal-body {
