@@ -6,7 +6,8 @@ import { useAuthStore } from './stores/auth'
 import { useMachinesStore } from './stores/machines'
 import { useDesktopSessionsStore } from './stores/desktopSessions'
 import { useSessionCacheStore } from './stores/sessionCache'
-import { openLauncher } from './router/navigation'
+import { useMachinesOverviewStore } from './stores/machinesOverview'
+import MachinesOverview from './components/MachinesOverview.vue'
 
 const DesktopSessionHost = defineAsyncComponent(() => import('./components/DesktopSessionHost.vue'))
 
@@ -16,6 +17,7 @@ const authStore = useAuthStore()
 const machinesStore = useMachinesStore()
 const desktopSessionsStore = useDesktopSessionsStore()
 const sessionCacheStore = useSessionCacheStore()
+const machinesOverviewStore = useMachinesOverviewStore()
 
 const activeRealm = computed(() =>
   route.name === 'desktop-launcher' ? (route.params.realm as string) : null,
@@ -36,7 +38,11 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 
 const sidebarCollapsed = ref(false)
 const mobileOpen = ref(false)
-const machinesExpanded = ref(true)
+
+const isDesktopView = computed(() => route.name === 'desktop-launcher')
+const showSidebar = computed(
+  () => !route.meta.hideNavbar && authStore.isAuthenticated && !isDesktopView.value,
+)
 
 const toggleSidebar = () => {
   if (window.innerWidth < 768) {
@@ -51,18 +57,6 @@ const handleLogout = () => {
   router.push('/login')
 }
 
-const toggleMachinesExpanded = () => {
-  machinesExpanded.value = !machinesExpanded.value
-}
-
-const handleMachinesSectionClick = () => {
-  toggleMachinesExpanded()
-
-  if (route.name !== 'home') {
-    router.push('/')
-  }
-}
-
 const isActive = (path: string) => {
   if (path === '/') return route.path === '/'
   return route.path.startsWith(path)
@@ -73,18 +67,6 @@ const isMachinesRoute = () =>
   route.name === 'desktop-launcher' ||
   route.name === 'desktop-files' ||
   route.name === 'desktop-index'
-
-const navigateToLauncher = (realm: string, name: string) => {
-  if (
-    route.name === 'desktop-launcher' &&
-    route.params.realm === realm &&
-    window.history.state?.deskconnTerminal
-  ) {
-    window.history.back()
-    return
-  }
-  openLauncher(realm, name)
-}
 
 // Close mobile sidebar on route change
 watch(() => route.fullPath, () => {
@@ -136,7 +118,7 @@ onUnmounted(() => {
 
     <!-- Mobile top bar -->
     <header
-      v-if="!route.meta.hideNavbar && authStore.isAuthenticated"
+      v-if="showSidebar"
       class="mobile-topbar"
     >
       <button class="mobile-menu-btn" @click="mobileOpen = true">
@@ -147,14 +129,14 @@ onUnmounted(() => {
 
     <!-- Backdrop (mobile only) -->
     <div
-      v-if="!route.meta.hideNavbar && authStore.isAuthenticated && mobileOpen"
+      v-if="showSidebar && mobileOpen"
       class="sidebar-backdrop"
       @click="mobileOpen = false"
     />
 
     <!-- Sidebar -->
     <aside
-      v-if="!route.meta.hideNavbar && authStore.isAuthenticated"
+      v-if="showSidebar"
       class="sidebar"
       :class="{ 'sidebar-collapsed': sidebarCollapsed, 'mobile-open': mobileOpen }"
     >
@@ -172,62 +154,19 @@ onUnmounted(() => {
 
       <!-- Navigation items -->
       <nav class="sidebar-nav">
-        <div class="sidebar-section">
-          <button
-            type="button"
-            class="sidebar-item sidebar-section-header"
-            :class="{ active: isMachinesRoute() }"
-            :title="sidebarCollapsed ? 'Machines' : ''"
-            @click="handleMachinesSectionClick"
-          >
-            <i class="bi bi-pc-display"></i>
-            <span v-if="!sidebarCollapsed">Machines</span>
-            <i
-              v-if="!sidebarCollapsed"
-              class="bi sidebar-section-chevron"
-              :class="machinesExpanded ? 'bi-chevron-up' : 'bi-chevron-down'"
-            ></i>
-          </button>
-
-          <transition name="sidebar-expand">
-            <div v-if="!sidebarCollapsed && machinesExpanded" class="sidebar-subnav">
-              <div v-if="machinesStore.isLoadingDesktops" class="sidebar-subitem sidebar-subitem-muted">
-                Loading machines...
-              </div>
-
-              <div
-                v-for="desktop in machinesStore.desktops"
-                :key="desktop.realm"
-                class="sidebar-subitem sidebar-subitem-clickable"
-                :class="{ 'sidebar-subitem-active': (route.name === 'desktop-launcher' || route.name === 'desktop-files' || route.name === 'desktop-index') && route.params.realm === desktop.realm }"
-                @click="navigateToLauncher(desktop.realm, desktop.name)"
-              >
-                <span class="sidebar-subitem-icon" aria-hidden="true">
-                  {{ desktop.icon }}
-                </span>
-                <span class="sidebar-subitem-label">{{ desktop.name }}</span>
-              </div>
-
-              <div
-                v-if="!machinesStore.isLoadingDesktops && machinesStore.desktops.length === 0"
-                class="sidebar-subitem sidebar-subitem-muted"
-              >
-                No machines found
-              </div>
-            </div>
-          </transition>
-        </div>
-
         <router-link
-          to="/access-management"
+          to="/"
           class="sidebar-item"
-          :class="{ active: isActive('/access-management') }"
-          :title="sidebarCollapsed ? 'Access Management' : ''"
+          :class="{ active: isMachinesRoute() }"
+          :title="sidebarCollapsed ? 'Machines' : ''"
         >
-          <i class="bi bi-shield-lock"></i>
-          <span v-if="!sidebarCollapsed">Access Management</span>
+          <i class="bi bi-pc-display"></i>
+          <span v-if="!sidebarCollapsed">Machines</span>
         </router-link>
+      </nav>
 
+      <!-- Footer: settings link + profile link + logout -->
+      <div class="sidebar-footer">
         <router-link
           to="/settings"
           class="sidebar-item"
@@ -237,10 +176,7 @@ onUnmounted(() => {
           <i class="bi bi-gear"></i>
           <span v-if="!sidebarCollapsed">Settings</span>
         </router-link>
-      </nav>
 
-      <!-- Footer: profile link + logout -->
-      <div class="sidebar-footer">
         <router-link
           to="/profile"
           class="sidebar-item sidebar-user"
@@ -267,17 +203,19 @@ onUnmounted(() => {
     <!-- Main content -->
     <main
       class="main-content"
-      :class="{ 'has-topbar': !route.meta.hideNavbar && authStore.isAuthenticated }"
+      :class="{ 'has-topbar': showSidebar }"
     >
       <RouterView />
       <DesktopSessionHost
         v-for="r in renderedRealms"
         :key="r"
         :realm="r"
-        :active="r === activeRealm"
+        :active="r === activeRealm && !machinesOverviewStore.isOpen"
         v-show="r === activeRealm"
       />
     </main>
+
+    <MachinesOverview v-if="authStore.isAuthenticated" />
 
   </div>
 </template>
@@ -345,7 +283,7 @@ body {
 
 /* ── Sidebar ── */
 .sidebar {
-  width: 240px;
+  width: 208px;
   flex-shrink: 0;
   background: #f8fafc;
   border-right: 1px solid #e8ecf0;
@@ -360,7 +298,7 @@ body {
 }
 
 .sidebar.sidebar-collapsed {
-  width: 64px;
+  width: 56px;
 }
 
 /* Header */
@@ -413,20 +351,6 @@ body {
   min-height: 0;
 }
 
-.sidebar-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.sidebar-section-header {
-  justify-content: space-between;
-}
-
-.sidebar-section-chevron {
-  margin-left: auto;
-}
-
 /* Shared item styles */
 .sidebar-item {
   display: flex;
@@ -469,67 +393,6 @@ body {
 
 .sidebar-item.active i {
   color: var(--theme-primary);
-}
-
-.sidebar-subnav {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  padding: 0.1rem 0 0.15rem 1.7rem;
-}
-
-.sidebar-subitem {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  width: 100%;
-  background: transparent;
-  color: #64748b;
-  border-radius: 8px;
-  padding: 0.55rem 0.75rem;
-  text-align: left;
-  font-size: 0.90rem;
-  font-weight: 500;
-  font-family: inherit;
-  line-height: 1.5;
-  cursor: default;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-
-.sidebar-subitem:hover {
-  color: #0f172a;
-  background: rgba(148, 163, 184, 0.12);
-}
-
-.sidebar-subitem-clickable {
-  cursor: pointer;
-}
-
-.sidebar-subitem-muted {
-  color: #94a3b8;
-  cursor: default;
-}
-
-.sidebar-subitem-active {
-  color: var(--theme-primary);
-  background: rgba(0, 0, 0, 0.06);
-  font-weight: 600;
-}
-
-.sidebar-subitem-icon {
-  width: 20px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.95rem;
-  line-height: 1;
-}
-
-.sidebar-subitem-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Footer */
@@ -581,10 +444,10 @@ body {
   .sidebar {
     position: fixed;
     top: 0;
-    left: -240px;
+    left: -208px;
     height: 100dvh; /* accounts for mobile browser chrome */
     transition: left 0.28s ease;
-    width: 240px !important; /* ignore collapsed state on mobile */
+    width: 208px !important; /* ignore collapsed state on mobile */
   }
 
   /* Slide in when open */
