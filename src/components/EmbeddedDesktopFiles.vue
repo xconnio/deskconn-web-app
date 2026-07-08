@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
 import { ApplicationError, Progress, type Result, type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSettingsStore } from '@/stores/settings'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
+import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 import FilePreviewModal from '@/components/FilePreviewModal.vue'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import {
@@ -38,6 +39,11 @@ const props = defineProps<{
 
 const sessionCacheStore = useSessionCacheStore()
 const settingsStore = useSettingsStore()
+
+// Absent when there's no FloatingWindow ancestor (e.g. the standalone /files
+// route) — the toolbar then renders inline instead of teleporting.
+const toolbarHostRef = inject(floatingWindowToolbarKey)
+const toolbarTarget = computed(() => toolbarHostRef?.value ?? null)
 
 const session = shallowRef<Session | null>(null)
 const encryptionKeys = ref<EncryptionKeys | null>(null)
@@ -106,6 +112,9 @@ const backgroundMenuVisible = ref(false)
 const backgroundMenuPos = ref<{ x: number; y: number } | null>(null)
 const propertiesModalVisible = ref(false)
 const propertiesModalEntry = ref<FileEntry | null>(null)
+const settingsMenuVisible = ref(false)
+const settingsMenuPos = ref<{ x: number; y: number } | null>(null)
+const settingsBtnRef = ref<HTMLElement | null>(null)
 
 type DownloadProgressState = {
   name: string
@@ -1418,6 +1427,24 @@ function closeBackgroundMenu() {
   backgroundMenuPos.value = null
 }
 
+function toggleSettingsMenu() {
+  if (settingsMenuVisible.value) { closeSettingsMenu(); return }
+  const el = settingsBtnRef.value
+  if (!el) return
+  const menuWidth = 200
+  const rect = el.getBoundingClientRect()
+  settingsMenuPos.value = {
+    x: Math.min(rect.left, window.innerWidth - menuWidth - 8),
+    y: rect.bottom + 6,
+  }
+  settingsMenuVisible.value = true
+}
+
+function closeSettingsMenu() {
+  settingsMenuVisible.value = false
+  settingsMenuPos.value = null
+}
+
 function showPropertiesFromMenu() {
   if (actionSheetEntry.value) {
     propertiesModalEntry.value = actionSheetEntry.value
@@ -1459,6 +1486,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
     if (propertiesModalVisible.value) { closePropertiesModal(); return }
     if (actionSheetVisible.value) { closeActionSheet(); return }
     if (backgroundMenuVisible.value) { closeBackgroundMenu(); return }
+    if (settingsMenuVisible.value) { closeSettingsMenu(); return }
     return
   }
 
@@ -1476,7 +1504,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
     return
   }
 
-  if (propertiesModalVisible.value || actionSheetVisible.value || backgroundMenuVisible.value) return
+  if (propertiesModalVisible.value || actionSheetVisible.value || backgroundMenuVisible.value || settingsMenuVisible.value) return
 
   if (e.key === 'Backspace') {
     e.preventDefault()
@@ -1543,8 +1571,9 @@ onUnmounted(() => {
 <template>
   <div class="embedded-explorer">
     <div class="explorer-shell">
-      <section class="toolbar-card">
-        <div class="path-toolbar">
+      <section class="toolbar-card" :class="{ 'toolbar-card--embedded': !!toolbarTarget }">
+      <Teleport :to="toolbarTarget ?? 'body'" :disabled="!toolbarTarget">
+        <div class="path-toolbar" :class="{ 'path-toolbar--embedded': !!toolbarTarget }">
           <button
             class="tool-btn"
             @click="goBack"
@@ -1586,6 +1615,15 @@ onUnmounted(() => {
           >
             <i class="bi bi-cloud-upload"></i>
           </button>
+          <button
+            ref="settingsBtnRef"
+            class="tool-btn"
+            :class="{ 'tool-btn--active': settingsMenuVisible }"
+            @click="toggleSettingsMenu"
+            title="Settings"
+          >
+            <i class="bi bi-gear"></i>
+          </button>
           <input
             ref="uploadInputRef"
             type="file"
@@ -1596,7 +1634,7 @@ onUnmounted(() => {
 
           <div
             class="breadcrumb-search-area"
-            :class="{ 'breadcrumb-search-active': searchMode || fileSearchActive }"
+            :class="{ 'breadcrumb-search-active': searchMode || fileSearchActive, 'breadcrumb-search-area--embedded': !!toolbarTarget }"
             @click="!searchMode && !fileSearchActive && enterSearchMode()"
           >
             <template v-if="fileSearchActive">
@@ -1626,7 +1664,6 @@ onUnmounted(() => {
                   <span v-if="index < breadcrumbSegments.length - 1" class="breadcrumb-sep">/</span>
                 </template>
               </div>
-              <i class="bi bi-search breadcrumb-search-hint"></i>
             </template>
 
             <form v-else-if="searchMode" class="path-input-inner" @submit.prevent="submitPath">
@@ -1643,6 +1680,7 @@ onUnmounted(() => {
             </form>
           </div>
         </div>
+      </Teleport>
 
         <div v-if="errorMessage" class="alert alert-danger mb-0 mt-3">
           <i class="bi bi-exclamation-octagon me-2"></i>{{ errorMessage }}
@@ -1661,10 +1699,9 @@ onUnmounted(() => {
 
       <div v-else class="explorer-grid">
         <section class="browser-card" @contextmenu.prevent="openBackgroundMenu($event)">
-          <div v-if="currentBrowse" class="browser-card-header">
+          <div v-if="clipboard && currentBrowse?.is_dir && supportedFileProcedures.copy" class="browser-card-header">
             <div class="browser-header-actions">
               <button
-                v-if="clipboard && currentBrowse.is_dir && supportedFileProcedures.copy"
                 class="paste-btn"
                 :disabled="isOperating"
                 @click="pasteClipboard"
@@ -1673,13 +1710,6 @@ onUnmounted(() => {
                 <i class="bi bi-clipboard-check"></i>
                 <span>Paste "{{ clipboard.name }}"</span>
               </button>
-              <label v-if="currentBrowse.is_dir" class="hidden-toggle">
-                <input v-model="showHiddenFiles" type="checkbox" />
-                <span>Show hidden files</span>
-              </label>
-              <span class="entry-count">
-                {{ currentBrowse.is_dir ? `${visibleEntries.length} entries` : currentBrowse.type }}
-              </span>
             </div>
           </div>
           <div v-if="operationError && !actionSheetVisible && !showRenameDialog && !showDeleteDialog" class="alert alert-danger mb-0 mt-2 py-2 px-3">
@@ -1904,6 +1934,20 @@ onUnmounted(() => {
     </div>
   </div>
 
+  <!-- Toolbar settings menu -->
+  <div v-if="settingsMenuVisible && settingsMenuPos" class="dropdown-backdrop" @click="closeSettingsMenu">
+    <div
+      class="entry-dropdown"
+      :style="`top: ${settingsMenuPos.y}px; left: ${settingsMenuPos.x}px`"
+      @click.stop
+    >
+      <button class="dropdown-item" @click="showHiddenFiles = !showHiddenFiles; closeSettingsMenu()">
+        <i class="bi" :class="showHiddenFiles ? 'bi-eye-slash' : 'bi-eye'"></i>
+        {{ showHiddenFiles ? 'Hide hidden files' : 'Show hidden files' }}
+      </button>
+    </div>
+  </div>
+
   <!-- Properties popup -->
   <div v-if="propertiesModalVisible && propertiesModalEntry" class="fs-overlay dialog-overlay" @click.self="closePropertiesModal">
     <div class="properties-dialog">
@@ -2088,48 +2132,44 @@ onUnmounted(() => {
 }
 
 .toolbar-card {
-  padding: 0.6rem 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-.hidden-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 0.5rem 0.8rem;
-  border-radius: 999px;
-  background: #eef3f7;
-  color: #506071;
-  font-size: 0.85rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.hidden-toggle input {
-  width: 1rem;
-  height: 1rem;
-  accent-color: var(--theme-primary);
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.6rem;
 }
 
 .path-toolbar {
   display: grid;
-  grid-template-columns: auto auto auto auto auto 1fr;
-  gap: 0.75rem;
+  /* Buttons (auto) never shrink below their content; the breadcrumb
+     (minmax) is the only track that gives, shrinking from 260px down to
+     70px before the window itself runs out of room. */
+  grid-template-columns: auto auto auto auto auto auto minmax(70px, 260px);
+  gap: 0.5rem;
   align-items: center;
+  /* Without an `fr` track, Grid's default behavior stretches all `auto`
+     columns to absorb leftover space once the container is wider than its
+     content (see width:100% below) — this keeps the button columns at
+     their natural content size instead. */
+  justify-content: start;
 }
 
 .tool-btn {
   width: 32px;
   height: 32px;
-  border: 0;
+  border: none;
   border-radius: 7px;
-  background: #2c2e33;
-  color: #fff;
-  font-size: 0.85rem;
+  background: #fff;
+  color: #1e293b;
+  font-size: 0.95rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  text-decoration: none;
+  transition: background 0.13s ease, border-color 0.13s ease;
+}
+
+.tool-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
 }
 
 .tool-btn:disabled {
@@ -2138,6 +2178,8 @@ onUnmounted(() => {
 
 .tool-btn--active {
   background: var(--theme-primary, #3b82f6);
+  border-color: var(--theme-primary, #3b82f6);
+  color: #fff;
 }
 
 .breadcrumb-strip {
@@ -2166,6 +2208,7 @@ onUnmounted(() => {
   font-weight: 600;
   font-size: 0.875rem;
   white-space: nowrap;
+  text-decoration: none;
 }
 
 .breadcrumb-chip:hover {
@@ -2188,11 +2231,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0 0.75rem;
-  border-radius: 14px;
-  background: #fff;
+  padding: 0 0.85rem;
+  border-radius: 10px;
+  background: #f1f5f9;
   border: 1px solid #e2e8f0;
-  min-height: 40px;
+  min-height: 34px;
   cursor: pointer;
   overflow: hidden;
   min-width: 0;
@@ -2206,11 +2249,44 @@ onUnmounted(() => {
   cursor: default;
 }
 
-.breadcrumb-search-hint {
-  margin-left: auto;
-  color: #94a3b8;
-  font-size: 0.85rem;
-  flex-shrink: 0;
+/* ── Embedded in a FloatingWindow titlebar (see floatingWindowToolbar.ts) ──
+   Same toolbar, flattened to blend into the titlebar chrome instead of
+   sitting in its own card above the file list. */
+.toolbar-card--embedded {
+  background: none;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  padding: 0;
+  margin-bottom: 0;
+  border-radius: 0;
+}
+
+.path-toolbar--embedded {
+  gap: 0.4rem;
+  width: 100%;
+  /* Flex items default to min-width:auto, which for a grid container
+     resolves to its content's min-content size — that blocked the
+     minmax() breadcrumb track from ever shrinking, so the whole toolbar
+     overflowed past .fwin-toolbar-host and overlapped the window controls. */
+  min-width: 0;
+}
+
+.breadcrumb-search-area--embedded {
+  background: #f1f5f9;
+  border-color: transparent;
+  min-height: 32px;
+  padding: 0 0.75rem;
+}
+
+.breadcrumb-search-area--embedded:hover {
+  background: #e6ebf1;
+  border-color: transparent;
+}
+
+.breadcrumb-search-area--embedded.breadcrumb-search-active {
+  background: #fff;
+  border-color: #e2e8f0;
 }
 
 .search-spinner-wrap {
@@ -2281,15 +2357,6 @@ onUnmounted(() => {
   gap: 0.75rem;
   flex-wrap: wrap;
   justify-content: flex-end;
-}
-
-.entry-count {
-  padding: 0.5rem 0.8rem;
-  border-radius: 999px;
-  background: #eef3f7;
-  color: #506071;
-  font-size: 0.85rem;
-  font-weight: 700;
 }
 
 .entry-icon--thumb {

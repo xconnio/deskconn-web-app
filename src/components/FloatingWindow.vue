@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { provide, ref } from 'vue'
+import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 
 const rootEl = ref<HTMLElement | null>(null)
+const toolbarHostEl = ref<HTMLElement | null>(null)
+provide(floatingWindowToolbarKey, toolbarHostEl)
 
 const props = defineProps<{
   title: string
@@ -20,6 +23,8 @@ const props = defineProps<{
   insetLeft?: number
   insetRight?: number
   insetBottom?: number
+  /** Let the embedded app render its own toolbar in place of the icon + title (see floatingWindowToolbar.ts). */
+  useToolbarTitlebar?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -43,7 +48,8 @@ function restoreSelection() {
 
 function startDrag(e: PointerEvent) {
   const target = e.target as HTMLElement
-  if (target.closest('.fwin-controls')) return
+  // Only interactive elements (buttons, inputs) opt out of dragging.
+  if (target.closest('.fwin-controls, button, input')) return
   // Titlebar isn't a focusable element, but the browser's default pointerdown
   // action still shifts focus to it (blurring whatever had it, e.g. the terminal).
   e.preventDefault()
@@ -165,10 +171,17 @@ function startResize(e: PointerEvent, dir: string) {
     @pointerdown="$emit('focus')"
   >
     <div class="fwin-titlebar" @pointerdown="startDrag">
-      <span class="fwin-icon" :style="{ color: iconColor, background: iconBg }">
-        <i class="bi" :class="icon"></i>
-      </span>
-      <span class="fwin-title">{{ title }}</span>
+      <template v-if="!useToolbarTitlebar">
+        <span class="fwin-icon" :style="{ color: iconColor, background: iconBg }">
+          <i class="bi" :class="icon"></i>
+        </span>
+        <span class="fwin-title">{{ title }}</span>
+      </template>
+      <div
+        ref="toolbarHostEl"
+        class="fwin-toolbar-host"
+        :class="{ 'fwin-toolbar-host--active': useToolbarTitlebar }"
+      ></div>
       <div class="fwin-controls">
         <button class="fwin-btn" title="Minimize" @mousedown.prevent @click="$emit('minimize')">
           <i class="bi bi-dash-lg"></i>
@@ -234,9 +247,8 @@ function startResize(e: PointerEvent, dir: string) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.6rem;
-  border-bottom: 1px solid #e8ecf0;
-  background: #f8fafc;
+  padding: 0.25rem 0.6rem;
+  background: #fff;
   flex-shrink: 0;
   user-select: none;
   cursor: move;
@@ -281,6 +293,18 @@ function startResize(e: PointerEvent, dir: string) {
   min-width: 0;
 }
 
+.fwin-toolbar-host {
+  display: none;
+}
+
+.fwin-toolbar-host--active {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  cursor: default;
+}
+
 .fwin-controls {
   display: flex;
   align-items: center;
@@ -292,15 +316,16 @@ function startResize(e: PointerEvent, dir: string) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
+  border: 1px solid #d9dee4;
+  border-radius: 50%;
+  background: #f1f5f9;
   color: #64748b;
-  font-size: 0.72rem;
+  font-size: 0.6rem;
   cursor: pointer;
+  text-decoration: none;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
