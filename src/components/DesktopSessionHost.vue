@@ -303,18 +303,6 @@ function handleLaunch(appId: string) {
   if (app) launchApp(app)
 }
 
-function handleKeydown(e: KeyboardEvent) {
-  if (!props.active) return
-
-  if (e.key === 'Escape') {
-    if (focusedId.value) {
-      closeWindow(focusedId.value)
-    } else {
-      close()
-    }
-  }
-}
-
 watch(() => props.active, (active) => {
   if (active) syncMaximizedBounds(maximizedContainerSize())
 })
@@ -328,7 +316,6 @@ watch(dockPosition, async () => {
 let launcherBodyResizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
-  document.addEventListener('keydown', handleKeydown)
   window.addEventListener('resize', updateIsMobile)
   ensureConnected()
   fetchWallpaper()
@@ -343,7 +330,6 @@ onMounted(() => {
   }
 })
 onUnmounted(() => {
-  document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', updateIsMobile)
   launcherBodyResizeObserver?.disconnect()
   if (activeWallpaperObjUrl) URL.revokeObjectURL(activeWallpaperObjUrl)
