@@ -380,6 +380,7 @@ onUnmounted(() => {
           :maximized="win.maximized"
           :focused="focusedId === win.id"
           :mobile="isMobile"
+          :use-toolbar-titlebar="win.appId === 'files'"
           :inset-left="insetLeft"
           :inset-right="insetRight"
           :inset-bottom="insetBottom"
