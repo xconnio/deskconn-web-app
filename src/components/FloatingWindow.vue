@@ -25,6 +25,8 @@ const props = defineProps<{
   insetBottom?: number
   /** Let the embedded app render its own toolbar in place of the icon + title (see floatingWindowToolbar.ts). */
   useToolbarTitlebar?: boolean
+  /** Dark titlebar background, for apps with a dark embedded toolbar (e.g. the terminal's tab bar). */
+  darkTitlebar?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -160,7 +162,7 @@ function startResize(e: PointerEvent, dir: string) {
   <div
     ref="rootEl"
     class="floating-window"
-    :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized, 'is-maximized': maximized }"
+    :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized, 'is-maximized': maximized, 'is-dark-titlebar': darkTitlebar }"
     :style="mobile ? { zIndex } : {
       left: x + 'px',
       top: y + 'px',
@@ -170,7 +172,7 @@ function startResize(e: PointerEvent, dir: string) {
     }"
     @pointerdown="$emit('focus')"
   >
-    <div class="fwin-titlebar" @pointerdown="startDrag">
+    <div class="fwin-titlebar" :class="{ 'fwin-titlebar--dark': darkTitlebar }" @pointerdown="startDrag">
       <template v-if="!useToolbarTitlebar">
         <span class="fwin-icon" :style="{ color: iconColor, background: iconBg }">
           <i class="bi" :class="icon"></i>
@@ -226,6 +228,10 @@ function startResize(e: PointerEvent, dir: string) {
   min-height: 200px;
 }
 
+.floating-window.is-dark-titlebar {
+  border-color: #242424;
+}
+
 .floating-window.is-minimized {
   display: none;
 }
@@ -233,6 +239,10 @@ function startResize(e: PointerEvent, dir: string) {
 .floating-window.is-focused {
   box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
   border-color: #cbd5e1;
+}
+
+.floating-window.is-dark-titlebar.is-focused {
+  border-color: #242424;
 }
 
 .floating-window.is-mobile {
@@ -260,6 +270,35 @@ function startResize(e: PointerEvent, dir: string) {
 
 .floating-window:not(.is-focused) .fwin-titlebar {
   background: #eef1f4;
+}
+
+.fwin-titlebar--dark {
+  background: linear-gradient(#3c3c3c, #333333);
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.floating-window:not(.is-focused) .fwin-titlebar--dark {
+  background: #242424;
+}
+
+/* Ubuntu-style window controls: grey circle, white icon, subtle bevel. */
+.fwin-titlebar--dark .fwin-btn {
+  background: linear-gradient(#565656, #454545);
+  border-color: #3a3a3a;
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 1px rgba(0, 0, 0, 0.3);
+}
+
+.fwin-titlebar--dark .fwin-btn:hover {
+  background: linear-gradient(#686868, #565656);
+  border-color: #444;
+  color: #fff;
+}
+
+.fwin-titlebar--dark .fwin-btn-close:hover {
+  background: #e01b24;
+  border-color: #e01b24;
+  color: #fff;
 }
 
 .floating-window:not(.is-focused) .fwin-title {

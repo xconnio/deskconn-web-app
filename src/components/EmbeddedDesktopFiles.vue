@@ -2138,16 +2138,11 @@ onUnmounted(() => {
 
 .path-toolbar {
   display: grid;
-  /* Buttons (auto) never shrink below their content; the breadcrumb
-     (minmax) is the only track that gives, shrinking from 260px down to
-     70px before the window itself runs out of room. */
+  /* Breadcrumb (minmax) shrinks from 260px to 70px; buttons (auto) don't. */
   grid-template-columns: auto auto auto auto auto auto minmax(70px, 260px);
   gap: 0.5rem;
   align-items: center;
-  /* Without an `fr` track, Grid's default behavior stretches all `auto`
-     columns to absorb leftover space once the container is wider than its
-     content (see width:100% below) — this keeps the button columns at
-     their natural content size instead. */
+  /* Prevents Grid from stretching the auto button columns to fill leftover space. */
   justify-content: start;
 }
 
@@ -2249,9 +2244,7 @@ onUnmounted(() => {
   cursor: default;
 }
 
-/* ── Embedded in a FloatingWindow titlebar (see floatingWindowToolbar.ts) ──
-   Same toolbar, flattened to blend into the titlebar chrome instead of
-   sitting in its own card above the file list. */
+/* ── Embedded in a FloatingWindow titlebar (see floatingWindowToolbar.ts) ── */
 .toolbar-card--embedded {
   background: none;
   border: none;
@@ -2265,10 +2258,7 @@ onUnmounted(() => {
 .path-toolbar--embedded {
   gap: 0.4rem;
   width: 100%;
-  /* Flex items default to min-width:auto, which for a grid container
-     resolves to its content's min-content size — that blocked the
-     minmax() breadcrumb track from ever shrinking, so the whole toolbar
-     overflowed past .fwin-toolbar-host and overlapped the window controls. */
+  /* Flex items default to min-width:auto, blocking the minmax() breadcrumb from shrinking. */
   min-width: 0;
 }
 
