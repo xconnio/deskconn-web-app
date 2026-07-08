@@ -642,15 +642,15 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.3rem 1rem;
+  padding: 0.2rem 0.85rem;
   border-bottom: 1px solid #e2e8f0;
   gap: 1rem;
   flex-shrink: 0;
   transition: background 0.2s ease, border-color 0.2s ease;
 }
-.preview-title { font-size: 1rem; font-weight: 700; color: #21313f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; transition: color 0.2s ease; }
-.preview-header-actions { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
-.preview-close-btn { width: 36px; height: 36px; border: 0; border-radius: 50%; background: #f1f5f9; color: #64748b; font-size: 0.9rem; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, color 0.15s; }
+.preview-title { font-size: 0.9rem; font-weight: 700; color: #21313f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; transition: color 0.2s ease; }
+.preview-header-actions { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+.preview-close-btn { width: 28px; height: 28px; border: 0; border-radius: 50%; background: #f1f5f9; color: #64748b; font-size: 0.75rem; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, color 0.15s; }
 .preview-close-btn:hover { background: #e2e8f0; color: #0f172a; }
 .preview-close-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .preview-action-active { background: #dbeafe; color: #2563eb; }
