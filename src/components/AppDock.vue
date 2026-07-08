@@ -453,13 +453,13 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
-  height: 56px;
+  width: 46px;
+  height: 46px;
   border: none;
-  border-radius: 12px;
+  border-radius: 10px;
   background: #eef2f6;
   color: #475569;
-  font-size: 1.6rem;
+  font-size: 2rem;
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.13s ease, transform 0.1s ease;
