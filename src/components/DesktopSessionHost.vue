@@ -132,6 +132,9 @@ interface AppDef {
   iconBg: string
   width?: number
   height?: number
+  /** False for apps that only ever appear because a window is already open
+   * (see dockApps below) — there's nothing to launch blank. */
+  launchable?: boolean
 }
 
 const apps: AppDef[] = [
@@ -190,6 +193,33 @@ const apps: AppDef[] = [
   },
 ]
 
+// Not pinned in the dock's launcher strip — these only show up (via dockApps
+// below) once an image/video is actually open, purely as an instance switcher.
+const imageViewerApp: AppDef = {
+  id: 'image-viewer',
+  label: 'Image Viewer',
+  icon: 'bi-image-fill',
+  iconColor: '#ec4899',
+  iconBg: '#fce7f3',
+  launchable: false,
+}
+
+const videoPlayerApp: AppDef = {
+  id: 'video-player',
+  label: 'Video Player',
+  icon: 'bi-file-earmark-play-fill',
+  iconColor: '#7c3aed',
+  iconBg: '#ede9fe',
+  launchable: false,
+}
+
+const dockApps = computed(() => {
+  const list = [...apps]
+  if (windows.value.some((w) => w.appId === 'image-viewer')) list.push(imageViewerApp)
+  if (windows.value.some((w) => w.appId === 'video-player')) list.push(videoPlayerApp)
+  return list
+})
+
 function launchApp(app: AppDef, initialPath?: string) {
   openWindow({
     appId: app.id,
@@ -212,6 +242,8 @@ const appComponents: Record<string, Component> = {
   'resource-monitor': ResourceMonitor,
   settings: DesktopSettingsPanel,
   preview: FilePreviewModal,
+  'image-viewer': FilePreviewModal,
+  'video-player': FilePreviewModal,
 }
 
 function windowProps(win: { id: string; appId: string; props: Record<string, unknown> }) {
@@ -243,6 +275,8 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
         focused,
       }
     case 'preview':
+    case 'image-viewer':
+    case 'video-player':
       return {
         session: win.props.session as Session,
         entry: win.props.entry as PreviewEntry,
@@ -271,10 +305,12 @@ const PREVIEW_ICONS: Record<FilePreviewType, string> = {
 }
 
 function onPreviewFile(session: Session, entry: PreviewEntry, entries: PreviewEntry[]) {
+  const pt = getFilePreviewType(entry.name)
+  const appId = pt === 'image' ? 'image-viewer' : pt === 'video' ? 'video-player' : 'preview'
   openWindow({
-    appId: 'preview',
+    appId,
     title: entry.name,
-    icon: PREVIEW_ICONS[getFilePreviewType(entry.name)],
+    icon: PREVIEW_ICONS[pt],
     iconColor: '#334155',
     iconBg: '#e2e8f0',
     width: 760,
@@ -426,7 +462,7 @@ onUnmounted(() => {
 
       <AppDock
         :realm="realm"
-        :apps="apps"
+        :apps="dockApps"
         :windows="windows"
         :focused-id="focusedId"
         :position="dockPosition"

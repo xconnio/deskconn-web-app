@@ -9,6 +9,9 @@ export interface DockAppDef {
   icon: string
   iconColor: string
   iconBg: string
+  /** False for apps that only ever appear because a window is already open (e.g.
+   * Image Viewer/Video Player) — they can't be launched blank, so no "New window". */
+  launchable?: boolean
 }
 
 const props = defineProps<{
@@ -171,7 +174,8 @@ function quitAll(appId: string) {
 function handleIconClick(appId: string) {
   const instances = instancesByApp.value.get(appId) ?? []
   if (instances.length === 0) {
-    if (!props.offline) emit('launch', appId)
+    const app = props.apps.find((a) => a.id === appId)
+    if (!props.offline && app?.launchable !== false) emit('launch', appId)
   } else if (instances.length === 1) {
     activateInstance(instances[0]!.id)
   } else {
@@ -333,7 +337,7 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
               <i class="bi bi-x"></i>
             </span>
           </button>
-          <button class="dock-popover-row dock-popover-new" @click="launchNew(app.id)">
+          <button v-if="app.launchable !== false" class="dock-popover-row dock-popover-new" @click="launchNew(app.id)">
             <span class="dock-popover-icon dock-popover-icon-new">
               <i class="bi bi-plus-lg"></i>
             </span>
