@@ -279,6 +279,7 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
     case 'video-player':
       return {
         session: win.props.session as Session,
+        realm: props.realm,
         entry: win.props.entry as PreviewEntry,
         entries: win.props.entries as PreviewEntry[],
         focused,

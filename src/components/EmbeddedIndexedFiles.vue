@@ -3,18 +3,16 @@ import { ref, shallowRef, computed, onMounted, onUnmounted, nextTick } from 'vue
 import { type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
+import { useSessionEncryptionStore } from '@/stores/sessionEncryption'
 import { useSettingsStore } from '@/stores/settings'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
 import {
-  createX25519KeyPair,
-  deriveSessionKeys,
   encryptPayload,
   decryptPayload,
   type EncryptionKeys,
 } from '@/utils/encryption'
 import { DESKTOP_OFFLINE_MESSAGE, formatDesktopError } from '@/utils/desktopError'
 
-const procedureKeyExchange = 'io.xconn.deskconn.deskconnd.key.exchange'
 const procedureIndexQuery  = 'io.xconn.deskconn.deskconnd.index.query'
 
 interface IndexEntry {
@@ -50,6 +48,7 @@ const emit = defineEmits<{
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
+const sessionEncryptionStore = useSessionEncryptionStore()
 const settingsStore = useSettingsStore()
 
 const isConnecting  = ref(true)
@@ -294,11 +293,10 @@ async function load() {
   isLoading.value    = true
 
   try {
-    const { publicKey, privateKey } = createX25519KeyPair()
-    const keyResult       = await sess.call(procedureKeyExchange, [publicKey])
-    const serverPublicKey = keyResult.args?.[0] as Uint8Array
-    if (!serverPublicKey?.length) throw new Error('Invalid key exchange response')
-    const keys = await deriveSessionKeys(privateKey, serverPublicKey)
+    // Shared across every window on this realm's session (see
+    // sessionEncryption.ts) — the backend keeps only one key per session, so
+    // Files/Pictures/an Image Viewer save all have to reuse the same one.
+    const keys = await sessionEncryptionStore.getOrExchange(sess, props.realm)
 
     const backendCat = viewConfig.value.backendCategory
     const categories = backendCat !== null ? [backendCat] : ['pdfs', 'texts', 'documents']
