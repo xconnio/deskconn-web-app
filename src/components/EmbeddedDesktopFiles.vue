@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
-import { ApplicationError, Progress, type Result, type Session } from 'xconn'
+import { ApplicationError, type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
+import { useSessionEncryptionStore } from '@/stores/sessionEncryption'
 import { useSettingsStore } from '@/stores/settings'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
 import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
@@ -14,18 +15,16 @@ import {
   decryptPayload,
   type EncryptionKeys,
 } from '@/utils/encryption'
+import { uploadFileToPath } from '@/utils/fileUpload'
 import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
 import { formatDesktopError, isNoSuchProcedureException } from '@/utils/desktopError'
 
-const procedureKeyExchange = 'io.xconn.deskconn.deskconnd.key.exchange'
 const procedureFileBrowse = 'io.xconn.deskconn.deskconnd.file.browse'
 const procedureFileRename = 'io.xconn.deskconn.deskconnd.file.rename'
 const procedureFileDelete = 'io.xconn.deskconn.deskconnd.file.delete'
 const procedureFileCopy = 'io.xconn.deskconn.deskconnd.file.copy'
 const procedureFileDownload = 'io.xconn.deskconn.deskconnd.file.download'
 const procedureFileSearch = 'io.xconn.deskconn.deskconnd.file.search'
-const procedureFileUpload = 'io.xconn.deskconn.deskconnd.file.upload'
-const UPLOAD_CHUNK_SIZE = 1024 * 1024
 const outsideHomeMessage = 'Access denied. You can only browse files inside the home directory.'
 
 const props = defineProps<{
@@ -41,6 +40,7 @@ const emit = defineEmits<{
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
+const sessionEncryptionStore = useSessionEncryptionStore()
 const settingsStore = useSettingsStore()
 
 // Absent when there's no FloatingWindow ancestor (e.g. the standalone /files
@@ -398,25 +398,18 @@ function resetExplorerState() {
 async function performKeyExchange(): Promise<boolean> {
   if (!session.value) return false
 
-  const { publicKey, privateKey } = createX25519KeyPair()
-
-  let result
+  // Shared across every window on this realm's session (see
+  // sessionEncryption.ts) — the backend keeps only one key per session, so
+  // Files/Pictures/an Image Viewer save all have to reuse the same one.
   try {
-    result = await session.value.call(procedureKeyExchange, [publicKey])
+    encryptionKeys.value = await sessionEncryptionStore.getOrExchange(session.value, props.realm)
+    return true
   } catch (error) {
     if (isNoSuchProcedureException(error)) {
       return false
     }
     throw error
   }
-
-  const serverKeyBytes = result.args?.[0] as Uint8Array
-  if (!serverKeyBytes?.length) {
-    throw new Error('Invalid server public key received during key exchange')
-  }
-
-  encryptionKeys.value = await deriveSessionKeys(privateKey, serverKeyBytes)
-  return true
 }
 
 async function probeFileOperation(procedure: string): Promise<boolean> {
@@ -1058,7 +1051,6 @@ async function uploadFileToRemote(file: File) {
   if (!session.value || !currentBrowse.value) return
 
   const destPath = currentBrowse.value.path
-  const startTime = Date.now()
   const controller = new AbortController()
 
   uploadProgress.value = {
@@ -1069,79 +1061,19 @@ async function uploadFileToRemote(file: File) {
     cancel: () => controller.abort(),
   }
 
-  let sendKey: Uint8Array | null = encryptionKeys.value?.encryptKey ?? null
-  const needsKeyExchange = sendKey === null
-  const { publicKey, privateKey } = createX25519KeyPair()
-
-  let seq = 0
-  let fileOffset = 0
-  let ackResolve: ((r: Result) => void) | null = null
-
-  const progressHandler = async (result: Result) => {
-    ackResolve?.(result)
-    ackResolve = null
-  }
-
-  function waitForAck(): Promise<Result> {
-    return new Promise((resolve, reject) => {
-      ackResolve = resolve
-      controller.signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })
-    })
-  }
-
-  function enc(obj: object): Uint8Array {
-    return encryptPayload(new TextEncoder().encode(JSON.stringify(obj)), sendKey!)
-  }
-
-  async function* frames(): AsyncGenerator<Progress> {
-    if (needsKeyExchange) {
-      yield new Progress(['K', publicKey], {}, { progress: true })
-      const ack = await waitForAck()
-      const raw = ack.args?.[0] as Uint8Array
-      if (!raw?.length) throw new Error('Empty key exchange response from server')
-      const keys = await deriveSessionKeys(privateKey, raw.slice(4))
-      sendKey = keys.encryptKey
-    }
-
-    yield new Progress(['I', seq++, enc({ remote_path: destPath, source_is_dir: false, target_is_dir_hint: true })], {}, { progress: true })
-    await waitForAck()
-
-    yield new Progress(['H', seq++, enc({ name: file.name, rel_path: file.name, size: file.size, mode: 0, is_dir: false })], {}, { progress: true })
-
-    while (fileOffset < file.size) {
-      await waitForAck()
-      const chunkBytes = new Uint8Array(await file.slice(fileOffset, fileOffset + UPLOAD_CHUNK_SIZE).arrayBuffer())
-      fileOffset += chunkBytes.length
-      if (uploadProgress.value) {
-        uploadProgress.value.sent = fileOffset
-        const elapsed = (Date.now() - startTime) / 1000
-        uploadProgress.value.speed = elapsed > 0 ? fileOffset / elapsed : 0
-      }
-      yield new Progress(['D', seq++, encryptPayload(chunkBytes, sendKey!)], {}, { progress: true })
-    }
-
-    await waitForAck()
-    yield new Progress(['E', seq], {}, {})
-  }
-
-  const gen = frames()
-  const progressFunc = async () => (await gen.next()).value as Progress
-
   try {
-    await session.value.callProgressiveProgress(procedureFileUpload, progressFunc, progressHandler)
+    await uploadFileToPath(session.value, props.realm, destPath, file.name, file, (p) => {
+      if (!uploadProgress.value) return
+      uploadProgress.value.sent = p.sent
+      uploadProgress.value.total = p.total
+      uploadProgress.value.speed = p.speed
+    }, controller.signal)
     await refreshCurrentPath()
   } catch (err) {
+    // On abort, uploadFileToPath already tells the backend to discard its
+    // per-session upload state before rethrowing — nothing left to surface.
     if (!controller.signal.aborted) {
       operationError.value = err instanceof Error ? err.message : 'Upload failed'
-    } else {
-      // Aborting mid-stream never tells the backend the call ended, so it keeps
-      // its per-session upload state around — the next upload would then get
-      // stuck waiting on a sequence number that will never arrive. A plain
-      // (non-progressive) call with any message type other than 'E' makes the
-      // backend discard that stale state.
-      try {
-        await session.value?.call(procedureFileUpload, ['C'])
-      } catch { /* best-effort cleanup, ignore failures */ }
     }
   } finally {
     uploadProgress.value = null

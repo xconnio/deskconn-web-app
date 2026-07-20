@@ -13,6 +13,7 @@ import { type Session } from 'xconn'
 import { floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
 import { createX25519KeyPair, deriveSessionKeys, decryptPayload } from '@/utils/encryption'
 import { canStreamRanges, requestRange } from '@/services/fileStream'
+import { uploadFileToPath, type UploadProgress } from '@/utils/fileUpload'
 import {
   type FilePreviewType,
   formatSize,
@@ -27,6 +28,7 @@ type PreviewEntry = { path: string; name: string; size: number }
 
 const props = defineProps<{
   session: Session
+  realm: string
   entry: PreviewEntry
   entries?: PreviewEntry[]
   focused?: boolean
@@ -70,7 +72,7 @@ function goNext() {
 }
 
 function handleKeydown(e: KeyboardEvent) {
-  if (!props.focused) return
+  if (!props.focused || editMode.value) return
   if (e.key === 'ArrowLeft' && canGoPrev.value) { e.preventDefault(); goPrev() }
   else if (e.key === 'ArrowRight' && canGoNext.value) { e.preventDefault(); goNext() }
 }
@@ -496,6 +498,263 @@ async function ensureDownloadServiceWorker(): Promise<ServiceWorker | null> {
   return downloadServiceWorkerReadyPromise
 }
 
+// ── Crop & rotate editor ──────────────────────────────────────────────────
+// Edits happen entirely client-side against an offscreen canvas; nothing is
+// sent to the device until "Save" uploads the result via fileUpload.ts (the
+// same wire protocol as `dc push`, see fileupload.go).
+type DragMode = 'move' | 'nw' | 'ne' | 'sw' | 'se'
+
+const editMode      = ref(false)
+const cropping      = ref(false)
+const savingEdit    = ref(false)
+const editError     = ref('')
+const editImageUrl  = ref('')
+const editImgEl     = ref<HTMLImageElement | null>(null)
+const editStageEl   = ref<HTMLElement | null>(null)
+const displayTick   = ref(0)
+const workingWidth  = ref(0)
+const workingHeight = ref(0)
+const cropRect      = ref<{ x: number; y: number; w: number; h: number } | null>(null)
+
+const showSaveDialog = ref(false)
+const saveAsNew      = ref(false)
+const saveFileName   = ref('')
+const uploadProgress = ref<{ name: string; sent: number; total: number; speed: number; cancel: () => void } | null>(null)
+
+let workingCanvas: HTMLCanvasElement | null = null
+let workingMimeType = 'image/png'
+let editStageResizeObserver: ResizeObserver | null = null
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Failed to load image for editing'))
+    img.src = src
+  })
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Failed to export image'))), type)
+  })
+}
+
+async function refreshEditPreview() {
+  if (!workingCanvas) return
+  const blob = await canvasToBlob(workingCanvas, workingMimeType)
+  if (editImageUrl.value) URL.revokeObjectURL(editImageUrl.value)
+  editImageUrl.value = URL.createObjectURL(blob)
+  workingWidth.value = workingCanvas.width
+  workingHeight.value = workingCanvas.height
+}
+
+async function enterEditMode() {
+  if (previewType.value !== 'image' || !previewBlobUrl.value || editMode.value) return
+  editError.value = ''
+  try {
+    const img = await loadImageElement(previewBlobUrl.value)
+    const mime = getMimeType(currentEntry.value.name)
+    workingMimeType = mime.startsWith('image/') ? mime : 'image/png'
+
+    const canvas = document.createElement('canvas')
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
+    canvas.getContext('2d')!.drawImage(img, 0, 0)
+    workingCanvas = canvas
+    cropRect.value = { x: 0, y: 0, w: canvas.width, h: canvas.height }
+    cropping.value = false
+
+    await refreshEditPreview()
+    editMode.value = true
+  } catch (err) {
+    editError.value = err instanceof Error ? err.message : 'Failed to start editing'
+  }
+}
+
+function cancelEdit() {
+  if (editImageUrl.value) URL.revokeObjectURL(editImageUrl.value)
+  editImageUrl.value = ''
+  workingCanvas = null
+  cropRect.value = null
+  cropping.value = false
+  editMode.value = false
+  editError.value = ''
+}
+
+async function rotate(deg: 90 | -90) {
+  if (!workingCanvas) return
+  const src = workingCanvas
+  const rotated = document.createElement('canvas')
+  rotated.width = src.height
+  rotated.height = src.width
+  const ctx = rotated.getContext('2d')!
+  ctx.translate(rotated.width / 2, rotated.height / 2)
+  ctx.rotate((deg * Math.PI) / 180)
+  ctx.drawImage(src, -src.width / 2, -src.height / 2)
+  workingCanvas = rotated
+  cropRect.value = { x: 0, y: 0, w: rotated.width, h: rotated.height }
+  await refreshEditPreview()
+}
+
+function rotateLeft() { rotate(-90) }
+function rotateRight() { rotate(90) }
+
+function toggleCropping() {
+  if (!workingCanvas) return
+  cropping.value = !cropping.value
+  if (cropping.value) cropRect.value = { x: 0, y: 0, w: workingCanvas.width, h: workingCanvas.height }
+}
+
+async function applyCrop() {
+  if (!workingCanvas || !cropRect.value) return
+  const { x, y, w, h } = cropRect.value
+  if (w < 1 || h < 1) return
+  const cropped = document.createElement('canvas')
+  cropped.width = Math.round(w)
+  cropped.height = Math.round(h)
+  cropped.getContext('2d')!.drawImage(workingCanvas, x, y, w, h, 0, 0, cropped.width, cropped.height)
+  workingCanvas = cropped
+  cropRect.value = { x: 0, y: 0, w: cropped.width, h: cropped.height }
+  cropping.value = false
+  await refreshEditPreview()
+}
+
+function clamp(v: number, min: number, max: number) { return Math.min(Math.max(v, min), max) }
+
+let dragMode: DragMode | null = null
+let dragStartX = 0
+let dragStartY = 0
+let dragStartRect: { x: number; y: number; w: number; h: number } | null = null
+let dragScale = 1
+
+function beginDrag(mode: DragMode, e: PointerEvent) {
+  if (!cropRect.value || !editImgEl.value) return
+  const rect = editImgEl.value.getBoundingClientRect()
+  if (rect.width === 0) return
+  dragScale = workingWidth.value / rect.width
+  dragMode = mode
+  dragStartX = e.clientX
+  dragStartY = e.clientY
+  dragStartRect = { ...cropRect.value }
+  window.addEventListener('pointermove', onDragMove)
+  window.addEventListener('pointerup', onDragEnd)
+}
+
+function onCropBodyPointerDown(e: PointerEvent) { beginDrag('move', e) }
+function onHandlePointerDown(corner: DragMode, e: PointerEvent) { beginDrag(corner, e) }
+
+function onDragMove(e: PointerEvent) {
+  if (!dragMode || !dragStartRect) return
+  const dx = (e.clientX - dragStartX) * dragScale
+  const dy = (e.clientY - dragStartY) * dragScale
+  const maxW = workingWidth.value
+  const maxH = workingHeight.value
+  const MIN = 20
+
+  if (dragMode === 'move') {
+    const x = clamp(dragStartRect.x + dx, 0, maxW - dragStartRect.w)
+    const y = clamp(dragStartRect.y + dy, 0, maxH - dragStartRect.h)
+    cropRect.value = { x, y, w: dragStartRect.w, h: dragStartRect.h }
+    return
+  }
+
+  let left = dragStartRect.x
+  let top = dragStartRect.y
+  let right = dragStartRect.x + dragStartRect.w
+  let bottom = dragStartRect.y + dragStartRect.h
+
+  if (dragMode.includes('w')) left = clamp(dragStartRect.x + dx, 0, right - MIN)
+  if (dragMode.includes('e')) right = clamp(right + dx, left + MIN, maxW)
+  if (dragMode.includes('n')) top = clamp(dragStartRect.y + dy, 0, bottom - MIN)
+  if (dragMode.includes('s')) bottom = clamp(bottom + dy, top + MIN, maxH)
+
+  cropRect.value = { x: left, y: top, w: right - left, h: bottom - top }
+}
+
+function onDragEnd() {
+  dragMode = null
+  dragStartRect = null
+  window.removeEventListener('pointermove', onDragMove)
+  window.removeEventListener('pointerup', onDragEnd)
+}
+
+function onEditImageLoad() {
+  displayTick.value++
+  if (editStageResizeObserver || !editImgEl.value) return
+  editStageResizeObserver = new ResizeObserver(() => { displayTick.value++ })
+  editStageResizeObserver.observe(editImgEl.value)
+}
+
+// Position/size the crop overlay in screen pixels, relative to .preview-image-wrap
+// (editStageEl) — the image itself may be inset within it, so the overlay's
+// origin is the image's rect offset from the wrap's rect, not (0, 0).
+const cropBoxStyle = computed(() => {
+  void displayTick.value // track for recompute on load/resize
+  if (!cropRect.value || !editImgEl.value || !editStageEl.value || !workingWidth.value) return {}
+  const imgRect = editImgEl.value.getBoundingClientRect()
+  const wrapRect = editStageEl.value.getBoundingClientRect()
+  const scale = imgRect.width / workingWidth.value
+  const offsetX = imgRect.left - wrapRect.left
+  const offsetY = imgRect.top - wrapRect.top
+  return {
+    left: `${offsetX + cropRect.value.x * scale}px`,
+    top: `${offsetY + cropRect.value.y * scale}px`,
+    width: `${cropRect.value.w * scale}px`,
+    height: `${cropRect.value.h * scale}px`,
+  }
+})
+
+function suggestNewFileName(original: string): string {
+  const dot = original.lastIndexOf('.')
+  if (dot <= 0) return `${original}-edited`
+  return `${original.slice(0, dot)}-edited${original.slice(dot)}`
+}
+
+function openSaveDialog() {
+  if (!workingCanvas) return
+  saveAsNew.value = false
+  saveFileName.value = suggestNewFileName(currentEntry.value.name)
+  editError.value = ''
+  showSaveDialog.value = true
+}
+
+async function confirmSave() {
+  if (!workingCanvas) return
+  const targetName = saveAsNew.value ? saveFileName.value.trim() : currentEntry.value.name
+  if (!targetName) { editError.value = 'Enter a file name'; return }
+
+  const slash = currentEntry.value.path.lastIndexOf('/')
+  const destDir = slash > 0 ? currentEntry.value.path.substring(0, slash) : '/'
+  const destPath = destDir === '/' ? `/${targetName}` : `${destDir}/${targetName}`
+
+  editError.value = ''
+  savingEdit.value = true
+
+  try {
+    const blob = await canvasToBlob(workingCanvas, workingMimeType)
+    const controller = new AbortController()
+    uploadProgress.value = { name: targetName, sent: 0, total: blob.size, speed: 0, cancel: () => controller.abort() }
+
+    await uploadFileToPath(props.session, props.realm, destDir, targetName, blob, (p: UploadProgress) => {
+      if (!uploadProgress.value) return
+      uploadProgress.value.sent = p.sent
+      uploadProgress.value.total = p.total
+      uploadProgress.value.speed = p.speed
+    }, controller.signal)
+
+    showSaveDialog.value = false
+    const finalPath = saveAsNew.value ? destPath : currentEntry.value.path
+    cancelEdit()
+    goToEntry({ path: finalPath, name: targetName, size: blob.size })
+  } catch (err) {
+    editError.value = err instanceof Error ? err.message : 'Failed to save image'
+  } finally {
+    savingEdit.value = false
+    uploadProgress.value = null
+  }
+}
+
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   openFile()
@@ -505,6 +764,8 @@ onUnmounted(() => {
   mounted = false
   document.removeEventListener('keydown', handleKeydown)
   if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value)
+  if (editImageUrl.value) URL.revokeObjectURL(editImageUrl.value)
+  editStageResizeObserver?.disconnect()
   stopActiveStream()
 })
 </script>
@@ -512,12 +773,35 @@ onUnmounted(() => {
 <template>
   <div class="preview-window">
     <Teleport :to="actionsTarget ?? 'body'" :disabled="!actionsTarget">
+      <button
+        v-if="previewType === 'image' && previewBlobUrl && !editMode"
+        class="preview-download-btn"
+        @click="enterEditMode"
+        title="Edit (crop &amp; rotate)"
+      >
+        <i class="bi bi-pencil"></i>
+      </button>
       <button class="preview-download-btn" @click="downloadFromPreview" :disabled="previewLoading" title="Download">
         <i class="bi bi-download"></i>
       </button>
     </Teleport>
 
     <div class="preview-body">
+      <div v-if="editMode" class="edit-toolbar">
+        <button class="edit-btn" @click="rotateLeft" title="Rotate left"><i class="bi bi-arrow-counterclockwise"></i></button>
+        <button class="edit-btn" @click="rotateRight" title="Rotate right"><i class="bi bi-arrow-clockwise"></i></button>
+        <button class="edit-btn" :class="{ 'edit-btn-active': cropping }" @click="toggleCropping" title="Crop">
+          <i class="bi bi-crop"></i>
+        </button>
+        <button v-if="cropping" class="edit-btn" @click="applyCrop" title="Apply crop">
+          <i class="bi bi-check-lg"></i>
+        </button>
+        <span v-if="editError" class="edit-toolbar-error">{{ editError }}</span>
+        <span class="edit-toolbar-spacer"></span>
+        <button class="edit-btn edit-btn-text" @click="cancelEdit" :disabled="savingEdit">Cancel</button>
+        <button class="edit-btn edit-btn-primary" @click="openSaveDialog" :disabled="savingEdit">Save…</button>
+      </div>
+
       <div v-if="previewLoading" class="preview-state">
         <div class="spinner-border mb-3" role="status"><span class="visually-hidden">Loading…</span></div>
         <p v-if="previewExpectedBytes > 0" class="preview-progress-text">
@@ -529,6 +813,16 @@ onUnmounted(() => {
       <div v-else-if="previewError" class="preview-state">
         <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
         <p class="mb-0">{{ previewError }}</p>
+      </div>
+
+      <div v-else-if="previewType === 'image' && previewBlobUrl && editMode" ref="editStageEl" class="preview-image-wrap">
+        <img :src="editImageUrl" :alt="currentEntry.name" class="preview-image" ref="editImgEl" @load="onEditImageLoad" />
+        <div v-if="cropping" class="crop-box" :style="cropBoxStyle" @pointerdown="onCropBodyPointerDown">
+          <div class="crop-handle crop-handle-nw" @pointerdown.stop="onHandlePointerDown('nw', $event)"></div>
+          <div class="crop-handle crop-handle-ne" @pointerdown.stop="onHandlePointerDown('ne', $event)"></div>
+          <div class="crop-handle crop-handle-sw" @pointerdown.stop="onHandlePointerDown('sw', $event)"></div>
+          <div class="crop-handle crop-handle-se" @pointerdown.stop="onHandlePointerDown('se', $event)"></div>
+        </div>
       </div>
 
       <div v-else-if="previewType === 'image' && previewBlobUrl" class="preview-image-wrap">
@@ -560,6 +854,65 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+
+  <!-- Save-as dialog -->
+  <Teleport to="body">
+    <div v-if="showSaveDialog" class="save-dialog-overlay" @click.self="!savingEdit && (showSaveDialog = false)">
+      <div class="save-dialog">
+        <h4 class="save-dialog-title">Save image</h4>
+        <label class="save-dialog-option">
+          <input type="radio" name="save-mode" :checked="!saveAsNew" @change="saveAsNew = false" />
+          Replace &quot;{{ currentEntry.name }}&quot;
+        </label>
+        <label class="save-dialog-option">
+          <input type="radio" name="save-mode" :checked="saveAsNew" @change="saveAsNew = true" />
+          Save as a new file
+        </label>
+        <input
+          v-if="saveAsNew"
+          v-model="saveFileName"
+          type="text"
+          class="save-dialog-input"
+          placeholder="File name"
+          @keyup.enter="confirmSave"
+        />
+        <p v-if="editError" class="save-dialog-error">{{ editError }}</p>
+        <div class="save-dialog-actions">
+          <button class="save-dialog-btn" @click="showSaveDialog = false" :disabled="savingEdit">Cancel</button>
+          <button
+            class="save-dialog-btn save-dialog-btn-primary"
+            @click="confirmSave"
+            :disabled="savingEdit || (saveAsNew && !saveFileName.trim())"
+          >
+            {{ savingEdit ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Upload progress toast -->
+  <Teleport to="body">
+  <Transition name="dl-toast">
+    <div v-if="uploadProgress" class="dl-toast">
+      <div class="dl-toast-header">
+        <i class="bi bi-upload dl-toast-icon"></i>
+        <span class="dl-toast-title">Saving</span>
+        <button class="dl-toast-cancel" @click="uploadProgress.cancel()" title="Cancel">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+      <div class="dl-toast-name">{{ uploadProgress.name }}</div>
+      <div class="dl-progress-bar-wrap">
+        <div class="dl-progress-bar" :style="{ width: uploadProgress.total > 0 ? `${Math.min(100, Math.round(uploadProgress.sent / uploadProgress.total * 100))}%` : '0%' }"></div>
+      </div>
+      <div class="dl-toast-meta">
+        <span>{{ formatSize(uploadProgress.sent) }} / {{ uploadProgress.total > 0 ? formatSize(uploadProgress.total) : '…' }}</span>
+        <span>{{ uploadProgress.speed > 0 ? `${formatSize(Math.round(uploadProgress.speed))}/s` : '…' }}</span>
+      </div>
+    </div>
+  </Transition>
+  </Teleport>
 
   <!-- Download progress toast -->
   <Teleport to="body">
@@ -658,6 +1011,132 @@ onUnmounted(() => {
 
 .preview-text-wrap { flex: 1; overflow: auto; background: #272822; padding: 1.25rem; }
 .preview-text { margin: 0; font-size: 0.82rem; line-height: 1.65; color: #f8f8f2; white-space: pre-wrap; word-break: break-word; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
+
+/* Crop & rotate editor */
+.edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.75rem;
+  background: #1e293b;
+  border-bottom: 1px solid #0f172a;
+  flex-shrink: 0;
+}
+
+.edit-btn {
+  height: 30px;
+  padding: 0 0.65rem;
+  border: 0;
+  border-radius: 7px;
+  background: #334155;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.edit-btn:hover:not(:disabled) { background: #475569; }
+.edit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.edit-btn-active { background: var(--theme-primary, #3b82f6); color: #fff; }
+.edit-btn-text { background: transparent; color: #cbd5e1; }
+.edit-btn-text:hover:not(:disabled) { background: #334155; color: #fff; }
+.edit-btn-primary { background: var(--theme-primary, #3b82f6); color: #fff; font-weight: 600; }
+.edit-btn-primary:hover:not(:disabled) { background: #2563eb; }
+
+.edit-toolbar-spacer { flex: 1; }
+.edit-toolbar-error { font-size: 0.78rem; color: #fca5a5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.crop-box {
+  position: absolute;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  cursor: move;
+  touch-action: none;
+}
+
+.crop-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border: 2px solid var(--theme-primary, #3b82f6);
+  border-radius: 50%;
+  touch-action: none;
+}
+.crop-handle-nw { top: -7px; left: -7px; cursor: nwse-resize; }
+.crop-handle-ne { top: -7px; right: -7px; cursor: nesw-resize; }
+.crop-handle-sw { bottom: -7px; left: -7px; cursor: nesw-resize; }
+.crop-handle-se { bottom: -7px; right: -7px; cursor: nwse-resize; }
+
+/* Save-as dialog */
+.save-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  z-index: 3100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.save-dialog {
+  width: 100%;
+  max-width: 340px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.25);
+}
+
+.save-dialog-title { margin: 0 0 0.85rem; font-size: 1rem; font-weight: 700; color: #1e293b; }
+
+.save-dialog-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #334155;
+  padding: 0.35rem 0;
+  cursor: pointer;
+}
+
+.save-dialog-input {
+  width: calc(100% - 1.6rem);
+  margin: 0.35rem 0 0.25rem 1.6rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+.save-dialog-input:focus { outline: none; border-color: var(--theme-primary, #3b82f6); }
+
+.save-dialog-error { font-size: 0.78rem; color: #dc2626; margin: 0.35rem 0 0; }
+
+.save-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.save-dialog-btn {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid #d9dee4;
+  border-radius: 7px;
+  background: #fff;
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.save-dialog-btn:hover:not(:disabled) { background: #f1f5f9; }
+.save-dialog-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.save-dialog-btn-primary { background: var(--theme-primary, #3b82f6); border-color: var(--theme-primary, #3b82f6); color: #fff; }
+.save-dialog-btn-primary:hover:not(:disabled) { background: #2563eb; }
 
 /* Download toast */
 .dl-toast {
