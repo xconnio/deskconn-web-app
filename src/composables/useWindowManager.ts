@@ -117,6 +117,12 @@ export function useWindowManager() {
     if (focusedId.value === id) refocusTopWindow()
   }
 
+  function updateTitle(id: string, title: string) {
+    const win = windows.value.find((w) => w.id === id)
+    if (!win) return
+    win.title = title
+  }
+
   function minimizeWindow(id: string) {
     const win = windows.value.find((w) => w.id === id)
     if (!win) return
@@ -185,6 +191,7 @@ export function useWindowManager() {
     restoreWindow,
     toggleMaximize,
     updateBounds,
+    updateTitle,
     syncMaximizedBounds,
   }
 }

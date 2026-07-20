@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch, nextTick, type Component } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick, markRaw, type Component } from 'vue'
 import { useRouter } from 'vue-router'
+import { type Session } from 'xconn'
 
 import { useMachinesStore } from '@/stores/machines'
 import { useSettingsStore } from '@/stores/settings'
@@ -11,9 +12,11 @@ import EmbeddedIndexedFiles from '@/components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 import ResourceMonitor from '@/components/ResourceMonitor.vue'
 import DesktopSettingsPanel from '@/components/DesktopSettingsPanel.vue'
+import FilePreviewModal from '@/components/FilePreviewModal.vue'
 import FloatingWindow from '@/components/FloatingWindow.vue'
 import AppDock from '@/components/AppDock.vue'
 import { loadCachedWallpaper, storeWallpaper } from '@/composables/useWallpaperCache'
+import { getFilePreviewType, type FilePreviewType } from '@/utils/fileTypes'
 
 const props = defineProps<{ realm: string; active: boolean }>()
 
@@ -37,6 +40,7 @@ const {
   restoreWindow,
   toggleMaximize,
   updateBounds,
+  updateTitle,
   syncMaximizedBounds,
 } = desktopSessionsStore.getOrCreate(props.realm)
 
@@ -207,6 +211,7 @@ const appComponents: Record<string, Component> = {
   documents: EmbeddedIndexedFiles,
   'resource-monitor': ResourceMonitor,
   settings: DesktopSettingsPanel,
+  preview: FilePreviewModal,
 }
 
 function windowProps(win: { id: string; appId: string; props: Record<string, unknown> }) {
@@ -237,6 +242,13 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
         realm: props.realm,
         focused,
       }
+    case 'preview':
+      return {
+        session: win.props.session as Session,
+        entry: win.props.entry as PreviewEntry,
+        entries: win.props.entries as PreviewEntry[],
+        focused,
+      }
     default:
       return {
         realm: props.realm,
@@ -245,6 +257,30 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
         focused,
       }
   }
+}
+
+type PreviewEntry = { path: string; name: string; size: number }
+
+const PREVIEW_ICONS: Record<FilePreviewType, string> = {
+  image: 'bi-image-fill',
+  video: 'bi-file-earmark-play-fill',
+  audio: 'bi-file-earmark-music-fill',
+  pdf: 'bi-file-earmark-pdf-fill',
+  text: 'bi-file-earmark-text-fill',
+  none: 'bi-file-earmark-fill',
+}
+
+function onPreviewFile(session: Session, entry: PreviewEntry, entries: PreviewEntry[]) {
+  openWindow({
+    appId: 'preview',
+    title: entry.name,
+    icon: PREVIEW_ICONS[getFilePreviewType(entry.name)],
+    iconColor: '#334155',
+    iconBg: '#e2e8f0',
+    width: 760,
+    height: 560,
+    props: { session: markRaw(session), entry, entries },
+  }, maximizedContainerSize())
 }
 
 function onOpenFiles(path: string) {
@@ -382,6 +418,8 @@ onUnmounted(() => {
             v-bind="windowProps(win)"
             @close="closeWindow(win.id)"
             @open-files="onOpenFiles"
+            @preview-file="onPreviewFile"
+            @update-title="updateTitle(win.id, $event)"
           />
         </FloatingWindow>
       </div>

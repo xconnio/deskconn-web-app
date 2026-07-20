@@ -4,7 +4,6 @@ import { type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSettingsStore } from '@/stores/settings'
-import FilePreviewModal from '@/components/FilePreviewModal.vue'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
 import {
   createX25519KeyPair,
@@ -47,6 +46,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'open-files': [path: string]
+  'preview-file': [session: Session, entry: IndexEntry, entries: IndexEntry[]]
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
@@ -70,7 +70,6 @@ const activeSession = shallowRef<Session | null>(null)
 let activeKeys: EncryptionKeys | null = null
 let activeCategories: string[] = []
 
-const previewEntry = ref<IndexEntry | null>(null)
 const previewSession = shallowRef<Session | null>(null)
 
 const contextMenu = ref<{ x: number; y: number; entry: IndexEntry } | null>(null)
@@ -93,12 +92,6 @@ function viewInFiles(entry: IndexEntry) {
 function handleContextMenuKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') closeContextMenu()
 }
-
-const previewModalProps = computed(() =>
-  previewEntry.value && previewSession.value
-    ? { session: previewSession.value, entry: previewEntry.value }
-    : null
-)
 
 function updateViewMode() { isGridView.value = window.innerWidth >= 768 }
 
@@ -143,7 +136,7 @@ const displayEntries = computed(() =>
 
 function openEntry(entry: IndexEntry) {
   if (!previewSession.value) return
-  previewEntry.value = entry
+  emit('preview-file', previewSession.value, entry, displayEntries.value)
 }
 
 const { handleNavKey } = useEntryNavigation({
@@ -156,7 +149,6 @@ const { handleNavKey } = useEntryNavigation({
 
 function handleKeydown(e: KeyboardEvent) {
   if (!props.focused) return
-  if (previewEntry.value) return
   const target = e.target as HTMLElement
   if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
   handleNavKey(e)
@@ -358,13 +350,6 @@ onUnmounted(() => {
         </button>
       </div>
     </Teleport>
-
-    <FilePreviewModal
-      v-if="previewModalProps"
-      :session="previewModalProps.session"
-      :entry="previewModalProps.entry"
-      @close="previewEntry = null"
-    />
 
     <div v-if="isConnecting || isLoading" class="state-center">
       <div class="pulse-ring" :style="{ background: viewConfig.bg }">
