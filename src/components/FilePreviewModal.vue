@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Standalone file preview + download modal.
+ * File preview, rendered inside its own FloatingWindow (see DesktopSessionHost.vue).
  * Accepts an established session and a file entry. Images/pdf/text use the
  * WAMP-based full-buffer download (per-file key exchange, H/D framing).
  * Audio/video play natively via a same-origin URL backed by a Service Worker
@@ -8,8 +8,9 @@
  * raw WebRTC data channel (see services/fileStream.ts) — this requires a
  * direct P2P connection to the device.
  */
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, inject, onMounted, onUnmounted } from 'vue'
 import { type Session } from 'xconn'
+import { floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
 import { createX25519KeyPair, deriveSessionKeys, decryptPayload } from '@/utils/encryption'
 import { canStreamRanges, requestRange } from '@/services/fileStream'
 import {
@@ -22,24 +23,65 @@ import {
 
 const procedureFileDownload = 'io.xconn.deskconn.deskconnd.file.download'
 
+type PreviewEntry = { path: string; name: string; size: number }
+
 const props = defineProps<{
   session: Session
-  entry: { path: string; name: string; size: number }
+  entry: PreviewEntry
+  entries?: PreviewEntry[]
+  focused?: boolean
 }>()
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ 'update-title': [title: string] }>()
+
+// Absent when there's no FloatingWindow ancestor — the download button then
+// renders inline instead of teleporting into the window's titlebar.
+const actionsHostRef = inject(floatingWindowActionsKey)
+const actionsTarget = computed(() => actionsHostRef?.value ?? null)
+
+// The file actually being shown — starts at props.entry but moves independently
+// as the user steps through sibling images with the arrows/keyboard, without
+// tearing down and reopening the window.
+const currentEntry = ref<PreviewEntry>(props.entry)
+
+// Left/right navigation only cycles through images (see openPreview callers,
+// which pass every sibling in the current folder/view, not just images).
+const imageEntries = computed(() => (props.entries ?? []).filter((e) => getFilePreviewType(e.name) === 'image'))
+const currentImageIndex = computed(() => imageEntries.value.findIndex((e) => e.path === currentEntry.value.path))
+const canGoPrev = computed(() => previewType.value === 'image' && currentImageIndex.value > 0)
+const canGoNext = computed(() => previewType.value === 'image' && currentImageIndex.value >= 0 && currentImageIndex.value < imageEntries.value.length - 1)
+
+function goToEntry(target: PreviewEntry) {
+  currentEntry.value = target
+  emit('update-title', target.name)
+  openFile()
+}
+
+function goPrev() {
+  if (!canGoPrev.value) return
+  const target = imageEntries.value[currentImageIndex.value - 1]
+  if (target) goToEntry(target)
+}
+
+function goNext() {
+  if (!canGoNext.value) return
+  const target = imageEntries.value[currentImageIndex.value + 1]
+  if (target) goToEntry(target)
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  if (!props.focused) return
+  if (e.key === 'ArrowLeft' && canGoPrev.value) { e.preventDefault(); goPrev() }
+  else if (e.key === 'ArrowRight' && canGoNext.value) { e.preventDefault(); goNext() }
+}
 
 const previewType          = ref<FilePreviewType>('none')
 const previewBlobUrl       = ref('')
 const previewTextContent   = ref('')
 const previewLoading       = ref(false)
 const previewError         = ref('')
-const previewTheater       = ref(false)
-const previewFullscreen    = ref(false)
 const previewExpectedBytes = ref(0)
 const previewReceivedBytes = ref(0)
-const previewBodyEl        = ref<HTMLElement | null>(null)
-const previewDialogEl      = ref<HTMLElement | null>(null)
 const mediaRetryUsed       = ref(false)
 
 type DownloadProgressState = { name: string; received: number; total: number; speed: number; cancel: () => void }
@@ -48,15 +90,6 @@ const downloadProgress = ref<DownloadProgressState | null>(null)
 let downloadServiceWorker: ServiceWorker | null = null
 let downloadServiceWorkerReadyPromise: Promise<ServiceWorker | null> | null = null
 let mounted = true
-
-function scrollPreviewBody(e: WheelEvent) {
-  const body = previewBodyEl.value
-  if (!body) return
-  const child = Array.from(body.children).find(
-    (el) => (el as HTMLElement).scrollHeight > (el as HTMLElement).clientHeight,
-  ) as HTMLElement | undefined
-  ;(child ?? body).scrollTop += e.deltaY
-}
 
 type CallResult = Awaited<ReturnType<Session['call']>>
 
@@ -220,14 +253,14 @@ async function openStreamedMedia(pt: FilePreviewType): Promise<boolean> {
 
   const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
   const mc = new MessageChannel()
-  const stopBridge = startStreamBridge(mc.port1, props.session, props.entry.path)
+  const stopBridge = startStreamBridge(mc.port1, props.session, currentEntry.value.path)
   activeStreamCleanup = () => { stopBridge(); sw.postMessage({ type: 'stream-close', id }) }
 
-  sw.postMessage({ type: 'stream-init', id, size: props.entry.size, mimeType: getMimeType(props.entry.name) }, [mc.port2])
+  sw.postMessage({ type: 'stream-init', id, size: currentEntry.value.size, mimeType: getMimeType(currentEntry.value.name) }, [mc.port2])
 
   if (previewBlobUrl.value) { URL.revokeObjectURL(previewBlobUrl.value); previewBlobUrl.value = '' }
   previewType.value = pt
-  previewBlobUrl.value = `/_stream/${id}/${encodeURIComponent(props.entry.name)}`
+  previewBlobUrl.value = `/_stream/${id}/${encodeURIComponent(currentEntry.value.name)}`
   previewLoading.value = false
   previewError.value = ''
   return true
@@ -235,13 +268,13 @@ async function openStreamedMedia(pt: FilePreviewType): Promise<boolean> {
 
 async function openFile(isRetry = false) {
   if (!isRetry) mediaRetryUsed.value = false
-  const pt = getFilePreviewType(props.entry.name)
+  const pt = getFilePreviewType(currentEntry.value.name)
   const MAX_IMG_PDF = 100 * 1024 * 1024
 
-  if (pt === 'none' || (pt === 'text' && props.entry.size > 5 * 1024 * 1024)) {
+  if (pt === 'none' || (pt === 'text' && currentEntry.value.size > 5 * 1024 * 1024)) {
     await downloadFileToClient(); return
   }
-  if ((pt === 'image' || pt === 'pdf') && props.entry.size > MAX_IMG_PDF) {
+  if ((pt === 'image' || pt === 'pdf') && currentEntry.value.size > MAX_IMG_PDF) {
     await downloadFileToClient(); return
   }
   if ((pt === 'audio' || pt === 'video') && !isRetry) {
@@ -260,17 +293,17 @@ async function openFile(isRetry = false) {
   if (previewBlobUrl.value) { URL.revokeObjectURL(previewBlobUrl.value); previewBlobUrl.value = '' }
   previewType.value = pt
   previewLoading.value = true
-  previewExpectedBytes.value = props.entry.size
+  previewExpectedBytes.value = currentEntry.value.size
   previewReceivedBytes.value = 0
   previewError.value = ''
 
   try {
-    const data = await fetchFileData(props.entry.path)
+    const data = await fetchFileData(currentEntry.value.path)
     if (!mounted) return
     if (pt === 'text') {
       previewTextContent.value = new TextDecoder('utf-8', { fatal: false }).decode(data)
     } else {
-      const blob = new Blob([data.slice()], { type: getMimeType(props.entry.name) })
+      const blob = new Blob([data.slice()], { type: getMimeType(currentEntry.value.name) })
       previewBlobUrl.value = URL.createObjectURL(blob)
     }
   } catch (err) {
@@ -294,13 +327,13 @@ function downloadFromPreview() {
   if (previewBlobUrl.value) {
     const a = document.createElement('a')
     a.href = previewBlobUrl.value
-    a.download = props.entry.name
+    a.download = currentEntry.value.name
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
   } else if (previewTextContent.value) {
     const blob = new Blob([previewTextContent.value], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url; a.download = props.entry.name
+    a.href = url; a.download = currentEntry.value.name
     document.body.appendChild(a); a.click(); document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   } else {
@@ -345,7 +378,7 @@ async function downloadFileWithSavePicker(
   let writable: FileSystemWritableFileStream | null = null
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handle = await (window as any).showSaveFilePicker({ suggestedName: props.entry.name })
+    const handle = await (window as any).showSaveFilePicker({ suggestedName: currentEntry.value.name })
     writable = await handle.createWritable()
   } catch (err: unknown) {
     if ((err as { name?: string })?.name === 'AbortError') return
@@ -354,11 +387,11 @@ async function downloadFileWithSavePicker(
 
   const startTime = Date.now()
   let received = 0
-  downloadProgress.value = { name: props.entry.name, received: 0, total: props.entry.size, speed: 0, cancel: () => controller.abort() }
+  downloadProgress.value = { name: currentEntry.value.name, received: 0, total: currentEntry.value.size, speed: 0, cancel: () => controller.abort() }
   armStall()
 
   try {
-    await streamFileData(props.entry.path, async (chunk, expectedTotal) => {
+    await streamFileData(currentEntry.value.path, async (chunk, expectedTotal) => {
       armStall()
       await writable!.write(chunk.slice())
       received += chunk.length
@@ -414,17 +447,17 @@ async function downloadFileWithBrowserDownload(
       if (pullWaiter) { const r = pullWaiter; pullWaiter = null; r() }
     }
   }
-  sw.postMessage({ type: 'download', id, filename: props.entry.name }, [mc.port2])
+  sw.postMessage({ type: 'download', id, filename: currentEntry.value.name }, [mc.port2])
 
   const a = document.createElement('a')
-  a.href = `/_dl/${id}`; a.download = props.entry.name
+  a.href = `/_dl/${id}`; a.download = currentEntry.value.name
   document.body.appendChild(a); a.click(); document.body.removeChild(a)
 
   try {
-    await streamFileData(props.entry.path, async (chunk, expectedTotal) => {
+    await streamFileData(currentEntry.value.path, async (chunk, expectedTotal) => {
       armStall()
       if (!sentMeta) {
-        mc.port1.postMessage({ type: 'meta', filename: props.entry.name, size: expectedTotal > 0 ? expectedTotal : 0 })
+        mc.port1.postMessage({ type: 'meta', filename: currentEntry.value.name, size: expectedTotal > 0 ? expectedTotal : 0 })
         sentMeta = true
       }
       await waitForPull()
@@ -463,116 +496,73 @@ async function ensureDownloadServiceWorker(): Promise<ServiceWorker | null> {
   return downloadServiceWorkerReadyPromise
 }
 
-function toggleTheater() {
-  previewTheater.value = !previewTheater.value
-}
-
-async function toggleFullscreen() {
-  const el = previewDialogEl.value
-  if (!el) return
-  if (document.fullscreenElement) {
-    await document.exitFullscreen().catch(() => {})
-  } else {
-    await el.requestFullscreen().catch(() => {})
-  }
-}
-
-function handleFullscreenChange() {
-  previewFullscreen.value = document.fullscreenElement === previewDialogEl.value
-}
-
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
-    if (document.fullscreenElement) return // let the browser exit fullscreen first
-    emit('close')
-  }
-}
-
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
-  document.addEventListener('fullscreenchange', handleFullscreenChange)
   openFile()
 })
 
 onUnmounted(() => {
   mounted = false
   document.removeEventListener('keydown', handleKeydown)
-  document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  if (document.fullscreenElement === previewDialogEl.value) void document.exitFullscreen().catch(() => {})
   if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value)
   stopActiveStream()
 })
 </script>
 
 <template>
-  <Teleport to="body">
-  <div class="preview-overlay fs-overlay" @click.self="emit('close')" @wheel.self.prevent="scrollPreviewBody">
-    <div ref="previewDialogEl" class="preview-dialog" :class="{ 'preview-dialog--theater': previewTheater }">
+  <div class="preview-window">
+    <Teleport :to="actionsTarget ?? 'body'" :disabled="!actionsTarget">
+      <button class="preview-download-btn" @click="downloadFromPreview" :disabled="previewLoading" title="Download">
+        <i class="bi bi-download"></i>
+      </button>
+    </Teleport>
 
-      <div class="preview-header">
-        <span class="preview-title">{{ entry.name }}</span>
-        <div class="preview-header-actions">
-          <button class="preview-close-btn" @click="downloadFromPreview" :disabled="previewLoading" title="Download">
-            <i class="bi bi-download"></i>
-          </button>
-          <button
-            v-if="!previewFullscreen"
-            class="preview-close-btn"
-            :class="{ 'preview-action-active': previewTheater }"
-            @click="toggleTheater"
-            :title="previewTheater ? 'Exit theater mode' : 'Theater mode'"
-          >
-            <i class="bi bi-aspect-ratio"></i>
-          </button>
-          <button class="preview-close-btn" @click="toggleFullscreen" :title="previewFullscreen ? 'Exit full screen' : 'Full screen'">
-            <i class="bi" :class="previewFullscreen ? 'bi-arrows-angle-contract' : 'bi-arrows-angle-expand'"></i>
-          </button>
-          <button class="preview-close-btn" @click="emit('close')" title="Close">
-            <i class="bi bi-x-lg"></i>
-          </button>
-        </div>
+    <div class="preview-body">
+      <div v-if="previewLoading" class="preview-state">
+        <div class="spinner-border mb-3" role="status"><span class="visually-hidden">Loading…</span></div>
+        <p v-if="previewExpectedBytes > 0" class="preview-progress-text">
+          {{ formatSize(previewReceivedBytes) }} / {{ formatSize(previewExpectedBytes) }}
+        </p>
+        <p v-else class="preview-progress-text">Loading…</p>
       </div>
 
-      <div class="preview-body" ref="previewBodyEl">
-        <div v-if="previewLoading" class="preview-state">
-          <div class="spinner-border mb-3" role="status"><span class="visually-hidden">Loading…</span></div>
-          <p v-if="previewExpectedBytes > 0" class="preview-progress-text">
-            {{ formatSize(previewReceivedBytes) }} / {{ formatSize(previewExpectedBytes) }}
-          </p>
-          <p v-else class="preview-progress-text">Loading…</p>
-        </div>
+      <div v-else-if="previewError" class="preview-state">
+        <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
+        <p class="mb-0">{{ previewError }}</p>
+      </div>
 
-        <div v-else-if="previewError" class="preview-state">
-          <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
-          <p class="mb-0">{{ previewError }}</p>
-        </div>
+      <div v-else-if="previewType === 'image' && previewBlobUrl" class="preview-image-wrap">
+        <button v-if="canGoPrev" class="preview-nav-btn preview-nav-btn--prev" @click="goPrev" title="Previous image">
+          <i class="bi bi-chevron-left"></i>
+        </button>
+        <img :src="previewBlobUrl" :alt="currentEntry.name" class="preview-image" />
+        <button v-if="canGoNext" class="preview-nav-btn preview-nav-btn--next" @click="goNext" title="Next image">
+          <i class="bi bi-chevron-right"></i>
+        </button>
+      </div>
 
-        <div v-else-if="previewType === 'image' && previewBlobUrl" class="preview-image-wrap">
-          <img :src="previewBlobUrl" :alt="entry.name" class="preview-image" />
-        </div>
+      <div v-else-if="previewType === 'audio' && previewBlobUrl" class="preview-audio-wrap">
+        <div class="audio-icon"><i class="bi bi-music-note-beamed"></i></div>
+        <p class="audio-name">{{ currentEntry.name }}</p>
+        <audio :src="previewBlobUrl" controls autoplay class="preview-audio" @error="handleMediaError" />
+      </div>
 
-        <div v-else-if="previewType === 'audio' && previewBlobUrl" class="preview-audio-wrap">
-          <div class="audio-icon"><i class="bi bi-music-note-beamed"></i></div>
-          <p class="audio-name">{{ entry.name }}</p>
-          <audio :src="previewBlobUrl" controls autoplay class="preview-audio" @error="handleMediaError" />
-        </div>
+      <div v-else-if="previewType === 'video' && previewBlobUrl" class="preview-video-wrap">
+        <video :src="previewBlobUrl" controls autoplay class="preview-video" @error="handleMediaError" />
+      </div>
 
-        <div v-else-if="previewType === 'video' && previewBlobUrl" class="preview-video-wrap">
-          <video :src="previewBlobUrl" controls autoplay class="preview-video" @error="handleMediaError" />
-        </div>
+      <div v-else-if="previewType === 'pdf' && previewBlobUrl" class="preview-pdf-wrap">
+        <iframe :src="previewBlobUrl" class="preview-pdf" />
+      </div>
 
-        <div v-else-if="previewType === 'pdf' && previewBlobUrl" class="preview-pdf-wrap">
-          <iframe :src="previewBlobUrl" class="preview-pdf" />
-        </div>
-
-        <div v-else-if="previewType === 'text'" class="preview-text-wrap">
-          <pre class="preview-text">{{ previewTextContent }}</pre>
-        </div>
+      <div v-else-if="previewType === 'text'" class="preview-text-wrap">
+        <pre class="preview-text">{{ previewTextContent }}</pre>
       </div>
     </div>
   </div>
 
   <!-- Download progress toast -->
+  <Teleport to="body">
   <Transition name="dl-toast">
     <div v-if="downloadProgress" class="dl-toast">
       <div class="dl-toast-header">
@@ -596,110 +586,78 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.fs-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 2000;
-  display: flex;
-  justify-content: center;
-  backdrop-filter: blur(3px);
-}
-
-.preview-overlay {
-  align-items: center;
-  padding: 1rem;
-  transition: padding 0.2s ease;
-}
-.preview-overlay:has(.preview-dialog--theater) { padding: 0; }
-
-.preview-dialog {
-  background: #fff;
-  border-radius: 12px;
-  width: 100%;
-  max-width: 960px;
+.preview-window {
   display: flex;
   flex-direction: column;
-  height: 85vh;
-  max-height: 90vh;
-  animation: dialog-pop 0.18s ease;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
   overflow: hidden;
-  transition: height 0.2s ease, max-height 0.2s ease, border-radius 0.2s ease;
-}
-.preview-dialog--theater { height: 100vh; max-height: 100vh; max-width: 100vw; border-radius: 0; }
-
-/* Native browser fullscreen (Fullscreen API) */
-.preview-dialog:fullscreen {
-  width: 100vw;
-  height: 100vh;
-  max-width: 100vw;
-  max-height: 100vh;
-  border-radius: 0;
-  background: #0d0d0d;
+  background: #fff;
 }
 
-.preview-header {
-  display: flex;
+/* Teleported into the FloatingWindow's titlebar, beside minimize/maximize/close
+   (see floatingWindowActionsKey) — sized to match FloatingWindow's own .fwin-btn. */
+.preview-download-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #d9dee4;
+  border-radius: 50%;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 0.6rem;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.2rem 0.85rem;
-  border-bottom: 1px solid #e2e8f0;
-  gap: 1rem;
-  flex-shrink: 0;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
-.preview-title { font-size: 0.9rem; font-weight: 700; color: #21313f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; transition: color 0.2s ease; }
-.preview-header-actions { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
-.preview-close-btn { width: 28px; height: 28px; border: 0; border-radius: 50%; background: #f1f5f9; color: #64748b; font-size: 0.75rem; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s, color 0.15s; }
-.preview-close-btn:hover { background: #e2e8f0; color: #0f172a; }
-.preview-close-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.preview-action-active { background: #dbeafe; color: #2563eb; }
-.preview-action-active:hover { background: #bfdbfe; color: #1d4ed8; }
-
-/* In native fullscreen, overlay the header on top of the content instead of
-   pushing it down. */
-.preview-dialog:fullscreen .preview-header {
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  z-index: 1;
-  border-bottom: none;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.6), transparent);
-}
-.preview-dialog:fullscreen .preview-title { color: #fff; }
-.preview-dialog:fullscreen .preview-close-btn { background: rgba(255, 255, 255, 0.12); color: #fff; }
-.preview-dialog:fullscreen .preview-close-btn:hover { background: rgba(255, 255, 255, 0.25); color: #fff; }
-.preview-dialog:fullscreen .preview-action-active { background: rgba(96, 165, 250, 0.35); color: #fff; }
-.preview-dialog:fullscreen .preview-action-active:hover { background: rgba(96, 165, 250, 0.5); color: #fff; }
+.preview-download-btn:hover { background: #e2e8f0; color: #111827; }
+.preview-download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .preview-body { flex: 1; overflow: auto; display: flex; flex-direction: column; min-height: 0; }
 .preview-state { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; padding: 2rem; color: #617182; min-height: 220px; }
 .preview-progress-text { font-size: 0.85rem; color: #94a3b8; margin: 0; }
 
-.preview-image-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 1rem; background: #0d0d0d; min-height: 300px; }
-.preview-image { max-width: 100%; max-height: 72vh; object-fit: contain; border-radius: 6px; }
+.preview-image-wrap { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; padding: 1rem; background: #0d0d0d; min-height: 300px; }
+.preview-image { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+
+.preview-nav-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.45);
+  color: #fff;
+  font-size: 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  z-index: 1;
+}
+.preview-nav-btn:hover { background: rgba(15, 23, 42, 0.7); }
+.preview-nav-btn--prev { left: 0.75rem; }
+.preview-nav-btn--next { right: 0.75rem; }
 
 .preview-audio-wrap { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 1.25rem; padding: 3rem 2rem; }
 .audio-icon { font-size: 4rem; color: #94a3b8; line-height: 1; }
 .audio-name { font-weight: 600; color: #21313f; text-align: center; margin: 0; overflow-wrap: anywhere; }
 .preview-audio { width: 100%; max-width: 420px; }
 
-.preview-video-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #0d0d0d; min-height: 300px; }
-.preview-video { width: 100%; max-width: 100%; max-height: 72vh; }
-.preview-dialog--theater .preview-video-wrap,
-.preview-dialog:fullscreen .preview-video-wrap { overflow: hidden; }
-.preview-dialog--theater .preview-video,
-.preview-dialog:fullscreen .preview-video { max-height: 100%; height: 100%; width: 100%; object-fit: contain; }
+.preview-video-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #0d0d0d; min-height: 300px; overflow: hidden; }
+.preview-video { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; }
 
-.preview-pdf-wrap { flex: 1; display: flex; min-height: 60vh; }
-.preview-pdf { width: 100%; height: 100%; min-height: 60vh; border: 0; }
+.preview-pdf-wrap { flex: 1; display: flex; min-height: 0; }
+.preview-pdf { width: 100%; height: 100%; border: 0; }
 
 .preview-text-wrap { flex: 1; overflow: auto; background: #272822; padding: 1.25rem; }
 .preview-text { margin: 0; font-size: 0.82rem; line-height: 1.65; color: #f8f8f2; white-space: pre-wrap; word-break: break-word; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; }
-
-@keyframes dialog-pop {
-  from { opacity: 0; transform: scale(0.96); }
-  to   { opacity: 1; transform: scale(1); }
-}
 
 /* Download toast */
 .dl-toast {

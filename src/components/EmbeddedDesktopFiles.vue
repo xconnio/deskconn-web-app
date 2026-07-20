@@ -6,7 +6,6 @@ import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSettingsStore } from '@/stores/settings'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
 import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
-import FilePreviewModal from '@/components/FilePreviewModal.vue'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import {
   createX25519KeyPair,
@@ -35,6 +34,10 @@ const props = defineProps<{
   initialPath?: string
   initialOpenFile?: string
   focused?: boolean
+}>()
+
+const emit = defineEmits<{
+  'preview-file': [session: Session, entry: FileEntry, entries: FileEntry[]]
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
@@ -72,7 +75,6 @@ const supportedFileProcedures = ref({
   copy: false,
 })
 
-const previewEntry = ref<FileEntry | null>(null)
 const navHistory = ref<string[]>([])
 const navHistoryIndex = ref(-1)
 
@@ -385,7 +387,6 @@ function resetExplorerState() {
   }
   clipboard.value = null
   closeActionSheet()
-  previewEntry.value = null
   searchGeneration++
   fileSearchActive.value = false
   fileSearchQuery.value = ''
@@ -690,12 +691,14 @@ function closeActionSheet() {
   operationError.value = ''
 }
 
-// Opens a file in the shared FilePreviewModal (handles type detection, streaming
-// audio/video over WebRTC, and buffered preview for images/pdf/text internally).
+// Opens a file in its own preview window (see FilePreviewModal.vue — handles type
+// detection, streaming audio/video over WebRTC, and buffered preview for
+// images/pdf/text internally).
 function openPreview(entry: FileEntry) {
   if (entry.is_dir) return
   selectEntry(entry)
-  previewEntry.value = entry
+  if (!session.value) return
+  emit('preview-file', session.value, entry, visibleEntries.value)
 }
 
 // Low-level stream: calls onChunk for each decrypted data chunk as it arrives.
@@ -1480,7 +1483,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement
 
   if (e.key === 'Escape') {
-    if (document.fullscreenElement) return // FilePreviewModal handles its own fullscreen exit
+    if (document.fullscreenElement) return // let the browser exit fullscreen first
     if (fileSearchActive.value) { exitFileSearch(); return }
     if (searchMode.value) { exitSearchMode(); return }
     if (propertiesModalVisible.value) { closePropertiesModal(); return }
@@ -1529,10 +1532,6 @@ watch(
   },
 )
 
-watch(previewEntry, (entry) => {
-  document.body.style.overflow = entry ? 'hidden' : ''
-})
-
 function applyThumbnails(entries: FileEntry[]) {
   for (const entry of entries) {
     if (entry.thumbnail && !thumbnailUrls[entry.path]) {
@@ -1562,7 +1561,6 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateViewMode)
   document.removeEventListener('keydown', handleGlobalKeydown)
   disconnectDesktopSession()
-  previewEntry.value = null
   for (const url of Object.values(thumbnailUrls)) URL.revokeObjectURL(url)
 })
 
@@ -2037,13 +2035,6 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
-
-  <FilePreviewModal
-    v-if="previewEntry && session"
-    :session="session"
-    :entry="previewEntry"
-    @close="previewEntry = null"
-  />
 
   <Transition name="dl-toast">
     <div v-if="downloadProgress" class="dl-toast">

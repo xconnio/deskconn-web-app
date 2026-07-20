@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { provide, ref } from 'vue'
-import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
+import { floatingWindowToolbarKey, floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
 
 const rootEl = ref<HTMLElement | null>(null)
 const toolbarHostEl = ref<HTMLElement | null>(null)
+const actionsHostEl = ref<HTMLElement | null>(null)
 provide(floatingWindowToolbarKey, toolbarHostEl)
+provide(floatingWindowActionsKey, actionsHostEl)
 
 const props = defineProps<{
   title: string
@@ -184,6 +186,7 @@ function startResize(e: PointerEvent, dir: string) {
         class="fwin-toolbar-host"
         :class="{ 'fwin-toolbar-host--active': useToolbarTitlebar }"
       ></div>
+      <div ref="actionsHostEl" class="fwin-actions-host"></div>
       <div class="fwin-controls">
         <button class="fwin-btn" title="Minimize" @mousedown.prevent @click="$emit('minimize')">
           <i class="bi bi-dash-lg"></i>
@@ -347,6 +350,17 @@ function startResize(e: PointerEvent, dir: string) {
   flex: 1;
   min-width: 0;
   cursor: default;
+}
+
+.fwin-actions-host {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.fwin-actions-host:empty {
+  display: none;
 }
 
 .fwin-controls {
