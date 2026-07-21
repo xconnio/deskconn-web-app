@@ -16,6 +16,7 @@ import {
   type EncryptionKeys,
 } from '@/utils/encryption'
 import { uploadFileToPath } from '@/utils/fileUpload'
+import { downloadUrl } from '@/utils/download'
 import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
 import { formatDesktopError, isNoSuchProcedureException } from '@/utils/desktopError'
 
@@ -970,12 +971,7 @@ async function downloadFileWithBrowserDownload(
     [mc.port2],
   )
 
-  const a = document.createElement('a')
-  a.href = `/_dl/${id}`
-  a.download = entry.name
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+  downloadUrl(`/_dl/${id}`, entry.name)
 
   try {
     await streamFileData(entry.path, async (chunk, expectedTotal) => {

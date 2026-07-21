@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ApplicationError } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
+import { downloadUrl } from '@/utils/download'
 import { formatDesktopError } from '@/utils/desktopError'
 
 const props = defineProps<{ realm: string }>()
@@ -75,10 +76,7 @@ function close() {
 
 function download() {
   if (!imageUrl.value) return
-  const a = document.createElement('a')
-  a.href = imageUrl.value
-  a.download = `screenshot-${Date.now()}.png`
-  a.click()
+  downloadUrl(imageUrl.value, `screenshot-${Date.now()}.png`)
 }
 
 async function capture() {
