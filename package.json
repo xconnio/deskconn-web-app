@@ -23,6 +23,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "bootstrap": "^5.3.8",
+    "diff-match-patch": "^1.0.5",
     "idb-keyval": "^6.2.2",
     "pinia": "^3.0.4",
     "ssh2": "^1.17.0",
@@ -35,6 +36,7 @@
   "devDependencies": {
     "@tsconfig/node24": "^24.0.3",
     "@types/bootstrap": "^5.2.10",
+    "@types/diff-match-patch": "^1.0.36",
     "@types/node": "^24.10.1",
     "@vitejs/plugin-vue": "^6.0.2",
     "@vue/eslint-config-prettier": "^10.2.0",

@@ -13,6 +13,7 @@ import TerminalPanel from '@/components/TerminalPanel.vue'
 import ResourceMonitor from '@/components/ResourceMonitor.vue'
 import DesktopSettingsPanel from '@/components/DesktopSettingsPanel.vue'
 import FilePreviewModal from '@/components/FilePreviewModal.vue'
+import TextEditor from '@/components/TextEditor.vue'
 import ScreenshotPanel from '@/components/ScreenshotPanel.vue'
 import FloatingWindow from '@/components/FloatingWindow.vue'
 import AppDock from '@/components/AppDock.vue'
@@ -42,6 +43,7 @@ const {
   toggleMaximize,
   updateBounds,
   updateTitle,
+  updateDirty,
   syncMaximizedBounds,
 } = desktopSessionsStore.getOrCreate(props.realm)
 
@@ -222,10 +224,20 @@ const videoPlayerApp: AppDef = {
   launchable: false,
 }
 
+const textEditorApp: AppDef = {
+  id: 'text-editor',
+  label: 'Text Editor',
+  icon: 'bi-file-earmark-text-fill',
+  iconColor: '#0f766e',
+  iconBg: '#ccfbf1',
+  launchable: false,
+}
+
 const dockApps = computed(() => {
   const list = [...apps]
   if (windows.value.some((w) => w.appId === 'image-viewer')) list.push(imageViewerApp)
   if (windows.value.some((w) => w.appId === 'video-player')) list.push(videoPlayerApp)
+  if (windows.value.some((w) => w.appId === 'text-editor')) list.push(textEditorApp)
   return list
 })
 
@@ -258,6 +270,7 @@ const appComponents: Record<string, Component> = {
   preview: FilePreviewModal,
   'image-viewer': FilePreviewModal,
   'video-player': FilePreviewModal,
+  'text-editor': TextEditor,
 }
 
 function windowProps(win: { id: string; appId: string; props: Record<string, unknown> }) {
@@ -298,6 +311,13 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
         entries: win.props.entries as PreviewEntry[],
         focused,
       }
+    case 'text-editor':
+      return {
+        session: win.props.session as Session,
+        realm: props.realm,
+        entry: win.props.entry as PreviewEntry,
+        focused,
+      }
     default:
       return {
         realm: props.realm,
@@ -321,7 +341,7 @@ const PREVIEW_ICONS: Record<FilePreviewType, string> = {
 
 function onPreviewFile(session: Session, entry: PreviewEntry, entries: PreviewEntry[]) {
   const pt = getFilePreviewType(entry.name)
-  const appId = pt === 'image' ? 'image-viewer' : pt === 'video' ? 'video-player' : 'preview'
+  const appId = pt === 'image' ? 'image-viewer' : pt === 'video' ? 'video-player' : pt === 'text' ? 'text-editor' : 'preview'
   openWindow({
     appId,
     title: entry.name,
@@ -337,6 +357,12 @@ function onPreviewFile(session: Session, entry: PreviewEntry, entries: PreviewEn
 function onOpenFiles(path: string) {
   const filesApp = apps.find((a) => a.id === 'files')!
   launchApp(filesApp, path)
+}
+
+function onCloseWindow(id: string) {
+  const win = windows.value.find((w) => w.id === id)
+  if (win?.dirty && !window.confirm('You have unsaved changes. Close this window anyway?')) return
+  closeWindow(id)
 }
 
 const dockThickness = ref(0)
@@ -458,7 +484,7 @@ onUnmounted(() => {
           :inset-left="insetLeft"
           :inset-right="insetRight"
           :inset-bottom="insetBottom"
-          @close="closeWindow(win.id)"
+          @close="onCloseWindow(win.id)"
           @focus="focusWindow(win.id)"
           @minimize="minimizeWindow(win.id)"
           @toggle-maximize="onToggleMaximize(win.id)"
@@ -467,10 +493,11 @@ onUnmounted(() => {
           <component
             :is="appComponents[win.appId]"
             v-bind="windowProps(win)"
-            @close="closeWindow(win.id)"
+            @close="onCloseWindow(win.id)"
             @open-files="onOpenFiles"
             @preview-file="onPreviewFile"
             @update-title="updateTitle(win.id, $event)"
+            @dirty-change="updateDirty(win.id, $event)"
           />
         </FloatingWindow>
       </div>
@@ -484,7 +511,7 @@ onUnmounted(() => {
         :offline="isOffline"
         @launch="handleLaunch"
         @activate="onActivateWindow"
-        @close="closeWindow"
+        @close="onCloseWindow"
         @exit="close"
       />
     </div>

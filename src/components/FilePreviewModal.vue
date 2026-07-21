@@ -14,6 +14,7 @@ import { floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
 import { createX25519KeyPair, deriveSessionKeys, decryptPayload } from '@/utils/encryption'
 import { canStreamRanges, requestRange } from '@/services/fileStream'
 import { uploadFileToPath, type UploadProgress } from '@/utils/fileUpload'
+import { downloadUrl, downloadBlob } from '@/utils/download'
 import {
   type FilePreviewType,
   formatSize,
@@ -327,17 +328,9 @@ function downloadFromPreview() {
     downloadFileToClient(); return
   }
   if (previewBlobUrl.value) {
-    const a = document.createElement('a')
-    a.href = previewBlobUrl.value
-    a.download = currentEntry.value.name
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    downloadUrl(previewBlobUrl.value, currentEntry.value.name)
   } else if (previewTextContent.value) {
-    const blob = new Blob([previewTextContent.value], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = currentEntry.value.name
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    downloadBlob(new Blob([previewTextContent.value], { type: 'text/plain' }), currentEntry.value.name)
   } else {
     downloadFileToClient()
   }
@@ -451,9 +444,7 @@ async function downloadFileWithBrowserDownload(
   }
   sw.postMessage({ type: 'download', id, filename: currentEntry.value.name }, [mc.port2])
 
-  const a = document.createElement('a')
-  a.href = `/_dl/${id}`; a.download = currentEntry.value.name
-  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  downloadUrl(`/_dl/${id}`, currentEntry.value.name)
 
   try {
     await streamFileData(currentEntry.value.path, async (chunk, expectedTotal) => {
