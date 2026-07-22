@@ -450,7 +450,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="launcher-wrapper fade-in-up">
+  <div class="launcher-wrapper fade-in-up" @contextmenu.prevent>
     <div v-if="isOffline" class="offline-banner">
       <i class="bi bi-wifi-off"></i>
       <span>{{ desktopName }} is offline — apps aren't available right now.</span>
