@@ -333,10 +333,10 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
           @mouseleave="hideTooltip"
         >
           <i class="bi" :class="app.icon"></i>
-          <span v-if="dotCount(app.id) > 0" class="dock-dots">
-            <span v-for="n in dotCount(app.id)" :key="n" class="dock-dot"></span>
-          </span>
         </button>
+        <span v-if="dotCount(app.id) > 0" class="dock-dots">
+          <span v-for="n in dotCount(app.id)" :key="n" class="dock-dot"></span>
+        </span>
 
         <Teleport to="body">
         <div
@@ -535,35 +535,37 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
   position: absolute;
   display: flex;
   gap: 3px;
+  pointer-events: none;
 }
 
-/* Indicator sits on the icon's edge that touches the screen border */
+/* Indicator sits just outside the icon square, on the edge that touches the
+   screen border — not on top of the glyph, which fills the square. */
 .dock-bottom .dock-dots {
-  bottom: 3px;
+  bottom: -5px;
   left: 50%;
   transform: translateX(-50%);
   flex-direction: row;
 }
 
 .dock-left .dock-dots {
-  left: 3px;
+  left: -5px;
   top: 50%;
   transform: translateY(-50%);
   flex-direction: column;
 }
 
 .dock-right .dock-dots {
-  right: 3px;
+  right: -5px;
   top: 50%;
   transform: translateY(-50%);
   flex-direction: column;
 }
 
 .dock-dot {
-  width: 5px;
-  height: 5px;
+  width: 6.5px;
+  height: 6.5px;
   border-radius: 50%;
-  background: #475569;
+  background: #f97316;
 }
 
 /* App-name tooltip — same teleport-and-anchor approach as .dock-popover below. */
