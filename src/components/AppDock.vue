@@ -341,7 +341,7 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
             <span class="dock-popover-icon dock-popover-icon-new">
               <i class="bi bi-plus-lg"></i>
             </span>
-            <span class="dock-popover-label">New window</span>
+            <span class="dock-popover-label">New Window</span>
           </button>
           <button
             v-if="(instancesByApp.get(app.id)?.length ?? 0) > 0"
@@ -352,7 +352,7 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
               <i class="bi bi-power"></i>
             </span>
             <span class="dock-popover-label">
-              {{ instancesByApp.get(app.id)!.length === 1 ? 'Quit window' : `Quit ${instancesByApp.get(app.id)!.length} windows` }}
+              {{ instancesByApp.get(app.id)!.length === 1 ? 'Quit' : `Quit ${instancesByApp.get(app.id)!.length} Windows` }}
             </span>
           </button>
         </div>
