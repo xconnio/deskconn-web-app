@@ -174,7 +174,7 @@ function startResize(e: PointerEvent, dir: string) {
     }"
     @pointerdown="$emit('focus')"
   >
-    <div class="fwin-titlebar" :class="{ 'fwin-titlebar--dark': darkTitlebar }" @pointerdown="startDrag">
+    <div class="fwin-titlebar" :class="{ 'fwin-titlebar--dark': darkTitlebar }" @pointerdown="startDrag" @contextmenu.prevent>
       <template v-if="!useToolbarTitlebar">
         <span class="fwin-icon" :style="{ color: iconColor, background: iconBg }">
           <i class="bi" :class="icon"></i>

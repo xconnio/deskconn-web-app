@@ -67,6 +67,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
     class="machines-overview"
     v-show="machinesOverviewStore.isOpen"
     @click.self="machinesOverviewStore.close()"
+    @contextmenu.prevent
   >
     <div class="machines-overview-header">
       <h2 class="machines-overview-title">Machines</h2>
