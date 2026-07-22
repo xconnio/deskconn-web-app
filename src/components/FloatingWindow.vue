@@ -276,11 +276,6 @@ function startResize(e: PointerEvent, dir: string) {
   background: #fff;
   flex-shrink: 0;
   user-select: none;
-  cursor: move;
-}
-
-.floating-window.is-mobile .fwin-titlebar {
-  cursor: default;
 }
 
 .floating-window:not(.is-focused) .fwin-titlebar {
