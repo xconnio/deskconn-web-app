@@ -94,6 +94,13 @@ function startDrag(e: PointerEvent) {
   window.addEventListener('pointerup', onUp)
 }
 
+function onTitlebarDoubleClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (target.closest('.fwin-controls, button, input')) return
+  if (props.mobile) return
+  emit('toggle-maximize')
+}
+
 function startResize(e: PointerEvent, dir: string) {
   if (props.mobile || props.maximized) return
   e.stopPropagation()
@@ -174,7 +181,7 @@ function startResize(e: PointerEvent, dir: string) {
     }"
     @pointerdown="$emit('focus')"
   >
-    <div class="fwin-titlebar" :class="{ 'fwin-titlebar--dark': darkTitlebar }" @pointerdown="startDrag" @contextmenu.prevent>
+    <div class="fwin-titlebar" :class="{ 'fwin-titlebar--dark': darkTitlebar }" @pointerdown="startDrag" @dblclick="onTitlebarDoubleClick" @contextmenu.prevent>
       <template v-if="!useToolbarTitlebar">
         <span class="fwin-icon" :style="{ color: iconColor, background: iconBg }">
           <i class="bi" :class="icon"></i>
