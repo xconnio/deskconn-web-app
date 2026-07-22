@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { provide, ref } from 'vue'
+import { provide, ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { floatingWindowToolbarKey, floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
 
 const rootEl = ref<HTMLElement | null>(null)
@@ -46,6 +46,102 @@ const MIN_HEIGHT = 200
 // pointer exactly — the maximize/minimize transition would only make them lag.
 const interacting = ref(false)
 
+const menuOpen = ref(false)
+const menuBtnRef = ref<HTMLElement | null>(null)
+const menuDropdownRef = ref<HTMLElement | null>(null)
+
+// True fullscreen (Fullscreen API) covers the whole physical screen, including
+// the browser's own chrome — not just "maximized", which stays within the page.
+const isFullscreen = ref(false)
+
+function toggleMenu() {
+  menuOpen.value = !menuOpen.value
+}
+
+function captureRect(): DOMRect | null {
+  return rootEl.value?.getBoundingClientRect() ?? null
+}
+
+// GNOME/Ubuntu-style morph: left/top/width/height never transition directly —
+// animating those forces the browser to reflow every frame, which is what
+// made maximize/fullscreen look jerky, especially over heavy embedded content
+// like the terminal. Instead, bounds snap instantly, and the in-between
+// motion is faked with a transform (translate + scale) computed from the old
+// rect — transform is compositor-only, so it stays smooth regardless of
+// what's inside the window, the same trick Mutter/GNOME's own effects use.
+function playFlip(before: DOMRect) {
+  const el = rootEl.value
+  if (!el || !before.width || !before.height) return
+  requestAnimationFrame(() => {
+    const after = el.getBoundingClientRect()
+    if (!after.width || !after.height) return
+    const dx = before.left - after.left
+    const dy = before.top - after.top
+    const sx = before.width / after.width
+    const sy = before.height / after.height
+    el.style.transition = 'none'
+    el.style.transformOrigin = 'top left'
+    el.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`
+    requestAnimationFrame(() => {
+      el.style.transition = ''
+      el.style.transform = ''
+    })
+  })
+}
+
+async function toggleFullscreen() {
+  menuOpen.value = false
+  if (document.fullscreenElement === rootEl.value) {
+    await document.exitFullscreen()
+  } else {
+    await rootEl.value?.requestFullscreen?.()
+  }
+}
+
+// Covers Esc too (exits fullscreen without going through toggleFullscreen) —
+// the rect is captured synchronously, before isFullscreen flips, so it holds
+// whichever state (fullscreen or windowed) is about to be left.
+function onFullscreenChange() {
+  const before = captureRect()
+  isFullscreen.value = document.fullscreenElement === rootEl.value
+  nextTick(() => { if (before) playFlip(before) })
+}
+
+// Minimizing/maximizing while fullscreen would be invisible — the Fullscreen
+// API only ever paints the fullscreen element's own subtree, so an opacity-0
+// (minimized) or resized-but-still-fullscreen (maximized) window would just
+// look like the screen went blank with no way back. Drop out of fullscreen
+// first so the action is actually visible.
+async function requestMinimize() {
+  if (isFullscreen.value) await document.exitFullscreen()
+  emit('minimize')
+}
+
+async function requestToggleMaximize() {
+  if (isFullscreen.value) await document.exitFullscreen()
+  const before = captureRect()
+  emit('toggle-maximize')
+  await nextTick()
+  if (before) playFlip(before)
+}
+
+function onWindowClickForMenu(e: MouseEvent) {
+  if (!menuOpen.value) return
+  const target = e.target as Node
+  if (menuBtnRef.value?.contains(target)) return
+  if (menuDropdownRef.value?.contains(target)) return
+  menuOpen.value = false
+}
+
+onMounted(() => {
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+  window.addEventListener('click', onWindowClickForMenu, true)
+})
+onUnmounted(() => {
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  window.removeEventListener('click', onWindowClickForMenu, true)
+})
+
 function suppressSelection() {
   document.body.style.userSelect = 'none'
 }
@@ -61,7 +157,7 @@ function startDrag(e: PointerEvent) {
   // Titlebar isn't a focusable element, but the browser's default pointerdown
   // action still shifts focus to it (blurring whatever had it, e.g. the terminal).
   e.preventDefault()
-  if (props.mobile || props.maximized) return
+  if (props.mobile || props.maximized || isFullscreen.value) return
 
   emit('focus')
 
@@ -103,12 +199,12 @@ function startDrag(e: PointerEvent) {
 function onTitlebarDoubleClick(e: MouseEvent) {
   const target = e.target as HTMLElement
   if (target.closest('.fwin-controls, button, input')) return
-  if (props.mobile) return
-  emit('toggle-maximize')
+  if (props.mobile || isFullscreen.value) return
+  void requestToggleMaximize()
 }
 
 function startResize(e: PointerEvent, dir: string) {
-  if (props.mobile || props.maximized) return
+  if (props.mobile || props.maximized || isFullscreen.value) return
   e.stopPropagation()
   emit('focus')
 
@@ -179,7 +275,7 @@ function startResize(e: PointerEvent, dir: string) {
   <div
     ref="rootEl"
     class="floating-window"
-    :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized, 'is-maximized': maximized, 'is-dark-titlebar': darkTitlebar, 'is-interacting': interacting }"
+    :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized, 'is-maximized': maximized, 'is-dark-titlebar': darkTitlebar, 'is-interacting': interacting, 'is-fullscreen': isFullscreen }"
     :inert="minimized"
     :style="mobile ? { zIndex } : {
       left: x + 'px',
@@ -204,14 +300,28 @@ function startResize(e: PointerEvent, dir: string) {
       ></div>
       <div ref="actionsHostEl" class="fwin-actions-host"></div>
       <div class="fwin-controls">
-        <button class="fwin-btn" title="Minimize" @mousedown.prevent @click="$emit('minimize')">
+        <button ref="menuBtnRef" class="fwin-btn" title="Menu" @mousedown.prevent @click.stop="toggleMenu">
+          <i class="bi bi-list"></i>
+        </button>
+        <button class="fwin-btn" title="Minimize" @mousedown.prevent @click="requestMinimize">
           <i class="bi bi-dash-lg"></i>
         </button>
-        <button v-if="!mobile" class="fwin-btn" :title="maximized ? 'Restore' : 'Maximize'" @mousedown.prevent @click="$emit('toggle-maximize')">
+        <button v-if="!mobile" class="fwin-btn" :title="maximized ? 'Restore' : 'Maximize'" @mousedown.prevent @click="requestToggleMaximize">
           <i class="bi" :class="maximized ? 'bi-copy' : 'bi-square'"></i>
         </button>
         <button class="fwin-btn fwin-btn-close" title="Close" @mousedown.prevent @click="$emit('close')">
           <i class="bi bi-x-lg"></i>
+        </button>
+      </div>
+
+      <!-- A plain descendant of .floating-window, not teleported: while this
+           window is the Fullscreen API's fullscreen element, the browser only
+           paints that element's own subtree, so anything teleported to
+           <body> (a sibling, not a descendant) would be invisible/unclickable. -->
+      <div v-if="menuOpen" ref="menuDropdownRef" class="fwin-menu" @click.stop>
+        <button class="fwin-menu-item" @click="toggleFullscreen">
+          <i class="bi" :class="isFullscreen ? 'bi-arrows-angle-contract' : 'bi-arrows-angle-expand'"></i>
+          {{ isFullscreen ? 'Exit full screen' : 'Full screen' }}
         </button>
       </div>
     </div>
@@ -220,7 +330,7 @@ function startResize(e: PointerEvent, dir: string) {
       <slot />
     </div>
 
-    <template v-if="!mobile && !maximized">
+    <template v-if="!mobile && !maximized && !isFullscreen">
       <div class="fwin-resize fwin-resize-n" @pointerdown="startResize($event, 'n')"></div>
       <div class="fwin-resize fwin-resize-s" @pointerdown="startResize($event, 's')"></div>
       <div class="fwin-resize fwin-resize-e" @pointerdown="startResize($event, 'e')"></div>
@@ -245,8 +355,10 @@ function startResize(e: PointerEvent, dir: string) {
   overflow: hidden;
   min-width: 280px;
   min-height: 200px;
-  transition: left 0.18s ease, top 0.18s ease, width 0.18s ease, height 0.18s ease,
-    border-radius 0.18s ease, opacity 0.15s ease, transform 0.15s ease;
+  /* left/top/width/height are never transitioned — animating those forces a
+     browser reflow every frame (the source of the maximize/fullscreen jerk).
+     The morph is faked with transform instead — see playFlip. */
+  transition: opacity 0.15s ease, transform 0.22s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 /* Dragging/resizing must track the pointer exactly — a transition here would lag. */
@@ -286,7 +398,22 @@ function startResize(e: PointerEvent, dir: string) {
   border: none;
 }
 
+/* Fullscreen API renders this element with no other page content around it,
+   but doesn't itself resize the box — it keeps whatever x/y/width/height it
+   already had (maximized, floating, or mobile), so pin it to the screen. */
+.floating-window.is-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border: none;
+  border-radius: 0;
+}
+
 .fwin-titlebar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -410,6 +537,44 @@ function startResize(e: PointerEvent, dir: string) {
 .fwin-btn:hover {
   background: #e2e8f0;
   color: #111827;
+}
+
+/* Teleported to <body> and positioned via an inline style computed from the
+   menu button's rect (see toggleMenu) — the same clipping concern as any
+   popover nested inside this window's overflow:hidden box. */
+.fwin-menu {
+  position: absolute;
+  top: 100%;
+  right: 0.6rem;
+  margin-top: 4px;
+  min-width: 170px;
+  padding: 0.3rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  z-index: 20;
+}
+
+.fwin-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #334155;
+  cursor: pointer;
+  text-align: left;
+}
+
+.fwin-menu-item:hover {
+  background: #eef2f6;
 }
 
 .fwin-btn-close:hover {
