@@ -60,16 +60,23 @@ function goToEntry(target: PreviewEntry) {
   openFile()
 }
 
+// Drives which way the preview-image transition slides in from (see template).
+const navDirection = ref<'prev' | 'next'>('next')
+
 function goPrev() {
   if (!canGoPrev.value) return
   const target = imageEntries.value[currentImageIndex.value - 1]
-  if (target) goToEntry(target)
+  if (!target) return
+  navDirection.value = 'prev'
+  goToEntry(target)
 }
 
 function goNext() {
   if (!canGoNext.value) return
   const target = imageEntries.value[currentImageIndex.value + 1]
-  if (target) goToEntry(target)
+  if (!target) return
+  navDirection.value = 'next'
+  goToEntry(target)
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -80,6 +87,10 @@ function handleKeydown(e: KeyboardEvent) {
 
 const previewType          = ref<FilePreviewType>('none')
 const previewBlobUrl       = ref('')
+// True while navigating to a sibling image and its data is still loading — the
+// outgoing image stays on screen instead of the loading state taking over, so
+// there's no blank/white flash between images (see openFile).
+const imageSwapping        = ref(false)
 const previewTextContent   = ref('')
 const previewLoading       = ref(false)
 const previewError         = ref('')
@@ -293,9 +304,12 @@ async function openFile(isRetry = false) {
   // Full-buffer fallback: images/pdf/text, and audio/video retried once after a
   // playback error (see handleMediaError).
   stopActiveStream()
-  if (previewBlobUrl.value) { URL.revokeObjectURL(previewBlobUrl.value); previewBlobUrl.value = '' }
+  const outgoingBlobUrl = previewBlobUrl.value
+  const swappingImage = pt === 'image' && previewType.value === 'image' && !!outgoingBlobUrl
+  if (!swappingImage && outgoingBlobUrl) { URL.revokeObjectURL(outgoingBlobUrl); previewBlobUrl.value = '' }
   previewType.value = pt
-  previewLoading.value = true
+  previewLoading.value = !swappingImage
+  imageSwapping.value = swappingImage
   previewExpectedBytes.value = currentEntry.value.size
   previewReceivedBytes.value = 0
   previewError.value = ''
@@ -309,10 +323,12 @@ async function openFile(isRetry = false) {
       const blob = new Blob([data.slice()], { type: getMimeType(currentEntry.value.name) })
       previewBlobUrl.value = URL.createObjectURL(blob)
     }
+    if (swappingImage) URL.revokeObjectURL(outgoingBlobUrl)
   } catch (err) {
     if (mounted) previewError.value = err instanceof Error ? err.message : 'Failed to load file'
+    if (swappingImage) { URL.revokeObjectURL(outgoingBlobUrl); previewBlobUrl.value = '' }
   } finally {
-    if (mounted) previewLoading.value = false
+    if (mounted) { previewLoading.value = false; imageSwapping.value = false }
   }
 }
 
@@ -820,7 +836,12 @@ onUnmounted(() => {
         <button v-if="canGoPrev" class="preview-nav-btn preview-nav-btn--prev" @click="goPrev" title="Previous image">
           <i class="bi bi-chevron-left"></i>
         </button>
-        <img :src="previewBlobUrl" :alt="currentEntry.name" class="preview-image" />
+        <Transition :name="`image-slide-${navDirection}`">
+          <img :key="previewBlobUrl" :src="previewBlobUrl" :alt="currentEntry.name" class="preview-image" />
+        </Transition>
+        <div v-if="imageSwapping" class="preview-image-swap-spinner">
+          <div class="spinner-border spinner-border-sm text-light" role="status"><span class="visually-hidden">Loading…</span></div>
+        </div>
         <button v-if="canGoNext" class="preview-nav-btn preview-nav-btn--next" @click="goNext" title="Next image">
           <i class="bi bi-chevron-right"></i>
         </button>
@@ -964,8 +985,40 @@ onUnmounted(() => {
 .preview-state { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; padding: 2rem; color: #617182; min-height: 220px; }
 .preview-progress-text { font-size: 0.85rem; color: #94a3b8; margin: 0; }
 
-.preview-image-wrap { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; padding: 1rem; background: #0d0d0d; min-height: 300px; }
+.preview-image-wrap { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; padding: 1rem; background: #0d0d0d; min-height: 300px; overflow: hidden; }
 .preview-image { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+
+.preview-image-swap-spinner {
+  position: absolute;
+  bottom: 0.75rem;
+  right: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.image-slide-next-enter-active,
+.image-slide-prev-enter-active,
+.image-slide-next-leave-active,
+.image-slide-prev-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+/* Leaving image overlaps the entering one (both centered) instead of taking
+   part in layout, so the crossfade doesn't shift/collapse the container. */
+.image-slide-next-leave-active,
+.image-slide-prev-leave-active {
+  position: absolute;
+  inset: 1rem;
+  margin: auto;
+}
+.image-slide-next-leave-to { opacity: 0; transform: translateX(-28px); }
+.image-slide-prev-leave-to { opacity: 0; transform: translateX(28px); }
+.image-slide-next-enter-from { opacity: 0; transform: translateX(28px); }
+.image-slide-prev-enter-from { opacity: 0; transform: translateX(-28px); }
 
 .preview-nav-btn {
   position: absolute;
