@@ -40,10 +40,16 @@ function scrollTabsBy(delta: number) {
   tabsListRef.value?.scrollBy({ left: delta, behavior: 'smooth' })
 }
 
-async function scrollActiveTabIntoView() {
+function scrollTabsToEnd() {
+  const el = tabsListRef.value
+  if (!el) return
+  el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' })
+}
+
+async function scrollActiveTabIntoView(alignToEnd = false) {
   await nextTick()
   const el = tabsListRef.value?.querySelector<HTMLElement>('.tab-active')
-  el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  el?.scrollIntoView({ block: 'nearest', inline: alignToEnd ? 'end' : 'nearest' })
 }
 
 const enc = new TextEncoder()
@@ -91,10 +97,12 @@ const tabs = shallowRef<TabState[]>([])
 const activeTabId = ref(-1)
 let nextTabId = 0
 const termElMap = new Map<number, HTMLDivElement>()
+const tabWidth = ref(160)
 
 const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value) ?? null)
 
 let keybarResizeObserver: ResizeObserver | null = null
+let tabsListResizeObserver: ResizeObserver | null = null
 let panelResizeObserver: ResizeObserver | null = null
 let previousBodyOverflow = ''
 let previousHtmlOverflow = ''
@@ -143,6 +151,23 @@ function registerTermEl(id: number, el: unknown) {
     termElMap.set(id, el)
   } else {
     termElMap.delete(id)
+  }
+}
+
+function updateTabsLayout() {
+  const el = tabsListRef.value
+  if (!el) return
+
+  tabsScrollLeft.value = el.scrollLeft
+  tabsScrollMax.value = Math.max(0, el.scrollWidth - el.clientWidth)
+
+  const availableWidth = el.clientWidth
+  const count = tabs.value.length
+
+  if (count > 1 && availableWidth > 0) {
+    tabWidth.value = Math.max(80, Math.min(160, Math.floor(availableWidth / count)))
+  } else {
+    tabWidth.value = 160
   }
 }
 
@@ -393,7 +418,8 @@ async function addTab() {
   activeTabId.value = tab.id
   await nextTick()
   await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-  void scrollActiveTabIntoView()
+  updateTabsLayout()
+  scrollTabsToEnd()
   await initTab(tab)
 }
 
@@ -443,9 +469,19 @@ const observePanelSize = () => {
   panelResizeObserver?.disconnect()
   panelResizeObserver = new ResizeObserver(() => {
     if (activeTab.value) handleResizeTab(activeTab.value)
-    updateTabsScroll()
+    updateTabsLayout()
   })
   panelResizeObserver.observe(panelRef.value)
+}
+
+const observeTabsListSize = () => {
+  if (!tabsListRef.value || typeof ResizeObserver === 'undefined') return
+
+  tabsListResizeObserver?.disconnect()
+  tabsListResizeObserver = new ResizeObserver(() => {
+    updateTabsLayout()
+  })
+  tabsListResizeObserver.observe(tabsListRef.value)
 }
 
 const observeKeybarHeight = () => {
@@ -568,11 +604,13 @@ onMounted(async () => {
   window.visualViewport?.addEventListener('scroll', updateKeybarPosition)
   await nextTick()
   observeKeybarHeight()
+  observeTabsListSize()
   observePanelSize()
+  updateTabsLayout()
   updateKeybarPosition()
 
   await addTab()
-  requestAnimationFrame(updateTabsScroll)
+  requestAnimationFrame(updateTabsLayout)
 })
 
 onUnmounted(() => {
@@ -582,6 +620,8 @@ onUnmounted(() => {
   window.visualViewport?.removeEventListener('scroll', updateKeybarPosition)
   keybarResizeObserver?.disconnect()
   keybarResizeObserver = null
+  tabsListResizeObserver?.disconnect()
+  tabsListResizeObserver = null
   panelResizeObserver?.disconnect()
   panelResizeObserver = null
   clearTerminalTouchScroll()
@@ -597,7 +637,7 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
 
 watch(() => tabs.value.length, async () => {
   await nextTick()
-  requestAnimationFrame(updateTabsScroll)
+  requestAnimationFrame(updateTabsLayout)
 })
 
 // Window focus doesn't move DOM focus, so refocus xterm ourselves.
@@ -616,24 +656,29 @@ watch(() => props.focused, (focused) => {
           :disabled="tabsScrollLeft <= 0"
           @click="scrollTabsBy(-160)"
         ><i class="bi bi-chevron-left"></i></button>
-        <div ref="tabsListRef" class="tabs-list" @scroll="updateTabsScroll">
+        <div
+          ref="tabsListRef"
+          class="tabs-list"
+          :style="{ '--terminal-tab-width': `${tabWidth}px` }"
+          @scroll="updateTabsScroll"
+        >
           <button
             v-for="tab in tabs"
             :key="tab.id"
             class="tab-item"
             :class="{ 'tab-active': tab.id === activeTabId }"
             @mousedown.prevent="switchTab(tab.id, $event)"
-          >
-            <span class="tab-label">{{ tab.label }}</span>
-            <span
-              class="tab-close"
-              role="button"
-              :title="`Close ${tab.label}`"
-              @click.stop="closeTab(tab.id)"
-            >&times;</span>
-          </button>
+            >
+              <span class="tab-label">{{ tab.label }}</span>
+              <span
+                class="tab-close"
+                role="button"
+                :title="`Close ${tab.label}`"
+                @click.stop="closeTab(tab.id)"
+              >&times;</span>
+            </button>
+          <button class="tab-add" title="New terminal" @click="addTab">+</button>
         </div>
-        <button class="tab-add" title="New terminal" @click="addTab">+</button>
         <button
           v-if="tabsScrollMax > 0"
           class="tab-scroll-btn"
@@ -820,14 +865,14 @@ watch(() => props.focused, (focused) => {
   align-items: stretch;
   overflow: hidden;
   margin: -0.25rem 0 -0.25rem -0.6rem;
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
 .tabs-list {
   display: flex;
   align-items: stretch;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -840,7 +885,9 @@ watch(() => props.focused, (focused) => {
 /* GNOME/Yaru style: inactive tabs blend into the bar, the active tab gets
    a lighter "pressed in" panel with an accent underline. */
 .tab-item {
-  flex: 0 1 160px;
+  flex: 0 0 var(--terminal-tab-width, 160px);
+  width: var(--terminal-tab-width, 160px);
+  max-width: var(--terminal-tab-width, 160px);
   min-width: 80px;
   display: flex;
   align-items: center;
