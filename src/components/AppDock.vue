@@ -105,43 +105,66 @@ const openPopoverAppId = ref<string | null>(null)
 const popoverRef = ref<HTMLElement | null>(null)
 
 // Fixed pixel coordinates, computed from the icon's rect at open-time. The
-// popover is teleported to <body> and positioned this way (rather than
-// nested + position:absolute inside the dock) because the dock's icon strip
-// scrolls (overflow-x/y: auto) when there are many pinned icons — a
-// popover positioned relative to a scrollable ancestor gets clipped by it.
+// popover (and tooltip, below) are teleported to <body> and positioned this
+// way (rather than nested + position:absolute inside the dock) because the
+// dock's icon strip scrolls (overflow-x/y: auto) when there are many pinned
+// icons — a popover positioned relative to a scrollable ancestor gets
+// clipped by it.
 const popoverStyle = ref<Record<string, string>>({})
 const POPOVER_GAP = 10
 
-function computePopoverStyle(appId: string) {
+// Anchors a flyout (popover or tooltip) to the icon's edge that faces away
+// from the dock, offset by `gap`.
+function anchoredStyleFor(appId: string, gap: number): Record<string, string> | null {
   const iconEl = iconEls.get(appId)
-  if (!iconEl) return
+  if (!iconEl) return null
   const rect = iconEl.getBoundingClientRect()
 
   switch (props.position) {
     case 'left':
-      popoverStyle.value = {
-        left: `${rect.right + POPOVER_GAP}px`,
+      return {
+        left: `${rect.right + gap}px`,
         top: `${rect.top + rect.height / 2}px`,
         transform: 'translateY(-50%)',
       }
-      break
     case 'right':
-      popoverStyle.value = {
-        left: `${rect.left - POPOVER_GAP}px`,
+      return {
+        left: `${rect.left - gap}px`,
         top: `${rect.top + rect.height / 2}px`,
         transform: 'translate(-100%, -50%)',
       }
-      break
     default:
-      popoverStyle.value = {
+      return {
         left: `${rect.left + rect.width / 2}px`,
-        top: `${rect.top - POPOVER_GAP}px`,
+        top: `${rect.top - gap}px`,
         transform: 'translate(-50%, -100%)',
       }
   }
 }
 
+function computePopoverStyle(appId: string) {
+  const style = anchoredStyleFor(appId, POPOVER_GAP)
+  if (style) popoverStyle.value = style
+}
+
+const hoveredAppId = ref<string | null>(null)
+const tooltipStyle = ref<Record<string, string>>({})
+const TOOLTIP_GAP = 8
+
+function showTooltip(appId: string) {
+  if (dragState || openPopoverAppId.value) return
+  const style = anchoredStyleFor(appId, TOOLTIP_GAP)
+  if (!style) return
+  tooltipStyle.value = style
+  hoveredAppId.value = appId
+}
+
+function hideTooltip() {
+  hoveredAppId.value = null
+}
+
 function togglePopover(appId: string) {
+  hideTooltip()
   if (openPopoverAppId.value === appId) {
     openPopoverAppId.value = null
     return
@@ -201,6 +224,7 @@ let dragState: DragState | null = null
 
 function onIconPointerDown(appId: string, e: PointerEvent) {
   if (e.button !== 0) return
+  hideTooltip()
   dragState = { appId, startX: e.clientX, startY: e.clientY, moved: false }
   window.addEventListener('pointermove', onIconPointerMove)
   window.addEventListener('pointerup', onIconPointerUp)
@@ -302,15 +326,25 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
           class="dock-icon"
           :class="{ 'dock-icon-focused': isAppFocused(app.id), 'dock-icon-disabled': offline }"
           :style="{ color: app.iconColor, background: app.iconBg }"
-          :title="offline ? `${app.label} (offline)` : app.label"
+          :aria-label="offline ? `${app.label} (offline)` : app.label"
           @pointerdown="onIconPointerDown(app.id, $event)"
           @contextmenu.prevent="handleIconContextMenu(app.id)"
+          @mouseenter="showTooltip(app.id)"
+          @mouseleave="hideTooltip"
         >
           <i class="bi" :class="app.icon"></i>
           <span v-if="dotCount(app.id) > 0" class="dock-dots">
             <span v-for="n in dotCount(app.id)" :key="n" class="dock-dot"></span>
           </span>
         </button>
+
+        <Teleport to="body">
+        <div
+          v-if="hoveredAppId === app.id"
+          class="dock-tooltip"
+          :style="tooltipStyle"
+        >{{ offline ? `${app.label} (offline)` : app.label }}</div>
+        </Teleport>
 
         <Teleport to="body">
         <div
@@ -530,6 +564,21 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
   height: 5px;
   border-radius: 50%;
   background: #475569;
+}
+
+/* App-name tooltip — same teleport-and-anchor approach as .dock-popover below. */
+.dock-tooltip {
+  position: fixed;
+  padding: 0.3rem 0.6rem;
+  background: rgba(20, 20, 22, 0.92);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  z-index: 2100;
 }
 
 /* Instance switcher popover — teleported to <body> and positioned via an
