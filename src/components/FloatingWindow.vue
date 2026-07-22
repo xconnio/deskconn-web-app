@@ -42,6 +42,10 @@ const emit = defineEmits<{
 const MIN_WIDTH = 280
 const MIN_HEIGHT = 200
 
+// Bounds changes from dragging/resizing are continuous and must track the
+// pointer exactly — the maximize/minimize transition would only make them lag.
+const interacting = ref(false)
+
 function suppressSelection() {
   document.body.style.userSelect = 'none'
 }
@@ -68,6 +72,7 @@ function startDrag(e: PointerEvent) {
   const container = rootEl.value?.parentElement
 
   suppressSelection()
+  interacting.value = true
 
   function onMove(ev: PointerEvent) {
     let x = originX + (ev.clientX - startX)
@@ -86,6 +91,7 @@ function startDrag(e: PointerEvent) {
 
   function onUp() {
     restoreSelection()
+    interacting.value = false
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('pointerup', onUp)
   }
@@ -115,6 +121,7 @@ function startResize(e: PointerEvent, dir: string) {
   const container = rootEl.value?.parentElement
 
   suppressSelection()
+  interacting.value = true
 
   function onMove(ev: PointerEvent) {
     const dx = ev.clientX - startX
@@ -158,6 +165,7 @@ function startResize(e: PointerEvent, dir: string) {
 
   function onUp() {
     restoreSelection()
+    interacting.value = false
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('pointerup', onUp)
   }
@@ -171,7 +179,8 @@ function startResize(e: PointerEvent, dir: string) {
   <div
     ref="rootEl"
     class="floating-window"
-    :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized, 'is-maximized': maximized, 'is-dark-titlebar': darkTitlebar }"
+    :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized, 'is-maximized': maximized, 'is-dark-titlebar': darkTitlebar, 'is-interacting': interacting }"
+    :inert="minimized"
     :style="mobile ? { zIndex } : {
       left: x + 'px',
       top: y + 'px',
@@ -236,6 +245,13 @@ function startResize(e: PointerEvent, dir: string) {
   overflow: hidden;
   min-width: 280px;
   min-height: 200px;
+  transition: left 0.18s ease, top 0.18s ease, width 0.18s ease, height 0.18s ease,
+    border-radius 0.18s ease, opacity 0.15s ease, transform 0.15s ease;
+}
+
+/* Dragging/resizing must track the pointer exactly — a transition here would lag. */
+.floating-window.is-interacting {
+  transition: none;
 }
 
 .floating-window.is-maximized,
@@ -248,7 +264,9 @@ function startResize(e: PointerEvent, dir: string) {
 }
 
 .floating-window.is-minimized {
-  display: none;
+  opacity: 0;
+  transform: scale(0.85);
+  pointer-events: none !important;
 }
 
 .floating-window.is-focused {
