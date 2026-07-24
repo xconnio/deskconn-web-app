@@ -36,8 +36,12 @@ export function isEditConflictError(error: unknown): boolean {
   return errorText(error).toLowerCase().includes('could not be applied cleanly')
 }
 
+export function isDesktopOfflineError(error: unknown): boolean {
+  return isNoSuchProcedureException(error) || isDataChannelClosedError(error)
+}
+
 export function formatDesktopError(error: unknown, fallback = DESKTOP_OFFLINE_MESSAGE): string {
-  if (isNoSuchProcedureException(error) || isDataChannelClosedError(error)) {
+  if (isDesktopOfflineError(error)) {
     return DESKTOP_OFFLINE_MESSAGE
   }
   return errorText(error) || fallback
