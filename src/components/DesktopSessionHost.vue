@@ -37,6 +37,7 @@ const {
   focusedId,
   openWindow,
   closeWindow,
+  closeAll,
   focusWindow,
   minimizeWindow,
   restoreWindow,
@@ -93,30 +94,64 @@ async function fetchWallpaper() {
 // gate this.
 const isConnecting = ref(true)
 
-// A WAMP session can connect fine even when the machine itself is offline;
-// pinging deskconnd is what actually confirms it's reachable.
-const isOffline = ref(false)
+// Set whenever there's no live session — the initial connect failed (e.g.
+// the machine is offline) or a previously-live session dropped mid-use
+// (session.onDisconnect() already fires for that today). Both cases get the
+// same full-screen treatment.
+const isDisconnected = ref(false)
 
-async function ensureConnected() {
+// Apps stay open (blurred) behind the overlay while disconnected — only
+// cleared once the user actually navigates away (see the active-prop watch
+// below), so returning to a still-active view doesn't lose anything.
+function markDisconnected() {
+  isDisconnected.value = true
+}
+
+// Acquires a session and confirms deskconnd is actually reachable (a WAMP
+// session can connect fine even when the machine itself is offline), then
+// arms the disconnect listener for the rest of its lifetime.
+async function connectSession(): Promise<boolean> {
   try {
     const session = await sessionCacheStore.acquire(props.realm)
-    if (!session) {
-      isOffline.value = true
-      return
-    }
+    if (!session) return false
     await session.call('io.xconn.deskconn.deskconnd.ping')
+    session.onDisconnect(async () => {
+      markDisconnected()
+    })
+    return true
   } catch {
-    isOffline.value = true
-  } finally {
-    isConnecting.value = false
+    return false
   }
+}
+
+// Used for both the initial connect and the "Reconnect" button — a failure
+// always lands back in the same disconnected overlay.
+async function connect() {
+  isDisconnected.value = false
+  isConnecting.value = true
+  sessionCacheStore.clearUnreachable(props.realm)
+  sessionCacheStore.invalidate(props.realm)
+
+  const connected = await connectSession()
+  isConnecting.value = false
+  if (!connected) markDisconnected()
 
   // Otherwise the stale session gets reused next time, stuck on whatever
   // fallback transport it originally connected with.
-  if (isOffline.value) {
+  if (!connected) {
     sessionCacheStore.invalidate(props.realm)
   }
 }
+
+// Other panels (terminal, files, ...) notice a dead desktop the moment their
+// own next call fails, well before this session's onDisconnect would — so
+// mirror that signal here too instead of leaving the blur to lag behind.
+watch(
+  () => sessionCacheStore.unreachableRealms.has(props.realm),
+  (unreachable) => {
+    if (unreachable) markDisconnected()
+  },
+)
 
 const isMobile = ref(window.innerWidth < 768)
 function updateIsMobile() {
@@ -411,13 +446,27 @@ function onActivateWindow(id: string) {
 }
 
 function handleLaunch(appId: string) {
-  if (isOffline.value) return
+  if (isDisconnected.value) return
   const app = apps.find((a) => a.id === appId)
   if (app) launchApp(app)
 }
 
+// App.vue keeps one DesktopSessionHost per realm mounted forever (v-show, not
+// v-if) so navigating to the dashboard and back never remounts this component
+// — onMounted's connect() never reruns on its own. Without this, a desktop
+// left disconnected just keeps showing the same stale blur/overlay every time
+// you come back to it instead of trying again.
 watch(() => props.active, (active) => {
-  if (active) syncMaximizedBounds(maximizedContainerSize())
+  if (active) {
+    syncMaximizedBounds(maximizedContainerSize())
+    if (isDisconnected.value && !isConnecting.value) connect()
+    return
+  }
+
+  // Leaving a disconnected desktop (Dashboard button, browser back, closing
+  // the tab) discards its stale windows so the next visit starts fresh —
+  // while still connected, navigating away/back is expected to keep them.
+  if (isDisconnected.value) closeAll()
 })
 
 watch(dockPosition, async () => {
@@ -430,7 +479,7 @@ let launcherBodyResizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   window.addEventListener('resize', updateIsMobile)
-  ensureConnected()
+  connect()
   fetchWallpaper()
   measureDockThickness()
 
@@ -451,15 +500,10 @@ onUnmounted(() => {
 
 <template>
   <div class="launcher-wrapper fade-in-up" @contextmenu.prevent>
-    <div v-if="isOffline" class="offline-banner">
-      <i class="bi bi-wifi-off"></i>
-      <span>{{ desktopName }} is offline — apps aren't available right now.</span>
-    </div>
-
     <div
       ref="launcherBodyRef"
       class="launcher-body"
-      :class="{ 'has-wallpaper': !!wallpaperUrl, 'is-connecting': isConnecting }"
+      :class="{ 'has-wallpaper': !!wallpaperUrl, 'is-connecting': isConnecting, 'is-disconnected': isDisconnected }"
       :style="wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}"
     >
       <div class="windows-layer">
@@ -508,7 +552,7 @@ onUnmounted(() => {
         :windows="windows"
         :focused-id="focusedId"
         :position="dockPosition"
-        :offline="isOffline"
+        :offline="isDisconnected"
         @launch="handleLaunch"
         @activate="onActivateWindow"
         @close="onCloseWindow"
@@ -522,6 +566,12 @@ onUnmounted(() => {
       <div class="connecting-spinner"></div>
       <p>Connecting to {{ desktopName }}…</p>
     </div>
+
+    <div v-if="isDisconnected" class="disconnected-overlay">
+      <i class="bi bi-wifi-off"></i>
+      <p>Can't connect to {{ desktopName }}.</p>
+      <button type="button" class="overlay-btn" @click="close">Dashboard</button>
+    </div>
   </div>
 </template>
 
@@ -534,20 +584,6 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-.offline-banner {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.45rem 1rem;
-  background: #fef3c7;
-  border-bottom: 1px solid #fbbf24;
-  color: #92400e;
-  font-size: 0.8rem;
-  font-weight: 500;
-  flex-shrink: 0;
-  z-index: 60;
-}
-
 .launcher-body {
   position: relative;
   flex: 1;
@@ -558,6 +594,11 @@ onUnmounted(() => {
 
 .launcher-body.is-connecting {
   filter: blur(6px);
+  pointer-events: none;
+}
+
+.launcher-body.is-disconnected {
+  filter: grayscale(1) brightness(0.65);
   pointer-events: none;
 }
 
@@ -599,5 +640,41 @@ onUnmounted(() => {
   to {
     transform: rotate(360deg);
   }
+}
+
+.disconnected-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  color: #f1f5f9;
+  font-weight: 600;
+  text-align: center;
+  padding: 1rem;
+}
+
+.disconnected-overlay i {
+  font-size: 1.75rem;
+}
+
+.overlay-btn {
+  margin-top: 0.25rem;
+  padding: 0.4rem 1.1rem;
+  border: 1px solid rgba(241, 245, 249, 0.4);
+  border-radius: 0.4rem;
+  background: rgba(15, 23, 42, 0.5);
+  color: #f1f5f9;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.overlay-btn:hover {
+  background: rgba(15, 23, 42, 0.75);
 }
 </style>
