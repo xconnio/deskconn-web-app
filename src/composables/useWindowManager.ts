@@ -120,6 +120,11 @@ export function useWindowManager() {
     if (focusedId.value === id) refocusTopWindow()
   }
 
+  function closeAll() {
+    windows.value = []
+    focusedId.value = null
+  }
+
   function updateTitle(id: string, title: string) {
     const win = windows.value.find((w) => w.id === id)
     if (!win) return
@@ -196,6 +201,7 @@ export function useWindowManager() {
     focusedId,
     openWindow,
     closeWindow,
+    closeAll,
     focusWindow,
     minimizeWindow,
     restoreWindow,

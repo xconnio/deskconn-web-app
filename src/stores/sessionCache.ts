@@ -1,3 +1,4 @@
+import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { Session } from 'xconn'
 import { useAuthStore } from './auth'
@@ -9,6 +10,28 @@ const cache = new Map<string, Session>()
 const pending = new Map<string, Promise<Session | null>>()
 
 export const useSessionCacheStore = defineStore('sessionCache', () => {
+  // Individual panels (terminal, files, ...) notice a dead desktop as soon as
+  // their next call fails — well before the session's own transport-level
+  // onDisconnect fires, which for plain WAMP can lag far behind since the
+  // browser's socket to the router stays open. Reactive so DesktopSessionHost
+  // can blur immediately instead of waiting on the slower session-level signal.
+  const unreachableRealms = ref(new Set<string>())
+
+  function reportUnreachable(realm: string) {
+    if (!unreachableRealms.value.has(realm)) {
+      unreachableRealms.value = new Set(unreachableRealms.value).add(realm)
+    }
+    invalidate(realm)
+  }
+
+  function clearUnreachable(realm: string) {
+    if (unreachableRealms.value.has(realm)) {
+      const next = new Set(unreachableRealms.value)
+      next.delete(realm)
+      unreachableRealms.value = next
+    }
+  }
+
   async function acquire(realm: string): Promise<Session | null> {
     const existing = cache.get(realm)
     if (existing?.isConnected()) return existing
@@ -68,5 +91,14 @@ export const useSessionCacheStore = defineStore('sessionCache', () => {
     return false
   }
 
-  return { acquire, invalidateAll, invalidate, isActive, isAnyActive }
+  return {
+    acquire,
+    invalidateAll,
+    invalidate,
+    isActive,
+    isAnyActive,
+    unreachableRealms,
+    reportUnreachable,
+    clearUnreachable,
+  }
 })

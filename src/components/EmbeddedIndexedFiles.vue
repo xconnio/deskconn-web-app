@@ -11,7 +11,7 @@ import {
   decryptPayload,
   type EncryptionKeys,
 } from '@/utils/encryption'
-import { DESKTOP_OFFLINE_MESSAGE, formatDesktopError } from '@/utils/desktopError'
+import { DESKTOP_OFFLINE_MESSAGE, formatDesktopError, isDesktopOfflineError } from '@/utils/desktopError'
 
 const procedureIndexQuery  = 'io.xconn.deskconn.deskconnd.index.query'
 
@@ -222,6 +222,11 @@ function filterToCategories(list: IndexEntry[], categories: string[]): IndexEntr
   return list.filter((e) => categories.includes(e.category))
 }
 
+function reportError(err: unknown, fallback: string) {
+  if (isDesktopOfflineError(err)) sessionCacheStore.reportUnreachable(props.realm)
+  error.value = formatDesktopError(err, fallback)
+}
+
 async function loadMore() {
   if (!hasMore.value || isLoadingMore.value) return
   if (!activeSession.value || !activeKeys) return
@@ -234,7 +239,7 @@ async function loadMore() {
     nextCursor.value = result.next_cursor
     hasMore.value = result.has_more ?? false
   } catch (err) {
-    error.value = formatDesktopError(err, 'Failed to load more files')
+    reportError(err, 'Failed to load more files')
   } finally {
     isLoadingMore.value = false
   }
@@ -276,7 +281,7 @@ async function load() {
   try {
     sess = await sessionCacheStore.acquire(props.realm)
   } catch (err) {
-    error.value = formatDesktopError(err, 'Could not connect to desktop')
+    reportError(err, 'Could not connect to desktop')
     isConnecting.value = false
     return
   }
@@ -312,7 +317,7 @@ async function load() {
       activeCategories    = categories
     }
   } catch (err) {
-    error.value = formatDesktopError(err, 'Failed to load index')
+    reportError(err, 'Failed to load index')
   } finally {
     isLoading.value = false
   }
