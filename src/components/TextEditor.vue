@@ -6,13 +6,14 @@
 import { ref, computed, inject, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { type Session } from 'xconn'
 import { floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
+import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSessionEncryptionStore } from '@/stores/sessionEncryption'
 import { streamFileCat } from '@/utils/fileCat'
 import { buildEditPatch } from '@/utils/textPatch'
 import { downloadBlob } from '@/utils/download'
 import { encryptPayload, decryptPayload } from '@/utils/encryption'
 import { formatSize } from '@/utils/fileTypes'
-import { formatDesktopError, isEditConflictError } from '@/utils/desktopError'
+import { formatDesktopError, isDesktopOfflineError, isEditConflictError } from '@/utils/desktopError'
 
 const procedureFileEdit = 'io.xconn.deskconn.deskconnd.file.edit'
 const MAX_EDIT_SIZE = 10 * 1024 * 1024
@@ -34,6 +35,7 @@ const actionsHostRef = inject(floatingWindowActionsKey)
 const actionsTarget = computed(() => actionsHostRef?.value ?? null)
 
 const sessionEncryptionStore = useSessionEncryptionStore()
+const sessionCacheStore = useSessionCacheStore()
 
 const content = ref('')
 const originalContent = ref('')
@@ -178,6 +180,7 @@ async function saveFile() {
     savedFlashTimer = setTimeout(() => { savedFlash.value = false }, 1800)
   } catch (err) {
     saveConflict.value = isEditConflictError(err)
+    if (isDesktopOfflineError(err)) sessionCacheStore.reportUnreachable(props.realm)
     saveError.value = formatDesktopError(err, 'Failed to save file')
   } finally {
     saving.value = false

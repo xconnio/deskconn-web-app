@@ -18,7 +18,7 @@ import {
 import { uploadFileToPath } from '@/utils/fileUpload'
 import { downloadUrl } from '@/utils/download'
 import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
-import { formatDesktopError, isNoSuchProcedureException } from '@/utils/desktopError'
+import { formatDesktopError, isDesktopOfflineError, isNoSuchProcedureException } from '@/utils/desktopError'
 
 const procedureFileBrowse = 'io.xconn.deskconn.deskconnd.file.browse'
 const procedureFileRename = 'io.xconn.deskconn.deskconnd.file.rename'
@@ -279,6 +279,8 @@ function parseBrowseResult(raw: unknown): FileBrowseResult {
 }
 
 function formatError(error: unknown) {
+  if (isDesktopOfflineError(error)) sessionCacheStore.reportUnreachable(props.realm)
+
   const invalidPathMessage = 'Invalid path.'
 
   if (error instanceof ApplicationError || error instanceof Error) {

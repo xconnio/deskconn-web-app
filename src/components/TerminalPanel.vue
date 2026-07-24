@@ -358,6 +358,7 @@ async function startShell(tab: TabState) {
     if (tab.closed) return
     if (isNoSuchProcedureException(err) || isDataChannelClosedError(err)) {
       tab.term?.write(DESKTOP_OFFLINE_MESSAGE)
+      sessionCacheStore.reportUnreachable(props.realm)
     } else {
       tab.term?.write(`Shell error: ${err}`)
     }

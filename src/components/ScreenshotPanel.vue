@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ApplicationError } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { downloadUrl } from '@/utils/download'
-import { formatDesktopError } from '@/utils/desktopError'
+import { formatDesktopError, isDesktopOfflineError } from '@/utils/desktopError'
 
 const props = defineProps<{ realm: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -98,6 +98,7 @@ async function capture() {
     if (String(detail).includes('screenshot not enabled')) {
       disabled.value = true
     } else {
+      if (isDesktopOfflineError(e)) sessionCacheStore.reportUnreachable(props.realm)
       error.value = formatDesktopError(e)
     }
   } finally {

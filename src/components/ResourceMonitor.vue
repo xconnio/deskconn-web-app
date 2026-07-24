@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionCacheStore } from '../stores/sessionCache'
 import { useSettingsStore } from '../stores/settings'
-import { formatDesktopError } from '../utils/desktopError'
+import { formatDesktopError, isDesktopOfflineError } from '../utils/desktopError'
 
 const props = defineProps<{
   realm: string
@@ -67,6 +67,7 @@ async function fetchInfo() {
     info.value = JSON.parse(new TextDecoder().decode(bytes)) as DeviceInfo
     error.value = null
   } catch (e) {
+    if (isDesktopOfflineError(e)) sessionCacheStore.reportUnreachable(props.realm)
     error.value = formatDesktopError(e)
   } finally {
     loading.value = false
