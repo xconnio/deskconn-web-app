@@ -124,13 +124,12 @@ async function connectSession(): Promise<boolean> {
   }
 }
 
-// Used for both the initial connect and the "Reconnect" button — a failure
-// always lands back in the same disconnected overlay.
+// No upfront invalidate here, acquire() reuses a still-healthy cached
+// session; a dead one has already evicted itself by this point.
 async function connect() {
   isDisconnected.value = false
   isConnecting.value = true
   sessionCacheStore.clearUnreachable(props.realm)
-  sessionCacheStore.invalidate(props.realm)
 
   const connected = await connectSession()
   isConnecting.value = false
