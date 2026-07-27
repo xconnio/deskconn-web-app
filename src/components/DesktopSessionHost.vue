@@ -17,8 +17,10 @@ import TextEditor from '@/components/TextEditor.vue'
 import ScreenshotPanel from '@/components/ScreenshotPanel.vue'
 import FloatingWindow from '@/components/FloatingWindow.vue'
 import AppDock from '@/components/AppDock.vue'
+import DownloadToast from '@/components/DownloadToast.vue'
 import { loadCachedWallpaper, storeWallpaper } from '@/composables/useWallpaperCache'
 import { getFilePreviewType, type FilePreviewType } from '@/utils/fileTypes'
+import { downloadFile, type DownloadProgressState } from '@/utils/fileDownload'
 
 const props = defineProps<{ realm: string; active: boolean }>()
 
@@ -373,8 +375,16 @@ const PREVIEW_ICONS: Record<FilePreviewType, string> = {
   none: 'bi-file-earmark-fill',
 }
 
+const downloadProgress = ref<DownloadProgressState | null>(null)
+
+// No previewer for these — skip the blank window and download straight away.
 function onPreviewFile(session: Session, entry: PreviewEntry, entries: PreviewEntry[]) {
   const pt = getFilePreviewType(entry.name)
+  if (pt === 'none') {
+    downloadFile(session, entry, downloadProgress)
+    return
+  }
+
   const appId = pt === 'image' ? 'image-viewer' : pt === 'video' ? 'video-player' : pt === 'text' ? 'text-editor' : 'preview'
   openWindow({
     appId,
@@ -560,6 +570,8 @@ onUnmounted(() => {
     </div>
 
     <ScreenshotPanel v-if="screenshotOpen" :realm="realm" @close="screenshotOpen = false" />
+
+    <DownloadToast v-if="downloadProgress" :progress="downloadProgress" />
 
     <div v-if="isConnecting" class="connecting-overlay">
       <div class="connecting-spinner"></div>

@@ -11,19 +11,16 @@
 import { ref, computed, inject, onMounted, onUnmounted } from 'vue'
 import { type Session } from 'xconn'
 import { floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
-import { createX25519KeyPair, deriveSessionKeys, decryptPayload } from '@/utils/encryption'
 import { canStreamRanges, requestRange } from '@/services/fileStream'
 import { uploadFileToPath, type UploadProgress } from '@/utils/fileUpload'
 import { downloadUrl, downloadBlob } from '@/utils/download'
+import { streamFileData, downloadFile, ensureDownloadServiceWorker, type DownloadProgressState } from '@/utils/fileDownload'
 import {
   type FilePreviewType,
   formatSize,
   getFilePreviewType,
   getMimeType,
-  isFirefoxBrowser,
 } from '@/utils/fileTypes'
-
-const procedureFileDownload = 'io.xconn.deskconn.deskconnd.file.download'
 
 type PreviewEntry = { path: string; name: string; size: number }
 
@@ -98,99 +95,13 @@ const previewExpectedBytes = ref(0)
 const previewReceivedBytes = ref(0)
 const mediaRetryUsed       = ref(false)
 
-type DownloadProgressState = { name: string; received: number; total: number; speed: number; cancel: () => void }
 const downloadProgress = ref<DownloadProgressState | null>(null)
-
-let downloadServiceWorker: ServiceWorker | null = null
-let downloadServiceWorkerReadyPromise: Promise<ServiceWorker | null> | null = null
 let mounted = true
-
-type CallResult = Awaited<ReturnType<Session['call']>>
-
-async function streamFileData(
-  remotePath: string,
-  onChunk: (chunk: Uint8Array, expectedTotal: number) => void | Promise<void>,
-  signal?: AbortSignal,
-): Promise<void> {
-  const LATE_PROGRESS_WAIT_MS = 250
-  const MAX_LATE_PROGRESS_WAIT_MS = 5_000
-
-  const { publicKey, privateKey } = createX25519KeyPair()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const progressResult: any = await props.session.callProgress(procedureFileDownload, [remotePath, false, publicKey])
-
-  const queue: CallResult[] = []
-  let wakeUp: (() => void) | null = null
-  let streamDone = false
-  let streamError: unknown = null
-
-  const notify = () => { const fn = wakeUp; wakeUp = null; fn?.() }
-  progressResult.registerProgress((result: CallResult) => { queue.push(result); notify() })
-  progressResult.finalResultPromise
-    .then(() => { streamDone = true; notify() })
-    .catch((err: unknown) => { streamError = err; streamDone = true; notify() })
-
-  let receiveKey: Uint8Array | null = null
-  let firstMessage = true
-  let expectedTotal = 0
-  let receivedTotal = 0
-  let lateProgressWaitedMs = 0
-
-  const onAbort = () => notify()
-  signal?.addEventListener('abort', onAbort, { once: true })
-
-  try {
-    while (true) {
-      if (signal?.aborted) throw new Error('cancelled')
-      if (queue.length === 0) {
-        if (streamDone) {
-          if (expectedTotal > 0 && receivedTotal < expectedTotal) {
-            await new Promise<void>((resolve) => {
-              let settled = false
-              const timer = window.setTimeout(() => { if (settled) return; settled = true; wakeUp = null; resolve() }, LATE_PROGRESS_WAIT_MS)
-              wakeUp = () => { if (settled) return; settled = true; window.clearTimeout(timer); wakeUp = null; resolve() }
-            })
-            if (queue.length > 0) { lateProgressWaitedMs = 0; continue }
-            lateProgressWaitedMs += LATE_PROGRESS_WAIT_MS
-            if (lateProgressWaitedMs < MAX_LATE_PROGRESS_WAIT_MS) continue
-            throw new Error(`Download stream ended early (${receivedTotal} of ${expectedTotal} bytes)`)
-          }
-          break
-        }
-        await new Promise<void>(resolve => { wakeUp = resolve })
-        continue
-      }
-      const result = queue.shift()!
-      const args = (result.args ?? []) as unknown[]
-      if (firstMessage) {
-        firstMessage = false
-        const raw = args[0] as Uint8Array
-        if (raw.length < 36) throw new Error('Invalid key exchange message from server')
-        receiveKey = (await deriveSessionKeys(privateKey, raw.slice(4))).decryptKey
-        continue
-      }
-      if (!receiveKey || args.length < 2) continue
-      const msgType = args[0]
-      if (typeof msgType !== 'string') continue
-      if (msgType === 'H') {
-        const plain = decryptPayload(args[1] as Uint8Array, receiveKey)
-        expectedTotal = (JSON.parse(new TextDecoder().decode(plain)) as { size?: number }).size ?? 0
-      } else if (msgType === 'D') {
-        const chunk = decryptPayload(args[1] as Uint8Array, receiveKey)
-        receivedTotal += chunk.length
-        await onChunk(chunk, expectedTotal)
-      }
-    }
-  } finally {
-    signal?.removeEventListener('abort', onAbort)
-  }
-  if (streamError) throw streamError instanceof Error ? streamError : new Error('Stream failed')
-}
 
 async function fetchFileData(remotePath: string): Promise<Uint8Array> {
   const chunks: Uint8Array[] = []
   let total = 0
-  await streamFileData(remotePath, (chunk, expectedTotal) => {
+  await streamFileData(props.session, remotePath, (chunk, expectedTotal) => {
     chunks.push(chunk)
     total += chunk.length
     previewExpectedBytes.value = expectedTotal
@@ -260,7 +171,7 @@ function stopActiveStream() {
 async function openStreamedMedia(pt: FilePreviewType): Promise<boolean> {
   if (!canStreamRanges(props.session)) return false
 
-  const sw = downloadServiceWorker ?? await ensureDownloadServiceWorker()
+  const sw = await ensureDownloadServiceWorker()
   if (!sw) return false
 
   stopActiveStream()
@@ -353,156 +264,7 @@ function downloadFromPreview() {
 }
 
 async function downloadFileToClient() {
-  const STALL_MS = 20_000
-  const controller = new AbortController()
-  let stallTimer: ReturnType<typeof setTimeout> | null = null
-  let stalledOut = false
-
-  function armStall() {
-    if (stallTimer !== null) clearTimeout(stallTimer)
-    stallTimer = setTimeout(() => { stalledOut = true; controller.abort() }, STALL_MS)
-  }
-  function clearStall() {
-    if (stallTimer !== null) { clearTimeout(stallTimer); stallTimer = null }
-  }
-  function onError(err: unknown) {
-    if (stalledOut) return
-    if (!controller.signal.aborted && err instanceof Error) console.warn('Download failed:', err.message)
-  }
-
-  if (!isFirefoxBrowser() && 'showSaveFilePicker' in window) {
-    await downloadFileWithSavePicker(controller, armStall, clearStall, onError); return
-  }
-  try {
-    await downloadFileWithBrowserDownload(controller.signal, armStall, clearStall)
-  } catch (err) {
-    clearStall(); onError(err)
-  }
-}
-
-async function downloadFileWithSavePicker(
-  controller: AbortController,
-  armStall: () => void,
-  clearStall: () => void,
-  onError: (err: unknown) => void,
-) {
-  let writable: FileSystemWritableFileStream | null = null
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handle = await (window as any).showSaveFilePicker({ suggestedName: currentEntry.value.name })
-    writable = await handle.createWritable()
-  } catch (err: unknown) {
-    if ((err as { name?: string })?.name === 'AbortError') return
-    return
-  }
-
-  const startTime = Date.now()
-  let received = 0
-  downloadProgress.value = { name: currentEntry.value.name, received: 0, total: currentEntry.value.size, speed: 0, cancel: () => controller.abort() }
-  armStall()
-
-  try {
-    await streamFileData(currentEntry.value.path, async (chunk, expectedTotal) => {
-      armStall()
-      await writable!.write(chunk.slice())
-      received += chunk.length
-      if (!downloadProgress.value) return
-      downloadProgress.value.received = received
-      if (expectedTotal > 0) downloadProgress.value.total = expectedTotal
-      const elapsed = (Date.now() - startTime) / 1000
-      downloadProgress.value.speed = elapsed > 0 ? received / elapsed : 0
-    }, controller.signal)
-    await writable!.close()
-  } catch (err) {
-    try { await writable?.abort() } catch { /* ignore */ }
-    onError(err)
-  } finally {
-    clearStall(); downloadProgress.value = null
-  }
-}
-
-async function downloadFileWithBrowserDownload(
-  signal: AbortSignal,
-  armStall: () => void,
-  clearStall: () => void,
-) {
-  armStall()
-  const sw = downloadServiceWorker ?? await ensureDownloadServiceWorker()
-  if (!sw) throw new Error('Browser downloads are not available in this browser')
-
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  let sentMeta = false
-  let pendingPulls = 0
-  let bridgeError: Error | null = null
-  let pullWaiter: (() => void) | null = null
-  const mc = new MessageChannel()
-  const keepAlive = window.setInterval(() => sw.postMessage({ type: 'ping', id }), 10_000)
-
-  function resolvePull() {
-    if (pullWaiter) { const r = pullWaiter; pullWaiter = null; r(); return }
-    pendingPulls++
-  }
-  function waitForPull() {
-    if (bridgeError) return Promise.reject(bridgeError)
-    if (pendingPulls > 0) { pendingPulls--; return Promise.resolve() }
-    return new Promise<void>((resolve, reject) => {
-      pullWaiter = () => { if (bridgeError) reject(bridgeError); else resolve() }
-    })
-  }
-
-  mc.port1.onmessage = (event) => {
-    const data = event.data ?? {}
-    if (data.type === 'pull') { resolvePull(); return }
-    if (data.type === 'error') {
-      bridgeError = new Error(data.message || 'Download bridge failed')
-      if (pullWaiter) { const r = pullWaiter; pullWaiter = null; r() }
-    }
-  }
-  sw.postMessage({ type: 'download', id, filename: currentEntry.value.name }, [mc.port2])
-
-  downloadUrl(`/_dl/${id}`, currentEntry.value.name)
-
-  try {
-    await streamFileData(currentEntry.value.path, async (chunk, expectedTotal) => {
-      armStall()
-      if (!sentMeta) {
-        mc.port1.postMessage({ type: 'meta', filename: currentEntry.value.name, size: expectedTotal > 0 ? expectedTotal : 0 })
-        sentMeta = true
-      }
-      await waitForPull()
-      if (bridgeError) throw bridgeError
-      const payload = chunk.slice().buffer
-      mc.port1.postMessage({ type: 'chunk', chunk: payload }, [payload])
-    }, signal)
-    mc.port1.postMessage({ type: 'close' })
-  } catch (err) {
-    mc.port1.postMessage({ type: 'error', message: err instanceof Error ? err.message : 'Download failed' })
-    throw err
-  } finally {
-    window.clearInterval(keepAlive); clearStall()
-  }
-}
-
-async function ensureDownloadServiceWorker(): Promise<ServiceWorker | null> {
-  if (!('serviceWorker' in navigator)) return null
-  if (downloadServiceWorker) return downloadServiceWorker
-  if (!downloadServiceWorkerReadyPromise) {
-    downloadServiceWorkerReadyPromise = (async () => {
-      await navigator.serviceWorker.register('/sw-download.js', { scope: '/' })
-      await navigator.serviceWorker.ready
-      if (navigator.serviceWorker.controller) {
-        downloadServiceWorker = navigator.serviceWorker.controller
-        return downloadServiceWorker
-      }
-      downloadServiceWorker = await new Promise<ServiceWorker>((resolve) => {
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (navigator.serviceWorker.controller) resolve(navigator.serviceWorker.controller)
-        }, { once: true })
-      })
-      return downloadServiceWorker
-    })().catch((err) => { downloadServiceWorkerReadyPromise = null; throw err })
-  }
-  return downloadServiceWorkerReadyPromise
+  await downloadFile(props.session, currentEntry.value, downloadProgress)
 }
 
 // ── Crop & rotate editor ──────────────────────────────────────────────────
