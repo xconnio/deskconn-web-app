@@ -588,6 +588,7 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  background-color: #000;
   transition: filter 0.2s ease;
 }
 
