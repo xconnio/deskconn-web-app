@@ -50,10 +50,58 @@ interface DeviceInfo {
   network_interfaces: NetworkInterface[]
 }
 
+interface ProcessInfo {
+  pid: number
+  name: string
+  user: string
+  cpu_percent: number
+  mem_rss: number
+  mem_percent: number
+}
+
+interface AppInfo {
+  id: string
+  name: string
+  icon_name: string
+  pids: number[]
+  cpu_percent: number
+  mem_rss: number
+}
+
+type Section = 'apps' | 'processes' | 'processor' | 'memory' | 'disk' | 'network'
+
+const SECTIONS: { id: Section; label: string; icon: string; graph: boolean }[] = [
+  { id: 'apps', label: 'Apps', icon: 'bi-grid-3x3-gap', graph: false },
+  { id: 'processes', label: 'Processes', icon: 'bi-list-task', graph: false },
+  { id: 'processor', label: 'Processor', icon: 'bi-cpu', graph: true },
+  { id: 'memory', label: 'Memory', icon: 'bi-memory', graph: true },
+  { id: 'disk', label: 'Disk', icon: 'bi-hdd', graph: true },
+  { id: 'network', label: 'Network', icon: 'bi-diagram-3', graph: true },
+]
+
+const activeSection = ref<Section>('apps')
+
 const info = ref<DeviceInfo | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
+const actionError = ref<string | null>(null)
+
+const processList = ref<ProcessInfo[]>([])
+const appList = ref<AppInfo[]>([])
+const processSearch = ref('')
+
 let intervalId: ReturnType<typeof setInterval> | null = null
+
+const HISTORY_LEN = 30
+const cpuHistory = ref<number[]>([])
+const memHistory = ref<number[]>([])
+const diskHistory = ref<number[]>([])
+const netHistory = ref<number[]>([])
+
+function pushHistory(arr: number[], value: number) {
+  arr.push(value)
+  if (arr.length > HISTORY_LEN) arr.shift()
+}
 
 async function fetchInfo() {
   try {
@@ -66,12 +114,89 @@ async function fetchInfo() {
     const bytes = result.args?.[0] as Uint8Array
     info.value = JSON.parse(new TextDecoder().decode(bytes)) as DeviceInfo
     error.value = null
+
+    pushHistory(cpuHistory.value, cpuOverall.value)
+    pushHistory(memHistory.value, ramUsedPct())
+    pushHistory(diskHistory.value, diskUsedPct())
+    const netTotal = (info.value.network_interfaces ?? []).reduce(
+      (sum, iface) => sum + iface.bytes_sent_ps + iface.bytes_recv_ps,
+      0,
+    )
+    pushHistory(netHistory.value, netTotal)
   } catch (e) {
     if (isDesktopOfflineError(e)) sessionCacheStore.reportUnreachable(props.realm)
     error.value = formatDesktopError(e)
   } finally {
     loading.value = false
   }
+}
+
+async function fetchProcesses() {
+  try {
+    const session = await sessionCacheStore.acquire(props.realm)
+    if (!session) return
+    const result = await session.call('io.xconn.deskconn.deskconnd.process.list')
+    const bytes = result.args?.[0] as Uint8Array
+    processList.value = JSON.parse(new TextDecoder().decode(bytes)) as ProcessInfo[]
+  } catch (e) {
+    if (isDesktopOfflineError(e)) sessionCacheStore.reportUnreachable(props.realm)
+    actionError.value = formatDesktopError(e)
+  }
+}
+
+const iconCache = ref<Map<string, string>>(new Map())
+const iconFailed = new Set<string>()
+
+async function ensureIcon(iconName: string) {
+  if (!iconName || iconCache.value.has(iconName) || iconFailed.has(iconName)) return
+  try {
+    const session = await sessionCacheStore.acquire(props.realm)
+    if (!session) return
+    const result = await session.call('io.xconn.deskconn.deskconnd.app.icon', [iconName])
+    const bytes = result.args?.[0] as Uint8Array
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { mime: string; data: string }
+    iconCache.value.set(iconName, `data:${parsed.mime};base64,${parsed.data}`)
+  } catch {
+    iconFailed.add(iconName)
+  }
+}
+
+async function fetchApps() {
+  try {
+    const session = await sessionCacheStore.acquire(props.realm)
+    if (!session) return
+    const result = await session.call('io.xconn.deskconn.deskconnd.app.list')
+    const bytes = result.args?.[0] as Uint8Array
+    appList.value = JSON.parse(new TextDecoder().decode(bytes)) as AppInfo[]
+    for (const app of appList.value) {
+      if (app.icon_name) void ensureIcon(app.icon_name)
+    }
+  } catch (e) {
+    if (isDesktopOfflineError(e)) sessionCacheStore.reportUnreachable(props.realm)
+    actionError.value = formatDesktopError(e)
+  }
+}
+
+async function signalPids(pids: number[], signal: 'term' | 'kill') {
+  if (!pids.length) return
+  try {
+    const session = await sessionCacheStore.acquire(props.realm)
+    if (!session) return
+    await session.call('io.xconn.deskconn.deskconnd.process.signal', [pids, signal])
+    actionError.value = null
+  } catch (e) {
+    if (isDesktopOfflineError(e)) sessionCacheStore.reportUnreachable(props.realm)
+    actionError.value = formatDesktopError(e)
+  } finally {
+    if (activeSection.value === 'processes') void fetchProcesses()
+    else if (activeSection.value === 'apps') void fetchApps()
+  }
+}
+
+function selectSection(id: Section) {
+  activeSection.value = id
+  if (id === 'processes') void fetchProcesses()
+  else if (id === 'apps') void fetchApps()
 }
 
 function stopPolling() {
@@ -81,14 +206,20 @@ function stopPolling() {
   }
 }
 
+function pollTick() {
+  void fetchInfo()
+  if (activeSection.value === 'processes') void fetchProcesses()
+  else if (activeSection.value === 'apps') void fetchApps()
+}
+
 function startPolling() {
   stopPolling()
-  fetchInfo()
-  intervalId = setInterval(fetchInfo, settingsStore.resourceMonitorInterval * 1000)
+  pollTick()
+  intervalId = setInterval(pollTick, settingsStore.getResourceMonitorInterval(props.realm) * 1000)
 }
 
 watch(
-  () => settingsStore.resourceMonitorInterval,
+  () => settingsStore.getResourceMonitorInterval(props.realm),
   () => {
     startPolling()
   },
@@ -135,6 +266,113 @@ function diskUsedPct(): number {
   if (!info.value?.disk_total) return 0
   return (info.value.disk_used / info.value.disk_total) * 100
 }
+
+function sparklinePoints(history: number[], max: number, width = 100, height = 24): string {
+  if (history.length < 2) return ''
+  return history
+    .map((v, i) => {
+      const x = (i / (history.length - 1)) * width
+      const y = height - (Math.min(v, max) / max) * height
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+}
+
+function sparklinePercent(history: number[], width = 100, height = 24): string {
+  return sparklinePoints(history, 100, width, height)
+}
+
+function sparklineAuto(history: number[], width = 100, height = 24): string {
+  const max = Math.max(1, ...history)
+  return sparklinePoints(history, max, width, height)
+}
+
+function navSparklinePoints(id: Section): string {
+  switch (id) {
+    case 'processor':
+      return sparklinePercent(cpuHistory.value)
+    case 'memory':
+      return sparklinePercent(memHistory.value)
+    case 'disk':
+      return sparklinePercent(diskHistory.value)
+    case 'network':
+      return sparklineAuto(netHistory.value)
+    default:
+      return ''
+  }
+}
+
+const filteredProcesses = computed(() => {
+  const query = processSearch.value.trim().toLowerCase()
+  const list = query
+    ? processList.value.filter((p) => p.name.toLowerCase().includes(query))
+    : processList.value
+  return [...list].sort((a, b) => b.mem_rss - a.mem_rss)
+})
+
+interface ContextMenuTarget {
+  kind: 'process' | 'app'
+  process?: ProcessInfo
+  app?: AppInfo
+}
+
+const contextMenuVisible = ref(false)
+const contextMenuPos = ref<{ top: number; left: number } | null>(null)
+const contextMenuTarget = ref<ContextMenuTarget | null>(null)
+
+function openMenuAt(event: MouseEvent) {
+  const menuWidth = 170
+  const menuHeight = 96
+  contextMenuPos.value = {
+    top: Math.min(event.clientY, window.innerHeight - menuHeight - 8),
+    left: Math.min(event.clientX, window.innerWidth - menuWidth - 8),
+  }
+  contextMenuVisible.value = true
+}
+
+function openProcessMenu(p: ProcessInfo, event: MouseEvent) {
+  contextMenuTarget.value = { kind: 'process', process: p }
+  openMenuAt(event)
+}
+
+function openAppMenu(a: AppInfo, event: MouseEvent) {
+  if (a.id === 'system') return
+  contextMenuTarget.value = { kind: 'app', app: a }
+  openMenuAt(event)
+}
+
+function closeContextMenu() {
+  contextMenuVisible.value = false
+  contextMenuPos.value = null
+  contextMenuTarget.value = null
+}
+
+function contextMenuPids(): number[] {
+  const target = contextMenuTarget.value
+  if (!target) return []
+  if (target.kind === 'process' && target.process) return [target.process.pid]
+  if (target.kind === 'app' && target.app) return target.app.pids
+  return []
+}
+
+const contextMenuLabel = computed(() => {
+  const target = contextMenuTarget.value
+  if (!target) return ''
+  if (target.kind === 'process') return target.process?.name ?? ''
+  return target.app?.name ?? ''
+})
+
+function handleEnd() {
+  const pids = contextMenuPids()
+  closeContextMenu()
+  void signalPids(pids, 'term')
+}
+
+function handleKill() {
+  const pids = contextMenuPids()
+  closeContextMenu()
+  void signalPids(pids, 'kill')
+}
 </script>
 
 <template>
@@ -150,118 +388,268 @@ function diskUsedPct(): number {
     </div>
 
     <template v-else-if="info">
-      <!-- CPU -->
-      <section class="rm-section">
-        <div class="rm-section-header">
-          <span class="rm-section-title"><i class="bi bi-cpu"></i> CPU</span>
-          <span class="rm-section-badge">{{ info.cpu_physical }}P / {{ info.cpu_logical }}L</span>
-          <span class="rm-section-value" :style="{ color: cpuColor(cpuOverall) }">
-            {{ cpuOverall.toFixed(1) }}%
+      <nav class="rm-sidebar">
+        <button
+          v-for="s in SECTIONS"
+          :key="s.id"
+          class="rm-nav-item"
+          :class="{ 'rm-nav-item--active': activeSection === s.id }"
+          @click="selectSection(s.id)"
+        >
+          <span class="rm-nav-row">
+            <i class="bi" :class="s.icon"></i>
+            <span class="rm-nav-label">{{ s.label }}</span>
           </span>
+          <svg
+            v-if="s.graph"
+            viewBox="0 0 100 24"
+            preserveAspectRatio="none"
+            class="rm-nav-spark"
+          >
+            <polyline :points="navSparklinePoints(s.id)" />
+          </svg>
+        </button>
+      </nav>
+
+      <div class="rm-content">
+        <div v-if="actionError" class="rm-action-error">
+          <i class="bi bi-exclamation-triangle-fill"></i>
+          <span>{{ actionError }}</span>
+          <button class="rm-action-error-close" @click="actionError = null">
+            <i class="bi bi-x"></i>
+          </button>
         </div>
-        <p v-if="info.cpu_model" class="rm-model-name">{{ info.cpu_model }}</p>
-        <div class="rm-bar">
-          <div
-            class="rm-bar-fill"
-            :style="{ width: cpuOverall + '%', background: cpuColor(cpuOverall) }"
-          ></div>
-        </div>
-        <div class="rm-cores-grid">
-          <div v-for="(usage, i) in info.cpu_usages" :key="i" class="rm-core-row">
-            <span class="rm-core-label">CPU {{ i }}</span>
-            <div class="rm-core-track">
+
+        <!-- Apps -->
+        <section v-if="activeSection === 'apps'" class="rm-detail">
+          <div class="rm-detail-header">
+            <span class="rm-detail-title"><i class="bi bi-grid-3x3-gap"></i> Apps</span>
+          </div>
+          <div v-if="!appList.length" class="rm-empty">No apps found.</div>
+          <div v-else class="rm-list">
+            <div class="rm-list-header rm-app-row">
+              <span>App</span>
+              <span class="rm-col-num">Memory</span>
+              <span class="rm-col-num">Processor</span>
+            </div>
+            <div
+              v-for="app in appList"
+              :key="app.id"
+              class="rm-list-row rm-app-row"
+              @contextmenu.prevent="openAppMenu(app, $event)"
+            >
+              <span class="rm-row-name">
+                <span class="rm-icon">
+                  <img v-if="iconCache.get(app.icon_name)" :src="iconCache.get(app.icon_name)" alt="" />
+                  <i v-else class="bi bi-app-indicator"></i>
+                </span>
+                {{ app.name }}
+              </span>
+              <span class="rm-col-num">{{ formatBytes(app.mem_rss) }}</span>
+              <span class="rm-col-num">{{ app.cpu_percent.toFixed(1) }}%</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Processes -->
+        <section v-else-if="activeSection === 'processes'" class="rm-detail">
+          <div class="rm-detail-header">
+            <span class="rm-detail-title"><i class="bi bi-list-task"></i> Processes</span>
+          </div>
+          <input
+            v-model="processSearch"
+            type="text"
+            class="rm-search"
+            placeholder="Search processes…"
+          />
+          <div v-if="!filteredProcesses.length" class="rm-empty">No processes found.</div>
+          <div v-else class="rm-list">
+            <div class="rm-list-header rm-proc-row">
+              <span>Process</span>
+              <span class="rm-col-num">PID</span>
+              <span>User</span>
+              <span class="rm-col-num">Memory</span>
+              <span class="rm-col-num">CPU</span>
+            </div>
+            <div
+              v-for="p in filteredProcesses"
+              :key="p.pid"
+              class="rm-list-row rm-proc-row"
+              @contextmenu.prevent="openProcessMenu(p, $event)"
+            >
+              <span class="rm-row-name">
+                <span class="rm-icon"><i class="bi bi-gear"></i></span>
+                {{ p.name }}
+              </span>
+              <span class="rm-col-num">{{ p.pid }}</span>
+              <span class="rm-row-user">{{ p.user }}</span>
+              <span class="rm-col-num">{{ formatBytes(p.mem_rss) }}</span>
+              <span class="rm-col-num">{{ p.cpu_percent.toFixed(1) }}%</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Processor -->
+        <section v-else-if="activeSection === 'processor'" class="rm-detail">
+          <div class="rm-detail-header">
+            <span class="rm-detail-title"><i class="bi bi-cpu"></i> Processor</span>
+            <span class="rm-detail-value" :style="{ color: cpuColor(cpuOverall) }">
+              {{ cpuOverall.toFixed(1) }}%
+            </span>
+          </div>
+          <p v-if="info.cpu_model" class="rm-model-name">{{ info.cpu_model }}</p>
+
+          <div class="rm-options-row">
+            <span>Show Usages of Logical CPUs</span>
+            <label class="rm-switch">
+              <input
+                type="checkbox"
+                :checked="settingsStore.showLogicalCpus"
+                @change="settingsStore.setShowLogicalCpus(($event.target as HTMLInputElement).checked)"
+              />
+              <span class="rm-switch-track"><span class="rm-switch-thumb"></span></span>
+            </label>
+          </div>
+
+          <template v-if="settingsStore.showLogicalCpus">
+            <span class="rm-section-badge">{{ info.cpu_physical }}P / {{ info.cpu_logical }}L</span>
+            <div class="rm-cores-grid">
+              <div v-for="(usage, i) in info.cpu_usages" :key="i" class="rm-core-row">
+                <span class="rm-core-label">CPU {{ i }}</span>
+                <div class="rm-core-track">
+                  <div
+                    class="rm-core-fill"
+                    :style="{ width: usage + '%', background: cpuColor(usage) }"
+                  ></div>
+                </div>
+                <span class="rm-core-pct" :style="{ color: cpuColor(usage) }"
+                  >{{ usage.toFixed(0) }}%</span
+                >
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="rm-graph-card">
+              <svg viewBox="0 0 300 80" preserveAspectRatio="none" class="rm-graph-svg">
+                <polyline :points="sparklinePercent(cpuHistory, 300, 80)" />
+              </svg>
+              <div class="rm-graph-label">Total Usage · {{ cpuOverall.toFixed(1) }}%</div>
+            </div>
+          </template>
+        </section>
+
+        <!-- Memory -->
+        <section v-else-if="activeSection === 'memory'" class="rm-detail">
+          <div class="rm-detail-header">
+            <span class="rm-detail-title"><i class="bi bi-memory"></i> Memory</span>
+            <span class="rm-detail-value rm-value--blue">
+              {{ formatBytes(info.ram_total - info.ram_available) }} /
+              {{ formatBytes(info.ram_total) }}
+            </span>
+          </div>
+          <div class="rm-graph-card">
+            <svg viewBox="0 0 300 80" preserveAspectRatio="none" class="rm-graph-svg rm-graph-svg--blue">
+              <polyline :points="sparklinePercent(memHistory, 300, 80)" />
+            </svg>
+            <div class="rm-graph-label">Used · {{ ramUsedPct().toFixed(1) }}%</div>
+          </div>
+          <div class="rm-bar">
+            <div class="rm-bar-fill rm-bar-fill--blue" :style="{ width: ramUsedPct() + '%' }"></div>
+          </div>
+          <div class="rm-detail-row">
+            <span>Available: {{ formatBytes(info.ram_available) }}</span>
+            <span>Buff/Cache: {{ formatBytes(info.ram_buff_cache) }}</span>
+          </div>
+          <div v-if="info.swap_total > 0" class="rm-swap-row">
+            <span class="rm-swap-label">Swap</span>
+            <div class="rm-bar rm-bar--thin">
               <div
-                class="rm-core-fill"
-                :style="{ width: usage + '%', background: cpuColor(usage) }"
+                class="rm-bar-fill rm-bar-fill--violet"
+                :style="{ width: swapUsedPct() + '%' }"
               ></div>
             </div>
-            <span class="rm-core-pct" :style="{ color: cpuColor(usage) }"
-              >{{ usage.toFixed(0) }}%</span
+            <span class="rm-swap-val"
+              >{{ formatBytes(info.swap_used) }} / {{ formatBytes(info.swap_total) }}</span
             >
           </div>
-        </div>
-      </section>
+        </section>
 
-      <!-- Memory -->
-      <section class="rm-section">
-        <div class="rm-section-header">
-          <span class="rm-section-title"><i class="bi bi-memory"></i> Memory</span>
-          <span class="rm-section-value rm-value--blue">
-            {{ formatBytes(info.ram_total - info.ram_available) }} /
-            {{ formatBytes(info.ram_total) }}
-          </span>
-        </div>
-        <div class="rm-bar">
-          <div class="rm-bar-fill rm-bar-fill--blue" :style="{ width: ramUsedPct() + '%' }"></div>
-        </div>
-        <div class="rm-detail-row">
-          <span>Available: {{ formatBytes(info.ram_available) }}</span>
-          <span>Buff/Cache: {{ formatBytes(info.ram_buff_cache) }}</span>
-        </div>
-        <div v-if="info.swap_total > 0" class="rm-swap-row">
-          <span class="rm-swap-label">Swap</span>
-          <div class="rm-bar rm-bar--thin">
+        <!-- Disk -->
+        <section v-else-if="activeSection === 'disk'" class="rm-detail">
+          <div class="rm-detail-header">
+            <span class="rm-detail-title"><i class="bi bi-hdd"></i> Disk (/)</span>
+            <span class="rm-detail-value rm-value--violet">
+              {{ formatBytes(info.disk_used) }} / {{ formatBytes(info.disk_total) }}
+            </span>
+          </div>
+          <div class="rm-graph-card">
+            <svg viewBox="0 0 300 80" preserveAspectRatio="none" class="rm-graph-svg rm-graph-svg--violet">
+              <polyline :points="sparklinePercent(diskHistory, 300, 80)" />
+            </svg>
+            <div class="rm-graph-label">Used · {{ diskUsedPct().toFixed(1) }}%</div>
+          </div>
+          <div class="rm-bar">
             <div
               class="rm-bar-fill rm-bar-fill--violet"
-              :style="{ width: swapUsedPct() + '%' }"
+              :style="{ width: diskUsedPct() + '%' }"
             ></div>
           </div>
-          <span class="rm-swap-val"
-            >{{ formatBytes(info.swap_used) }} / {{ formatBytes(info.swap_total) }}</span
-          >
-        </div>
-      </section>
-
-      <!-- Disk -->
-      <section class="rm-section">
-        <div class="rm-section-header">
-          <span class="rm-section-title"><i class="bi bi-hdd"></i> Disk (/)</span>
-          <span class="rm-section-value rm-value--violet">
-            {{ formatBytes(info.disk_used) }} / {{ formatBytes(info.disk_total) }}
-          </span>
-        </div>
-        <div class="rm-bar">
-          <div
-            class="rm-bar-fill rm-bar-fill--violet"
-            :style="{ width: diskUsedPct() + '%' }"
-          ></div>
-        </div>
-        <div class="rm-detail-row">
-          <span>Free: {{ formatBytes(info.disk_free) }}</span>
-          <span>Used: {{ diskUsedPct().toFixed(1) }}%</span>
-        </div>
-      </section>
-
-      <!-- Network -->
-      <section v-if="info.network_interfaces?.length" class="rm-section rm-section--last">
-        <div class="rm-section-header">
-          <span class="rm-section-title"><i class="bi bi-diagram-3"></i> Network</span>
-        </div>
-        <div class="rm-net-list">
-          <div v-for="iface in info.network_interfaces" :key="iface.name" class="rm-net-row">
-            <span class="rm-net-name">{{ iface.name }}</span>
-            <span class="rm-net-stat rm-net-up">
-              <i class="bi bi-arrow-up-short"></i>{{ formatBytesPS(iface.bytes_sent_ps) }}
-            </span>
-            <span class="rm-net-stat rm-net-down">
-              <i class="bi bi-arrow-down-short"></i>{{ formatBytesPS(iface.bytes_recv_ps) }}
-            </span>
+          <div class="rm-detail-row">
+            <span>Free: {{ formatBytes(info.disk_free) }}</span>
+            <span>Used: {{ diskUsedPct().toFixed(1) }}%</span>
           </div>
-        </div>
-      </section>
+        </section>
+
+        <!-- Network -->
+        <section v-else-if="activeSection === 'network'" class="rm-detail">
+          <div class="rm-detail-header">
+            <span class="rm-detail-title"><i class="bi bi-diagram-3"></i> Network</span>
+          </div>
+          <div class="rm-graph-card">
+            <svg viewBox="0 0 300 80" preserveAspectRatio="none" class="rm-graph-svg rm-graph-svg--teal">
+              <polyline :points="sparklineAuto(netHistory, 300, 80)" />
+            </svg>
+          </div>
+          <div v-if="!info.network_interfaces?.length" class="rm-empty">No network interfaces.</div>
+          <div v-else class="rm-net-list">
+            <div v-for="iface in info.network_interfaces" :key="iface.name" class="rm-net-row">
+              <span class="rm-net-name">{{ iface.name }}</span>
+              <span class="rm-net-stat rm-net-up">
+                <i class="bi bi-arrow-up-short"></i>{{ formatBytesPS(iface.bytes_sent_ps) }}
+              </span>
+              <span class="rm-net-stat rm-net-down">
+                <i class="bi bi-arrow-down-short"></i>{{ formatBytesPS(iface.bytes_recv_ps) }}
+              </span>
+            </div>
+          </div>
+        </section>
+      </div>
     </template>
+
+    <div v-if="contextMenuVisible && contextMenuPos" class="dropdown-backdrop" @click="closeContextMenu">
+      <div
+        class="entry-dropdown"
+        :style="{ top: contextMenuPos.top + 'px', left: contextMenuPos.left + 'px' }"
+        @click.stop
+      >
+        <div class="dropdown-target-label">{{ contextMenuLabel }}</div>
+        <button class="dropdown-item" @click="handleEnd">
+          <i class="bi bi-x-circle"></i>End
+        </button>
+        <button class="dropdown-item dropdown-item-danger" @click="handleKill">
+          <i class="bi bi-x-octagon-fill"></i>Kill
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .resource-monitor {
   display: flex;
-  flex-direction: column;
   height: 100%;
-  overflow-y: auto;
-  padding: 0.75rem;
+  overflow: hidden;
   background: #f8fafc;
-  gap: 0;
 }
 
 .rm-loading {
@@ -284,51 +672,125 @@ function diskUsedPct(): number {
   font-size: 0.85rem;
 }
 
-.rm-section {
+/* ── Sidebar ── */
+.rm-sidebar {
+  width: 152px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid #e2e8f0;
+  background: #f1f5f9;
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rm-nav-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.rm-nav-item:hover {
+  background: #e2e8f0;
+}
+
+.rm-nav-item--active {
+  background: #dbeafe;
+}
+
+.rm-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.rm-nav-row .bi {
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.rm-nav-spark {
+  width: 100%;
+  height: 20px;
+}
+
+.rm-nav-spark polyline {
+  fill: none;
+  stroke: #3b82f6;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ── Content ── */
+.rm-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+}
+
+.rm-action-error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.72rem;
+  margin-bottom: 0.6rem;
+}
+
+.rm-action-error-close {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.rm-detail {
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   padding: 0.7rem 0.85rem;
-  margin-bottom: 0.55rem;
 }
 
-.rm-section--last {
-  margin-bottom: 0;
-}
-
-.rm-section-header {
+.rm-detail-header {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   margin-bottom: 0.45rem;
 }
 
-.rm-section-title {
-  font-size: 0.78rem;
+.rm-detail-title {
+  font-size: 0.8rem;
   font-weight: 700;
   color: #334155;
   display: flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.35rem;
   flex: 1;
 }
 
-.rm-section-title .bi {
-  font-size: 0.85rem;
+.rm-detail-title .bi {
+  font-size: 0.9rem;
   color: #64748b;
 }
 
-.rm-section-badge {
-  font-size: 0.65rem;
-  font-weight: 600;
-  color: #94a3b8;
-  background: #f1f5f9;
-  border-radius: 4px;
-  padding: 1px 6px;
-}
-
-.rm-section-value {
-  font-size: 0.75rem;
+.rm-detail-value {
+  font-size: 0.78rem;
   font-weight: 700;
   color: #334155;
 }
@@ -347,6 +809,110 @@ function diskUsedPct(): number {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.rm-options-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #334155;
+  background: #f1f5f9;
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  margin-bottom: 0.6rem;
+}
+
+.rm-switch {
+  position: relative;
+  display: inline-block;
+}
+
+.rm-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.rm-switch-track {
+  display: block;
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+  background: #cbd5e1;
+  transition: background 0.15s;
+  position: relative;
+}
+
+.rm-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.rm-switch input:checked + .rm-switch-track {
+  background: #3b82f6;
+}
+
+.rm-switch input:checked + .rm-switch-track .rm-switch-thumb {
+  transform: translateX(16px);
+}
+
+.rm-section-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #94a3b8;
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-bottom: 0.4rem;
+}
+
+.rm-graph-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.rm-graph-svg {
+  width: 100%;
+  height: 80px;
+  display: block;
+}
+
+.rm-graph-svg polyline {
+  fill: none;
+  stroke: #3b82f6;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.rm-graph-svg--blue polyline {
+  stroke: #2563eb;
+}
+.rm-graph-svg--violet polyline {
+  stroke: #7c3aed;
+}
+.rm-graph-svg--teal polyline {
+  stroke: #0891b2;
+}
+
+.rm-graph-label {
+  font-size: 0.68rem;
+  color: #64748b;
+  margin-top: 0.3rem;
 }
 
 .rm-bar {
@@ -380,7 +946,6 @@ function diskUsedPct(): number {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 5px 14px;
-  margin-top: 0.5rem;
 }
 
 .rm-core-row {
@@ -482,5 +1047,177 @@ function diskUsedPct(): number {
 
 .rm-net-down {
   color: #059669;
+}
+
+.rm-empty {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  padding: 1rem 0;
+  text-align: center;
+}
+
+/* ── Apps / Processes lists ── */
+.rm-search {
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+  margin-bottom: 0.55rem;
+  outline: none;
+}
+
+.rm-search:focus {
+  border-color: #93c5fd;
+}
+
+.rm-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.rm-list-header {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #94a3b8;
+  padding: 0.3rem 0.4rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.rm-list-row {
+  padding: 0.4rem;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 0.76rem;
+  color: #334155;
+  cursor: default;
+}
+
+.rm-list-row:hover {
+  background: #f8fafc;
+}
+
+.rm-app-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 90px;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rm-proc-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 90px 90px 70px;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rm-col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rm-row-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rm-row-user {
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rm-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.rm-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* ── Context menu ── */
+.dropdown-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+}
+
+.entry-dropdown {
+  position: fixed;
+  z-index: 2001;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.07);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  min-width: 152px;
+  padding: 0.3rem;
+  animation: dropdown-pop 0.13s ease;
+}
+
+@keyframes dropdown-pop {
+  from {
+    transform: scale(0.88) translateY(-4px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+.dropdown-target-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #94a3b8;
+  padding: 0.3rem 0.6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-item {
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #21313f;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  transition: background 0.12s;
+  cursor: pointer;
+}
+
+.dropdown-item:hover {
+  background: #f1f5f9;
+}
+
+.dropdown-item-danger {
+  color: #dc2626;
+}
+
+.dropdown-item-danger:hover {
+  background: #fef2f2;
 }
 </style>

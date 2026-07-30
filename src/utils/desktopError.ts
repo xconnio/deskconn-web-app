@@ -1,6 +1,7 @@
 import { ApplicationError } from 'xconn'
 
 export const DESKTOP_OFFLINE_MESSAGE = 'Desktop is offline.'
+export const BACKEND_UPDATE_MESSAGE = 'This feature needs a newer version of the desktop backend. Please update it.'
 
 function errorUri(error: unknown): string {
   if (error instanceof ApplicationError || error instanceof Error) {
@@ -36,11 +37,16 @@ export function isEditConflictError(error: unknown): boolean {
   return errorText(error).toLowerCase().includes('could not be applied cleanly')
 }
 
+// A missing procedure means the connected backend is just too old to support
+// this call, not that the desktop is unreachable — don't conflate the two.
 export function isDesktopOfflineError(error: unknown): boolean {
-  return isNoSuchProcedureException(error) || isDataChannelClosedError(error)
+  return isDataChannelClosedError(error)
 }
 
 export function formatDesktopError(error: unknown, fallback = DESKTOP_OFFLINE_MESSAGE): string {
+  if (isNoSuchProcedureException(error)) {
+    return BACKEND_UPDATE_MESSAGE
+  }
   if (isDesktopOfflineError(error)) {
     return DESKTOP_OFFLINE_MESSAGE
   }

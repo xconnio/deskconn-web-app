@@ -12,7 +12,12 @@ import {
   encryptPayload,
   decryptPayload,
 } from '@/utils/encryption'
-import { DESKTOP_OFFLINE_MESSAGE, isDataChannelClosedError, isNoSuchProcedureException } from '@/utils/desktopError'
+import {
+  BACKEND_UPDATE_MESSAGE,
+  DESKTOP_OFFLINE_MESSAGE,
+  isDataChannelClosedError,
+  isNoSuchProcedureException,
+} from '@/utils/desktopError'
 
 const props = defineProps<{ realm: string; desktopName: string; embedded?: boolean; focused?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -356,7 +361,9 @@ async function startShell(tab: TabState) {
     )
   } catch (err) {
     if (tab.closed) return
-    if (isNoSuchProcedureException(err) || isDataChannelClosedError(err)) {
+    if (isNoSuchProcedureException(err)) {
+      tab.term?.write(BACKEND_UPDATE_MESSAGE)
+    } else if (isDataChannelClosedError(err)) {
       tab.term?.write(DESKTOP_OFFLINE_MESSAGE)
       sessionCacheStore.reportUnreachable(props.realm)
     } else {

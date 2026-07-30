@@ -25,6 +25,24 @@ const settingsStore = useSettingsStore()
             <option value="right">Right</option>
           </select>
         </div>
+
+        <hr class="desktop-settings-divider" />
+
+        <div class="desktop-settings-row">
+          <p class="mb-0 fw-semibold">Resource Monitor refresh interval</p>
+          <select
+            class="form-select form-select-sm desktop-settings-select"
+            :value="settingsStore.getResourceMonitorInterval(props.realm)"
+            @change="settingsStore.setResourceMonitorInterval(props.realm, parseInt(($event.target as HTMLSelectElement).value, 10))"
+          >
+            <option value="1">1 second</option>
+            <option value="5">5 seconds</option>
+            <option value="10">10 seconds</option>
+            <option value="15">15 seconds</option>
+            <option value="30">30 seconds</option>
+            <option value="60">60 seconds</option>
+          </select>
+        </div>
       </div>
     </div>
   </div>
@@ -66,6 +84,11 @@ const settingsStore = useSettingsStore()
   justify-content: space-between;
   gap: 1rem;
   padding: 0.9rem 1.1rem;
+}
+
+.desktop-settings-divider {
+  margin: 0;
+  border-color: #e8ecf0;
 }
 
 .desktop-settings-select {
