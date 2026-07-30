@@ -218,11 +218,11 @@ const apps: AppDef[] = [
   {
     id: 'resource-monitor',
     label: 'Resource Monitor',
-    icon: 'bi-bar-chart-line-fill',
+    icon: 'bi-speedometer2',
     iconColor: '#0891b2',
     iconBg: '#cffafe',
-    width: 480,
-    height: 500,
+    width: 700,
+    height: 560,
   },
   {
     id: 'screenshot',

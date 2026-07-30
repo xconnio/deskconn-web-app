@@ -10,17 +10,21 @@ function readDockPosition(realm: string): DockPosition {
   return VALID_DOCK_POSITIONS.includes(stored as DockPosition) ? (stored as DockPosition) : 'left'
 }
 
+function readResourceMonitorInterval(realm: string): number {
+  return parseInt(localStorage.getItem(`setting_resource_monitor_interval_${realm}`) ?? '1', 10)
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   const useWebRTC = ref(localStorage.getItem('setting_use_webrtc') === 'true')
   const singleClickOpen = ref(localStorage.getItem('setting_single_click_open') === 'true')
   const useRemoteWallpaper = ref(localStorage.getItem('setting_use_remote_wallpaper') !== 'false')
-  const resourceMonitorInterval = ref(
-    parseInt(localStorage.getItem('setting_resource_monitor_interval') ?? '1', 10),
-  )
-  // Dock position is per-machine — set via the "Settings" app inside each
-  // machine's dock, not a global account preference — so it's keyed by realm
-  // and hydrated lazily rather than loaded all at once.
+  const showLogicalCpus = ref(localStorage.getItem('setting_show_logical_cpus') === 'true')
+  // Dock position and resource monitor refresh interval are per-machine —
+  // set via the "Settings" app inside each machine's dock, not a global
+  // account preference — so they're keyed by realm and hydrated lazily
+  // rather than loaded all at once.
   const dockPositions = ref<Record<string, DockPosition>>({})
+  const resourceMonitorIntervals = ref<Record<string, number>>({})
 
   function getDockPosition(realm: string): DockPosition {
     if (!(realm in dockPositions.value)) {
@@ -32,6 +36,18 @@ export const useSettingsStore = defineStore('settings', () => {
   function setDockPosition(realm: string, value: DockPosition) {
     dockPositions.value[realm] = value
     localStorage.setItem(`setting_dock_position_${realm}`, value)
+  }
+
+  function getResourceMonitorInterval(realm: string): number {
+    if (!(realm in resourceMonitorIntervals.value)) {
+      resourceMonitorIntervals.value[realm] = readResourceMonitorInterval(realm)
+    }
+    return resourceMonitorIntervals.value[realm]!
+  }
+
+  function setResourceMonitorInterval(realm: string, value: number) {
+    resourceMonitorIntervals.value[realm] = value
+    localStorage.setItem(`setting_resource_monitor_interval_${realm}`, String(value))
   }
 
   function setUseWebRTC(value: boolean) {
@@ -49,16 +65,17 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem('setting_use_remote_wallpaper', String(value))
   }
 
-  function setResourceMonitorInterval(value: number) {
-    resourceMonitorInterval.value = value
-    localStorage.setItem('setting_resource_monitor_interval', String(value))
+  function setShowLogicalCpus(value: boolean) {
+    showLogicalCpus.value = value
+    localStorage.setItem('setting_show_logical_cpus', String(value))
   }
 
   return {
     useWebRTC, setUseWebRTC,
     singleClickOpen, setSingleClickOpen,
     useRemoteWallpaper, setUseRemoteWallpaper,
-    resourceMonitorInterval, setResourceMonitorInterval,
+    showLogicalCpus, setShowLogicalCpus,
     getDockPosition, setDockPosition,
+    getResourceMonitorInterval, setResourceMonitorInterval,
   }
 })
