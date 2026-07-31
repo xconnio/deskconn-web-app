@@ -133,13 +133,26 @@ function onWindowClickForMenu(e: MouseEvent) {
   menuOpen.value = false
 }
 
+// Clicks inside an <iframe> (e.g. the PDF preview) never bubble a pointerdown
+// here, since it's a separate browsing context — but focusing it does blur
+// the top-level window, so use that as a fallback focus signal.
+function onWindowBlur() {
+  setTimeout(() => {
+    if (document.activeElement instanceof HTMLIFrameElement && rootEl.value?.contains(document.activeElement)) {
+      emit('focus')
+    }
+  }, 0)
+}
+
 onMounted(() => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
   window.addEventListener('click', onWindowClickForMenu, true)
+  window.addEventListener('blur', onWindowBlur)
 })
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   window.removeEventListener('click', onWindowClickForMenu, true)
+  window.removeEventListener('blur', onWindowBlur)
 })
 
 function suppressSelection() {
