@@ -449,6 +449,13 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
   flex-direction: column;
   min-width: 4.5rem;
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.dock-left::-webkit-scrollbar,
+.dock-right::-webkit-scrollbar {
+  display: none;
 }
 
 .dock-left {

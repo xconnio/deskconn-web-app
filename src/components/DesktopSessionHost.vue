@@ -172,6 +172,8 @@ interface AppDef {
   iconBg: string
   width?: number
   height?: number
+  /** Floor for interactive resizing — see FloatingWindow's minWidth prop. */
+  minWidth?: number
   /** False for apps that only ever appear because a window is already open
    * (see dockApps below) — there's nothing to launch blank. */
   launchable?: boolean
@@ -184,6 +186,9 @@ const apps: AppDef[] = [
     icon: 'bi-folder2-open',
     iconColor: '#2563eb',
     iconBg: '#dbeafe',
+    // Its titlebar toolbar (6 buttons + breadcrumb/search) can't compress
+    // past this without overlapping the minimize/maximize/close controls.
+    minWidth: 460,
   },
   {
     id: 'terminal',
@@ -291,6 +296,7 @@ function launchApp(app: AppDef, initialPath?: string) {
     iconBg: app.iconBg,
     width: app.width,
     height: app.height,
+    minWidth: app.minWidth,
     props: initialPath ? { initialPath } : {},
   }, maximizedContainerSize())
 }
@@ -527,6 +533,7 @@ onUnmounted(() => {
           :y="win.y"
           :width="win.width"
           :height="win.height"
+          :min-width="win.minWidth"
           :z-index="win.zIndex"
           :minimized="win.minimized"
           :maximized="win.maximized"
