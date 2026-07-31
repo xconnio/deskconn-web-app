@@ -173,31 +173,43 @@ function startDrag(e: PointerEvent) {
   // Titlebar isn't a focusable element, but the browser's default pointerdown
   // action still shifts focus to it (blurring whatever had it, e.g. the terminal).
   e.preventDefault()
-  if (props.mobile || props.maximized || isFullscreen.value) return
+  if (props.mobile || isFullscreen.value) return
 
   emit('focus')
 
-  const startX = e.clientX
-  const startY = e.clientY
-  const originX = props.x
-  const originY = props.y
-  const container = rootEl.value?.parentElement
+  // Restore under the pointer's grab point rather than the old bounds.
+  if (props.maximized) {
+    const startX = e.clientX
+    const startY = e.clientY
+    const grabFracX = props.width ? (startX - props.x) / props.width : 0.5
+    const grabOffsetY = startY - props.y
+    emit('toggle-maximize')
+    void nextTick(() => {
+      const [originX, originY] = clampToContainer(startX - grabFracX * props.width, startY - grabOffsetY)
+      emit('update:bounds', { x: originX, y: originY })
+      beginDrag(startX, startY, originX, originY)
+    })
+    return
+  }
 
+  beginDrag(e.clientX, e.clientY, props.x, props.y)
+}
+
+function clampToContainer(x: number, y: number): [number, number] {
+  const container = rootEl.value?.parentElement
+  if (!container) return [x, y]
+  const minX = props.insetLeft ?? 0
+  const maxX = Math.max(minX, container.clientWidth - (props.insetRight ?? 0) - props.width)
+  const maxY = Math.max(0, container.clientHeight - (props.insetBottom ?? 0) - props.height)
+  return [Math.min(Math.max(x, minX), maxX), Math.min(Math.max(y, 0), maxY)]
+}
+
+function beginDrag(startX: number, startY: number, originX: number, originY: number) {
   suppressSelection()
   interacting.value = true
 
   function onMove(ev: PointerEvent) {
-    let x = originX + (ev.clientX - startX)
-    let y = originY + (ev.clientY - startY)
-
-    if (container) {
-      const minX = props.insetLeft ?? 0
-      const maxX = Math.max(minX, container.clientWidth - (props.insetRight ?? 0) - props.width)
-      const maxY = Math.max(0, container.clientHeight - (props.insetBottom ?? 0) - props.height)
-      x = Math.min(Math.max(x, minX), maxX)
-      y = Math.min(Math.max(y, 0), maxY)
-    }
-
+    const [x, y] = clampToContainer(originX + (ev.clientX - startX), originY + (ev.clientY - startY))
     emit('update:bounds', { x, y })
   }
 
