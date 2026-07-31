@@ -73,6 +73,11 @@ watch(() => route.fullPath, () => {
   mobileOpen.value = false
 })
 
+// Resets the tab title when leaving all desktop sessions (DesktopSessionHost sets it while active).
+watch(activeRealm, (realm) => {
+  if (!realm) document.title = 'Deskconn'
+})
+
 watch(
   () => authStore.session,
   (session) => {
