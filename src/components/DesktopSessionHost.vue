@@ -50,6 +50,22 @@ const {
   syncMaximizedBounds,
 } = desktopSessionsStore.getOrCreate(props.realm)
 
+const sessionTitle = computed(() => {
+  const focused = windows.value.find((w) => w.id === focusedId.value)
+  return focused
+    ? `${focused.title} · ${desktopName.value} - Deskconn`
+    : `${desktopName.value} - Deskconn`
+})
+
+// Only the active realm's instance may write document.title (others stay mounted via v-show).
+watch(
+  [sessionTitle, () => props.active],
+  ([title, active]) => {
+    if (active) document.title = title
+  },
+  { immediate: true },
+)
+
 const launcherBodyRef = ref<HTMLElement | null>(null)
 const wallpaperUrl = ref<string | null>(null)
 let activeWallpaperObjUrl: string | null = null
