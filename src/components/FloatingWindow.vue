@@ -17,6 +17,9 @@ const props = defineProps<{
   y: number
   width: number
   height: number
+  /** Overrides MIN_WIDTH — for apps whose titlebar toolbar can't compress
+   * past a certain width without its buttons overlapping the window controls. */
+  minWidth?: number
   zIndex: number
   minimized: boolean
   maximized: boolean
@@ -227,6 +230,7 @@ function startResize(e: PointerEvent, dir: string) {
   const originY = props.y
   const originW = props.width
   const originH = props.height
+  const minWidth = props.minWidth ?? MIN_WIDTH
   const container = rootEl.value?.parentElement
 
   suppressSelection()
@@ -238,7 +242,7 @@ function startResize(e: PointerEvent, dir: string) {
     const bounds: { x?: number; y?: number; width?: number; height?: number } = {}
 
     if (dir.includes('e')) {
-      let width = Math.max(MIN_WIDTH, originW + dx)
+      let width = Math.max(minWidth, originW + dx)
       if (container) width = Math.min(width, container.clientWidth - (props.insetRight ?? 0) - originX)
       bounds.width = width
     }
@@ -248,7 +252,7 @@ function startResize(e: PointerEvent, dir: string) {
       bounds.height = height
     }
     if (dir.includes('w')) {
-      let width = Math.max(MIN_WIDTH, originW - dx)
+      let width = Math.max(minWidth, originW - dx)
       let x = originX + (originW - width)
       const minX = props.insetLeft ?? 0
       if (x < minX) {

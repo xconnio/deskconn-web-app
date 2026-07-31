@@ -18,6 +18,10 @@ export interface AppWindow {
   y: number
   width: number
   height: number
+  /** Floor for interactive resizing — apps whose titlebar toolbar can't
+   * compress past a certain width (e.g. Files) need a higher floor than the
+   * generic default so their buttons don't overlap the window controls. */
+  minWidth?: number
   zIndex: number
   minimized: boolean
   maximized: boolean
@@ -36,6 +40,7 @@ export interface OpenWindowOptions {
   props?: Record<string, unknown>
   width?: number
   height?: number
+  minWidth?: number
 }
 
 export interface ContainerRect {
@@ -103,6 +108,7 @@ export function useWindowManager() {
       y,
       width,
       height,
+      minWidth: options.minWidth,
       zIndex: ++nextZ,
       minimized: false,
       maximized: false,
