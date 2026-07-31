@@ -171,6 +171,39 @@ const breadcrumbSegments = computed(() => {
   return segments
 })
 
+const breadcrumbStripRef = ref<HTMLElement | null>(null)
+let breadcrumbResizeObserver: ResizeObserver | null = null
+
+// Keeps the current (rightmost) segment in view instead of the home segment
+// scroll defaults to — matters most when the window is narrow or the path is deep.
+function scrollBreadcrumbToEnd() {
+  const el = breadcrumbStripRef.value
+  if (el) el.scrollLeft = el.scrollWidth
+}
+
+// Most mice only scroll vertically; without this, a horizontally-overflowing
+// breadcrumb with its scrollbar hidden would be unreachable by wheel at all.
+function onBreadcrumbWheel(e: WheelEvent) {
+  const el = breadcrumbStripRef.value
+  if (!el || el.scrollWidth <= el.clientWidth) return
+  e.preventDefault()
+  el.scrollLeft += e.deltaY
+}
+
+watch(breadcrumbSegments, () => {
+  void nextTick(() => scrollBreadcrumbToEnd())
+})
+
+// The strip only exists once currentBrowse first loads (v-if), so the
+// ResizeObserver has to be attached reactively rather than once in onMounted.
+watch(breadcrumbStripRef, (el, prevEl) => {
+  if (prevEl) breadcrumbResizeObserver?.disconnect()
+  if (el) {
+    breadcrumbResizeObserver = new ResizeObserver(() => scrollBreadcrumbToEnd())
+    breadcrumbResizeObserver.observe(el)
+  }
+})
+
 const canGoUp = computed(() => {
   if (!currentBrowse.value) return false
 
@@ -1490,6 +1523,7 @@ watch(currentBrowse, (browse) => {
 onUnmounted(() => {
   window.removeEventListener('resize', updateViewMode)
   document.removeEventListener('keydown', handleGlobalKeydown)
+  breadcrumbResizeObserver?.disconnect()
   disconnectDesktopSession()
   for (const url of Object.values(thumbnailUrls)) URL.revokeObjectURL(url)
 })
@@ -1580,7 +1614,12 @@ onUnmounted(() => {
               </span>
             </template>
             <template v-else-if="!searchMode">
-              <div class="breadcrumb-strip" v-if="breadcrumbSegments.length > 0">
+              <div
+                ref="breadcrumbStripRef"
+                class="breadcrumb-strip"
+                v-if="breadcrumbSegments.length > 0"
+                @wheel="onBreadcrumbWheel"
+              >
                 <template v-for="(segment, index) in breadcrumbSegments" :key="segment.path">
                   <button
                     class="breadcrumb-chip"
@@ -2105,6 +2144,12 @@ onUnmounted(() => {
   overflow-x: auto;
   padding-bottom: 0.1rem;
   min-width: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.breadcrumb-strip::-webkit-scrollbar {
+  display: none;
 }
 
 .breadcrumb-sep {
