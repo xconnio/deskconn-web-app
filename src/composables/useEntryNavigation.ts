@@ -25,9 +25,10 @@ export function useEntryNavigation<T extends HasPath>(config: {
 
   function scrollActive(): void {
     nextTick(() => {
-      listRef.value
-        ?.querySelector<HTMLElement>('.entry-row.active')
-        ?.scrollIntoView({ block: 'nearest' })
+      const el = listRef.value?.querySelector<HTMLElement>('.entry-row.active')
+      el?.scrollIntoView({ block: 'nearest' })
+      // Otherwise the previously-clicked row keeps its native focus outline.
+      el?.focus({ preventScroll: true })
     })
   }
 
