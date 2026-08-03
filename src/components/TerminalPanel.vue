@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css'
 import { Progress, Result, Session } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import {
   createX25519KeyPair,
   deriveSessionKeys,
@@ -461,6 +462,49 @@ function closeTab(id: number) {
   void switchTab(remaining[Math.min(idx, remaining.length - 1)]!.id)
 }
 
+// Mirrors GNOME Terminal: only warn when something other than the shell
+// itself owns the pty's foreground (a running command, an ssh session, ...).
+async function isTabBusy(tab: TabState): Promise<boolean> {
+  const shellId = effectiveShellId(tab)
+  if (!tab.session || !shellId) return false
+  try {
+    const result = await tab.session.call('io.xconn.deskconn.deskconnd.shell.isbusy', [shellId])
+    return Boolean(result.args?.[0])
+  } catch (err) {
+    // Fails open (no warning) rather than blocking the close — but log it,
+    // since a stale deskconnd without this RPC fails silently the same way.
+    console.warn('shell.isbusy failed, assuming not busy:', err)
+    return false
+  }
+}
+
+const closeConfirmTab = ref<TabState | null>(null)
+const closeConfirmTitle = computed(() => `Close "${closeConfirmTab.value?.label}"?`)
+
+async function requestCloseTab(id: number) {
+  const tab = tabs.value.find(t => t.id === id)
+  if (!tab) return
+  if (await isTabBusy(tab)) {
+    closeConfirmTab.value = tab
+    return
+  }
+  closeTab(id)
+}
+
+function confirmCloseBusyTab() {
+  const tab = closeConfirmTab.value
+  closeConfirmTab.value = null
+  if (tab) closeTab(tab.id)
+}
+
+function onTabMouseDown(tab: TabState, e: MouseEvent) {
+  if (e.button === 1) {
+    void requestCloseTab(tab.id)
+    return
+  }
+  void switchTab(tab.id, e)
+}
+
 
 const updateKeybarPosition = () => {
   requestAnimationFrame(() => {
@@ -675,14 +719,15 @@ watch(() => props.focused, (focused) => {
             :key="tab.id"
             class="tab-item"
             :class="{ 'tab-active': tab.id === activeTabId }"
-            @mousedown.prevent="switchTab(tab.id, $event)"
+            @mousedown.prevent="onTabMouseDown(tab, $event)"
+            @mouseup.prevent
             >
               <span class="tab-label">{{ tab.label }}</span>
               <span
                 class="tab-close"
                 role="button"
                 :title="`Close ${tab.label}`"
-                @click.stop="closeTab(tab.id)"
+                @click.stop="requestCloseTab(tab.id)"
               >&times;</span>
             </button>
           <button class="tab-add" title="New terminal" @click="addTab">+</button>
@@ -848,6 +893,15 @@ watch(() => props.focused, (focused) => {
         >PgDn</button>
       </div>
     </div>
+
+    <ConfirmDialog
+      :open="!!closeConfirmTab"
+      :title="closeConfirmTitle"
+      message="It has a running process. Closing it may end that process."
+      confirm-label="Close"
+      @confirm="confirmCloseBusyTab"
+      @cancel="closeConfirmTab = null"
+    />
   </div>
 </template>
 
