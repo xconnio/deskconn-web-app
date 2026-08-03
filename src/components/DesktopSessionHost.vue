@@ -7,6 +7,7 @@ import { useMachinesStore } from '@/stores/machines'
 import { useSettingsStore } from '@/stores/settings'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useDesktopSessionsStore } from '@/stores/desktopSessions'
+import { useMachinesOverviewStore, PREVIEW_WIDTH, PREVIEW_HEIGHT } from '@/stores/machinesOverview'
 import EmbeddedDesktopFiles from '@/components/EmbeddedDesktopFiles.vue'
 import EmbeddedIndexedFiles from '@/components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
@@ -29,6 +30,7 @@ const machinesStore = useMachinesStore()
 const settingsStore = useSettingsStore()
 const sessionCacheStore = useSessionCacheStore()
 const desktopSessionsStore = useDesktopSessionsStore()
+const machinesOverviewStore = useMachinesOverviewStore()
 
 const close = () => router.push('/')
 
@@ -69,6 +71,44 @@ watch(
 const launcherBodyRef = ref<HTMLElement | null>(null)
 const wallpaperUrl = ref<string | null>(null)
 let activeWallpaperObjUrl: string | null = null
+
+// Frozen at the last real size — a backgrounded instance is display:none and reads 0.
+const lastKnownSize = ref({ width: 0, height: 0 })
+
+function captureContainerSize() {
+  const el = launcherBodyRef.value
+  if (!el || !el.clientWidth) return
+  lastKnownSize.value = { width: el.clientWidth, height: el.clientHeight }
+}
+
+const previewTarget = computed(() =>
+  machinesOverviewStore.isOpen ? machinesOverviewStore.previewTargets[props.realm] : undefined,
+)
+
+const previewScale = computed(() => {
+  const { width, height } = lastKnownSize.value
+  if (!previewTarget.value || !width || !height) return null
+  return { scaleX: PREVIEW_WIDTH / width, scaleY: PREVIEW_HEIGHT / height, width, height }
+})
+
+const launcherBodyStyle = computed(() => {
+  const style: Record<string, string> = wallpaperUrl.value
+    ? { backgroundImage: `url(${wallpaperUrl.value})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+    : {}
+  const scale = previewScale.value
+  if (!scale) return style
+  return {
+    ...style,
+    position: 'absolute',
+    top: '0',
+    left: '0',
+    width: `${scale.width}px`,
+    height: `${scale.height}px`,
+    transform: `scale(${scale.scaleX}, ${scale.scaleY})`,
+    transformOrigin: 'top left',
+    pointerEvents: 'none',
+  }
+})
 
 function applyWallpaperUrl(url: string | null) {
   if (activeWallpaperObjUrl && activeWallpaperObjUrl !== url) URL.revokeObjectURL(activeWallpaperObjUrl)
@@ -489,6 +529,7 @@ function handleLaunch(appId: string) {
 // you come back to it instead of trying again.
 watch(() => props.active, (active) => {
   if (active) {
+    captureContainerSize()
     syncMaximizedBounds(maximizedContainerSize())
     if (isDisconnected.value && !isConnecting.value) connect()
     return
@@ -516,6 +557,7 @@ onMounted(() => {
 
   if (launcherBodyRef.value && typeof ResizeObserver !== 'undefined') {
     launcherBodyResizeObserver = new ResizeObserver(() => {
+      captureContainerSize()
       measureDockThickness()
       syncMaximizedBounds(maximizedContainerSize())
     })
@@ -531,11 +573,12 @@ onUnmounted(() => {
 
 <template>
   <div class="launcher-wrapper fade-in-up" @contextmenu.prevent>
+    <Teleport :to="previewTarget" :disabled="!previewTarget">
     <div
       ref="launcherBodyRef"
       class="launcher-body"
       :class="{ 'has-wallpaper': !!wallpaperUrl, 'is-connecting': isConnecting, 'is-disconnected': isDisconnected }"
-      :style="wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}"
+      :style="launcherBodyStyle"
     >
       <div class="windows-layer">
         <FloatingWindow
@@ -591,6 +634,7 @@ onUnmounted(() => {
         @exit="close"
       />
     </div>
+    </Teleport>
 
     <ScreenshotPanel v-if="screenshotOpen" :realm="realm" @close="screenshotOpen = false" />
 
