@@ -156,6 +156,10 @@ onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   window.removeEventListener('click', onWindowClickForMenu, true)
   window.removeEventListener('blur', onWindowBlur)
+  // A drag/resize in progress registers its listeners on window, not this
+  // component — closing/removing the window mid-gesture would otherwise leave
+  // them (and body.style.userSelect = 'none') stuck until a stray pointerup.
+  cancelActiveGesture?.()
 })
 
 function suppressSelection() {
@@ -183,16 +187,56 @@ function startDrag(e: PointerEvent) {
     const startY = e.clientY
     const grabFracX = props.width ? (startX - props.x) / props.width : 0.5
     const grabOffsetY = startY - props.y
+    const pointerId = e.pointerId
+
+    // The pointer can go up before this resolves (a very quick click) — with
+    // no listener registered yet at that point, beginDrag would never get a
+    // matching pointerup/cancel and interacting/userSelect would stay stuck.
+    let released = false
+    const markReleased = (event: PointerEvent) => {
+      if (event.pointerId === pointerId) released = true
+    }
+    window.addEventListener('pointerup', markReleased)
+    window.addEventListener('pointercancel', markReleased)
+
     emit('toggle-maximize')
     void nextTick(() => {
+      window.removeEventListener('pointerup', markReleased)
+      window.removeEventListener('pointercancel', markReleased)
       const [originX, originY] = clampToContainer(startX - grabFracX * props.width, startY - grabOffsetY)
       emit('update:bounds', { x: originX, y: originY })
-      beginDrag(startX, startY, originX, originY)
+      if (released) return
+      beginDrag(startX, startY, originX, originY, pointerId)
     })
     return
   }
 
-  beginDrag(e.clientX, e.clientY, props.x, props.y)
+  beginDrag(e.clientX, e.clientY, props.x, props.y, e.pointerId)
+}
+
+// Pointer events can fire far faster than the screen repaints — without this,
+// every single move schedules a reactive update (Vue patches the affected
+// subtree) plus a layout read in clampToContainer, which is what spiked CPU
+// while dragging/resizing. Coalescing to one update per frame matches what
+// actually gets painted.
+function rafThrottle(fn: () => void) {
+  let frame = 0
+  function trigger() {
+    if (frame) return
+    frame = requestAnimationFrame(() => {
+      frame = 0
+      fn()
+    })
+  }
+  // Runs fn synchronously and cancels any frame still pending for it — plain
+  // `fn()` on its own would leave that frame queued to fire fn a second time
+  // right after (with a now-stale closure, if a new drag already started).
+  trigger.flush = () => {
+    if (frame) cancelAnimationFrame(frame)
+    frame = 0
+    fn()
+  }
+  return trigger
 }
 
 function clampToContainer(x: number, y: number): [number, number] {
@@ -204,24 +248,92 @@ function clampToContainer(x: number, y: number): [number, number] {
   return [Math.min(Math.max(x, minX), maxX), Math.min(Math.max(y, 0), maxY)]
 }
 
-function beginDrag(startX: number, startY: number, originX: number, originY: number) {
+// Set while a drag/resize is in progress so onUnmounted can force it to end —
+// see the comment there.
+let cancelActiveGesture: (() => void) | null = null
+
+// Pointer capture keeps delivering move/up to this element even if the
+// pointer leaves it, and pointercancel/lostpointercapture cover the browser
+// yanking the gesture away mid-drag (e.g. a touch scroll takes over) — without
+// those, cleanup never runs and userSelect/interacting stay stuck on.
+function trackPointer(pointerId: number, onMove: (ev: PointerEvent) => void, onEnd: () => void) {
+  const el = rootEl.value
+  try {
+    el?.setPointerCapture(pointerId)
+  } catch {
+    // Pointer already gone (e.g. released between event and here) — fall
+    // through and track via window listeners same as a normal drag.
+  }
+
+  // releasePointerCapture below can itself fire lostpointercapture
+  // synchronously, re-entering finish() — guard against running twice
+  // (double emit of the final bounds, double cleanup).
+  let ended = false
+  function finish(ev?: PointerEvent) {
+    if (ev && ev.pointerId !== pointerId) return
+    if (ended) return
+    ended = true
+    cancelActiveGesture = null
+
+    window.removeEventListener('pointermove', trackedMove)
+    window.removeEventListener('pointerup', finish)
+    window.removeEventListener('pointercancel', finish)
+    el?.removeEventListener('lostpointercapture', finish)
+
+    if (el?.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId)
+
+    onEnd()
+  }
+
+  function trackedMove(ev: PointerEvent) {
+    if (ev.pointerId === pointerId) onMove(ev)
+  }
+
+  cancelActiveGesture = finish
+
+  window.addEventListener('pointermove', trackedMove)
+  window.addEventListener('pointerup', finish)
+  window.addEventListener('pointercancel', finish)
+  el?.addEventListener('lostpointercapture', finish)
+}
+
+function beginDrag(startX: number, startY: number, originX: number, originY: number, pointerId: number) {
+  const el = rootEl.value
   suppressSelection()
   interacting.value = true
 
+  let lastX = startX
+  let lastY = startY
+  let finalX = originX
+  let finalY = originY
+
+  // Moves the window via a compositor-only transform instead of writing
+  // x/y to Vue state on every frame — with heavy content (terminal, PDF
+  // preview) in .fwin-body, patching that subtree every frame was the
+  // remaining CPU cost the rAF throttle alone didn't remove. The real x/y
+  // are committed once, at drag end.
+  const scheduleApply = rafThrottle(() => {
+    const [x, y] = clampToContainer(originX + (lastX - startX), originY + (lastY - startY))
+    finalX = x
+    finalY = y
+    if (el) el.style.transform = `translate3d(${x - originX}px, ${y - originY}px, 0)`
+  })
+
   function onMove(ev: PointerEvent) {
-    const [x, y] = clampToContainer(originX + (ev.clientX - startX), originY + (ev.clientY - startY))
-    emit('update:bounds', { x, y })
+    lastX = ev.clientX
+    lastY = ev.clientY
+    scheduleApply()
   }
 
-  function onUp() {
+  function onEnd() {
+    scheduleApply.flush()
+    if (el) el.style.transform = ''
+    emit('update:bounds', { x: finalX, y: finalY })
     restoreSelection()
     interacting.value = false
-    window.removeEventListener('pointermove', onMove)
-    window.removeEventListener('pointerup', onUp)
   }
 
-  window.addEventListener('pointermove', onMove)
-  window.addEventListener('pointerup', onUp)
+  trackPointer(pointerId, onMove, onEnd)
 }
 
 function onTitlebarDoubleClick(e: MouseEvent) {
@@ -248,9 +360,12 @@ function startResize(e: PointerEvent, dir: string) {
   suppressSelection()
   interacting.value = true
 
-  function onMove(ev: PointerEvent) {
-    const dx = ev.clientX - startX
-    const dy = ev.clientY - startY
+  let lastX = startX
+  let lastY = startY
+
+  const scheduleApply = rafThrottle(() => {
+    const dx = lastX - startX
+    const dy = lastY - startY
     const bounds: { x?: number; y?: number; width?: number; height?: number } = {}
 
     if (dir.includes('e')) {
@@ -286,17 +401,21 @@ function startResize(e: PointerEvent, dir: string) {
     }
 
     emit('update:bounds', bounds)
+  })
+
+  function onMove(ev: PointerEvent) {
+    lastX = ev.clientX
+    lastY = ev.clientY
+    scheduleApply()
   }
 
-  function onUp() {
+  function onEnd() {
+    scheduleApply.flush()
     restoreSelection()
     interacting.value = false
-    window.removeEventListener('pointermove', onMove)
-    window.removeEventListener('pointerup', onUp)
   }
 
-  window.addEventListener('pointermove', onMove)
-  window.addEventListener('pointerup', onUp)
+  trackPointer(e.pointerId, onMove, onEnd)
 }
 </script>
 
@@ -393,6 +512,7 @@ function startResize(e: PointerEvent, dir: string) {
 /* Dragging/resizing must track the pointer exactly — a transition here would lag. */
 .floating-window.is-interacting {
   transition: none;
+  will-change: transform;
 }
 
 .floating-window.is-maximized,
