@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { useMachinesStore } from '@/stores/machines'
 import { useDesktopSessionsStore } from '@/stores/desktopSessions'
 import { useMachinesOverviewStore } from '@/stores/machinesOverview'
@@ -54,6 +54,20 @@ function setPreviewTarget(realm: string, el: Element | null) {
   else machinesOverviewStore.unregisterPreviewTarget(realm)
 }
 
+// Cached per realm — Vue calls a template ref function on every render of
+// the owner regardless of the callback's identity, so this doesn't avoid
+// that; it just avoids allocating a new function each render.
+type TemplateRefCallback = (el: Element | ComponentPublicInstance | null) => void
+const previewRefCallbacks = new Map<string, TemplateRefCallback>()
+function previewRef(realm: string): TemplateRefCallback {
+  let fn = previewRefCallbacks.get(realm)
+  if (!fn) {
+    fn = (el) => setPreviewTarget(realm, el as Element | null)
+    previewRefCallbacks.set(realm, fn)
+  }
+  return fn
+}
+
 function selectMachine(realm: string, name: string) {
   machinesOverviewStore.close()
   openLauncher(realm, name)
@@ -95,7 +109,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
             <i class="bi bi-pc-display"></i>
           </div>
 
-          <div class="preview-live" :ref="(el) => setPreviewTarget(desktop.realm, el as Element | null)"></div>
+          <div class="preview-live" :ref="previewRef(desktop.realm)"></div>
 
           <!-- Blocks clicks/drags into the live-teleported desktop so the card still just selects the machine. -->
           <div class="preview-shield"></div>

@@ -25,6 +25,11 @@ export const useMachinesOverviewStore = defineStore('machinesOverview', () => {
   const previewTargets = ref<Record<string, HTMLElement>>({})
 
   function registerPreviewTarget(realm: string, el: HTMLElement) {
+    // Function refs re-fire on every render of the owner (Vue does this
+    // unconditionally, even with a stable callback identity) — skip the
+    // write when nothing actually changed, or this replaces the object on
+    // every render forever.
+    if (previewTargets.value[realm] === el) return
     previewTargets.value = { ...previewTargets.value, [realm]: el }
   }
 
