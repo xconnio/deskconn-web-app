@@ -48,6 +48,12 @@ watch(
   },
 )
 
+// Registers this card's slot for DesktopSessionHost to teleport its live desktop into.
+function setPreviewTarget(realm: string, el: Element | null) {
+  if (el) machinesOverviewStore.registerPreviewTarget(realm, el as HTMLElement)
+  else machinesOverviewStore.unregisterPreviewTarget(realm)
+}
+
 function selectMachine(realm: string, name: string) {
   machinesOverviewStore.close()
   openLauncher(realm, name)
@@ -88,6 +94,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           <div v-else class="machines-card-placeholder">
             <i class="bi bi-pc-display"></i>
           </div>
+
+          <div class="preview-live" :ref="(el) => setPreviewTarget(desktop.realm, el as Element | null)"></div>
+
+          <!-- Blocks clicks/drags into the live-teleported desktop so the card still just selects the machine. -->
+          <div class="preview-shield"></div>
         </div>
         <div class="machines-card-name">
           <span aria-hidden="true">{{ desktop.icon }}</span>
@@ -196,6 +207,17 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   justify-content: center;
   color: rgba(255, 255, 255, 0.35);
   font-size: 2rem;
+}
+
+.preview-live {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.preview-shield {
+  position: absolute;
+  inset: 0;
 }
 
 .machines-card-name {
