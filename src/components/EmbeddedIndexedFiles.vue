@@ -150,6 +150,9 @@ function handleKeydown(e: KeyboardEvent) {
   if (!props.focused) return
   const target = e.target as HTMLElement
   if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+  // Otherwise a stale hover (mouse hasn't moved since) keeps highlighting the
+  // old entry, and scrollActive() can target it instead of the real selection.
+  hoveredEntry.value = null
   handleNavKey(e)
 }
 
