@@ -482,23 +482,54 @@ async function isTabBusy(tab: TabState): Promise<boolean> {
   }
 }
 
-const closeConfirmTab = ref<TabState | null>(null)
-const closeConfirmTitle = computed(() => `Close "${closeConfirmTab.value?.label}"?`)
+// Two ways a busy tab can need confirming: closing that one tab (middle
+// click / its own × button), or closing the whole window (FloatingWindow's
+// titlebar × — DesktopSessionHost awaits requestClose() before unmounting
+// this component, which is what would otherwise kill `top` with no warning).
+type PendingClose =
+  | { kind: 'tab'; tab: TabState }
+  | { kind: 'window'; resolve: (ok: boolean) => void }
+
+const pendingClose = ref<PendingClose | null>(null)
+const closeConfirmTitle = computed(() => {
+  const p = pendingClose.value
+  if (!p) return ''
+  return p.kind === 'tab' ? `Close "${p.tab.label}"?` : 'Close this terminal window?'
+})
 
 async function requestCloseTab(id: number) {
   const tab = tabs.value.find(t => t.id === id)
   if (!tab) return
   if (await isTabBusy(tab)) {
-    closeConfirmTab.value = tab
+    pendingClose.value = { kind: 'tab', tab }
     return
   }
   closeTab(id)
 }
 
-function confirmCloseBusyTab() {
-  const tab = closeConfirmTab.value
-  closeConfirmTab.value = null
-  if (tab) closeTab(tab.id)
+// Called by DesktopSessionHost before it unmounts this window.
+async function requestClose(): Promise<boolean> {
+  const busy = await Promise.all(tabs.value.map((t) => isTabBusy(t)))
+  if (!busy.some(Boolean)) return true
+  return new Promise<boolean>((resolve) => {
+    pendingClose.value = { kind: 'window', resolve }
+  })
+}
+
+defineExpose({ requestClose })
+
+function confirmPendingClose() {
+  const p = pendingClose.value
+  pendingClose.value = null
+  if (!p) return
+  if (p.kind === 'tab') closeTab(p.tab.id)
+  else p.resolve(true)
+}
+
+function cancelPendingClose() {
+  const p = pendingClose.value
+  pendingClose.value = null
+  if (p?.kind === 'window') p.resolve(false)
 }
 
 function onTabMouseDown(tab: TabState, e: MouseEvent) {
@@ -899,12 +930,12 @@ watch(() => props.focused, (focused) => {
     </div>
 
     <ConfirmDialog
-      :open="!!closeConfirmTab"
+      :open="!!pendingClose"
       :title="closeConfirmTitle"
       message="It has a running process. Closing it may end that process."
       confirm-label="Close"
-      @confirm="confirmCloseBusyTab"
-      @cancel="closeConfirmTab = null"
+      @confirm="confirmPendingClose"
+      @cancel="cancelPendingClose"
     />
   </div>
 </template>

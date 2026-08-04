@@ -465,9 +465,25 @@ function onOpenFiles(path: string) {
   launchApp(filesApp, path)
 }
 
-function onCloseWindow(id: string) {
+// Some embedded apps (Terminal) need an async say over whether the window
+// may actually close — e.g. warning before killing a running process — which
+// a synchronous `dirty` flag can't express. They opt in via defineExpose.
+interface CloseableWindowInstance {
+  requestClose?: () => Promise<boolean>
+}
+const windowInstances = new Map<string, CloseableWindowInstance>()
+function windowRef(id: string) {
+  return (instance: unknown) => {
+    if (instance) windowInstances.set(id, instance as CloseableWindowInstance)
+    else windowInstances.delete(id)
+  }
+}
+
+async function onCloseWindow(id: string) {
   const win = windows.value.find((w) => w.id === id)
   if (win?.dirty && !window.confirm('You have unsaved changes. Close this window anyway?')) return
+  const canClose = await windowInstances.get(id)?.requestClose?.()
+  if (canClose === false) return
   closeWindow(id)
 }
 
@@ -611,6 +627,7 @@ onUnmounted(() => {
         >
           <component
             :is="appComponents[win.appId]"
+            :ref="windowRef(win.id)"
             v-bind="windowProps(win)"
             @close="onCloseWindow(win.id)"
             @open-files="onOpenFiles"
