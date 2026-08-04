@@ -281,6 +281,10 @@ function resetEncryptionState(tab: TabState) {
 
 function cleanupTab(tab: TabState) {
   if (tab.closed) return
+  // Interrupt any foreground process (top, a stuck command, ...) so it exits
+  // promptly on the pty hangup below, instead of leaving the server's output
+  // reader blocked against it until the process notices on its own.
+  handleTerminalInput(tab, '\x03')
   tab.closed = true
   tab.term?.dispose()
   // Non-progress frame unblocks the sender; without it the call lingers on the cached session.
