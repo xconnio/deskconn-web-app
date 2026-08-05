@@ -27,6 +27,7 @@ const procedureFileCopy = 'io.xconn.deskconn.deskconnd.file.copy'
 const procedureFileDownload = 'io.xconn.deskconn.deskconnd.file.download'
 const procedureFileSearch = 'io.xconn.deskconn.deskconnd.file.search'
 const outsideHomeMessage = 'Access denied. You can only browse files inside the home directory.'
+const PAGE_SIZE = 100
 
 const props = defineProps<{
   realm: string
@@ -55,11 +56,15 @@ const isConnecting = ref(true)
 const isLoading = ref(false)
 const errorMessage = ref('')
 const currentBrowse = ref<FileBrowseResult | null>(null)
+const nextCursor = ref<string | undefined>(undefined)
+const hasMore = ref(false)
+const isLoadingMore = ref(false)
 const selectedEntry = ref<FileEntry | null>(null)
 const pathInput = ref('')
 const showHiddenFiles = ref(false)
 const searchMode = ref(false)
 const entryListRef = ref<HTMLElement | null>(null)
+const explorerShellRef = ref<HTMLElement | null>(null)
 
 const actionSheetEntry = ref<FileEntry | null>(null)
 const actionSheetVisible = ref(false)
@@ -308,6 +313,8 @@ function parseBrowseResult(raw: unknown): FileBrowseResult {
     is_symlink: getBooleanValue(source, 'is_symlink', 'IsSymlink'),
     link_target: getStringValue(source, 'link_target', 'LinkTarget'),
     entries,
+    next_cursor: getStringValue(source, 'next_cursor', 'NextCursor') || undefined,
+    has_more: getBooleanValue(source, 'has_more', 'HasMore'),
   }
 }
 
@@ -413,6 +420,11 @@ function resetExplorerState() {
   pathInput.value = ''
   errorMessage.value = ''
   isLoading.value = false
+  nextCursor.value = undefined
+  hasMore.value = false
+  isLoadingMore.value = false
+  legacyBrowseProtocol = false
+  hasProbedBrowseProtocol = false
   encryptionKeys.value = null
   navHistory.value = []
   navHistoryIndex.value = -1
@@ -496,11 +508,76 @@ async function detectFileOperationSupport() {
   }
 }
 
+// Pre-pagination deskconnd only understood a raw path string as the
+// file.browse payload. Once we confirm (or fall back to) that protocol for
+// the current connection, stick with it — reset per connection in
+// resetExplorerState.
+let legacyBrowseProtocol = false
+let hasProbedBrowseProtocol = false
+
+async function callFileBrowse(payloadText: string): Promise<FileBrowseResult> {
+  const keys = encryptionKeys.value
+  let browse: FileBrowseResult | undefined
+
+  if (keys) {
+    const payloadBytes = new TextEncoder().encode(payloadText)
+    const encryptedPayload = encryptPayload(payloadBytes, keys.encryptKey)
+    const result = await session.value!.call(procedureFileBrowse, [encryptedPayload])
+
+    const encryptedBytes = result.args?.[0] as Uint8Array
+    if (!encryptedBytes?.length) throw new Error('Empty response from remote file browser')
+
+    const decrypted = decryptPayload(encryptedBytes, keys.decryptKey)
+    browse = parseBrowseResult(JSON.parse(new TextDecoder().decode(decrypted)))
+  } else {
+    const result = await session.value!.call(procedureFileBrowse, [payloadText])
+    browse = result.args?.[0] ? parseBrowseResult(result.args[0]) : undefined
+  }
+
+  if (!browse || !browse.path) {
+    throw new Error('Empty response from remote file browser')
+  }
+  return browse
+}
+
+async function browseFiles(path: string, cursor?: string): Promise<FileBrowseResult> {
+  if (legacyBrowseProtocol) return callFileBrowse(path)
+
+  const payload = JSON.stringify({ path, cursor, limit: PAGE_SIZE })
+  try {
+    const browse = await callFileBrowse(payload)
+    hasProbedBrowseProtocol = true
+    return browse
+  } catch (err) {
+    // Only the first browse of a connection doubles as a protocol probe —
+    // an old deskconnd chokes on the JSON payload (it tries to Lstat the
+    // literal JSON text as a path). Once we know which protocol works,
+    // later errors (bad path, permissions, etc.) are real and must surface
+    // normally rather than triggering another silent retry.
+    if (hasProbedBrowseProtocol) throw err
+    hasProbedBrowseProtocol = true
+
+    try {
+      const browse = await callFileBrowse(path)
+      legacyBrowseProtocol = true
+      hasMore.value = false
+      return browse
+    } catch {
+      // Both attempts failed — the JSON-payload error is more likely the
+      // genuine one (a real backend understood it and hit a real problem),
+      // so surface that instead of the raw-path retry's parse error.
+      throw err
+    }
+  }
+}
+
 async function loadPath(path = '', skipHistory = false) {
   if (!session.value) return
 
   isLoading.value = true
   errorMessage.value = ''
+  nextCursor.value = undefined
+  hasMore.value = false
 
   const requestedPath = path.trim()
   const homePath = normalizePathValue(currentBrowse.value?.home_path)
@@ -516,30 +593,7 @@ async function loadPath(path = '', skipHistory = false) {
   }
 
   try {
-    const keys = encryptionKeys.value
-    let browse: FileBrowseResult | undefined
-
-    if (keys) {
-      const pathBytes = new TextEncoder().encode(requestedPath)
-      const encryptedPath = encryptPayload(pathBytes, keys.encryptKey)
-      const result = await session.value.call(procedureFileBrowse, [encryptedPath])
-
-      const encryptedBytes = result.args?.[0] as Uint8Array
-      if (!encryptedBytes?.length) throw new Error('Empty response from remote file browser')
-
-      const decrypted = decryptPayload(encryptedBytes, keys.decryptKey)
-      browse = parseBrowseResult(JSON.parse(new TextDecoder().decode(decrypted)))
-    } else {
-      const result = await session.value.call(
-        procedureFileBrowse,
-        requestedPath ? [requestedPath] : [''],
-      )
-      browse = result.args?.[0] ? parseBrowseResult(result.args[0]) : undefined
-    }
-
-    if (!browse || !browse.path) {
-      throw new Error('Empty response from remote file browser')
-    }
+    const browse = await browseFiles(requestedPath)
 
     if (!isPathWithinHome(browse.path, browse.home_path)) {
       throw new Error('Outside the home directory')
@@ -548,6 +602,8 @@ async function loadPath(path = '', skipHistory = false) {
     currentBrowse.value = browse
     pathInput.value = browse.path
     selectedEntry.value = null
+    nextCursor.value = browse.next_cursor
+    hasMore.value = browse.has_more ?? false
 
     if (!skipHistory) {
       navHistory.value = navHistory.value.slice(0, navHistoryIndex.value + 1)
@@ -558,6 +614,48 @@ async function loadPath(path = '', skipHistory = false) {
     errorMessage.value = formatError(error)
   } finally {
     isLoading.value = false
+  }
+
+  await nextTick()
+  maybeLoadMore()
+}
+
+async function loadMore() {
+  if (!hasMore.value || isLoadingMore.value) return
+  if (!session.value || !currentBrowse.value) return
+
+  isLoadingMore.value = true
+  try {
+    const browse = await browseFiles(currentBrowse.value.path, nextCursor.value)
+    currentBrowse.value = {
+      ...currentBrowse.value,
+      entries: [...(currentBrowse.value.entries ?? []), ...(browse.entries ?? [])],
+    }
+    nextCursor.value = browse.next_cursor
+    hasMore.value = browse.has_more ?? false
+  } catch (error) {
+    errorMessage.value = formatError(error)
+  } finally {
+    isLoadingMore.value = false
+  }
+
+  await nextTick()
+  maybeLoadMore()
+}
+
+function maybeLoadMore() {
+  const el = explorerShellRef.value
+  if (!el || !hasMore.value || isLoadingMore.value) return
+  if (el.scrollHeight <= el.clientHeight + 200) {
+    void loadMore()
+  }
+}
+
+function handleScroll() {
+  const el = explorerShellRef.value
+  if (!el) return
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
+    void loadMore()
   }
 }
 
@@ -1532,7 +1630,7 @@ onUnmounted(() => {
 
 <template>
   <div class="embedded-explorer">
-    <div class="explorer-shell">
+    <div class="explorer-shell" ref="explorerShellRef" @scroll="handleScroll">
       <section class="toolbar-card" :class="{ 'toolbar-card--embedded': !!toolbarTarget }">
       <Teleport :to="toolbarTarget ?? 'body'" :disabled="!toolbarTarget">
         <div class="path-toolbar" :class="{ 'path-toolbar--embedded': !!toolbarTarget }">
@@ -1794,6 +1892,10 @@ onUnmounted(() => {
                 </button>
               </div>
             </button>
+
+            <div v-if="isLoadingMore" class="load-more-indicator">
+              <i class="bi bi-arrow-repeat spin"></i> Loading more…
+            </div>
           </div>
 
           <div v-else-if="currentBrowse && currentBrowse.is_dir" class="browser-state">
@@ -2366,6 +2468,28 @@ onUnmounted(() => {
 .entry-list-loading {
   opacity: 0.4;
   pointer-events: none;
+}
+
+.load-more-indicator {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .entry-row {

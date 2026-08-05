@@ -106,4 +106,6 @@ export interface FileBrowseResult {
   is_symlink: boolean
   link_target?: string
   entries?: FileEntry[]
+  next_cursor?: string
+  has_more?: boolean
 }
