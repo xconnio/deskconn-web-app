@@ -299,6 +299,19 @@ function trackPointer(pointerId: number, onMove: (ev: PointerEvent) => void, onE
 
 function beginDrag(startX: number, startY: number, originX: number, originY: number, pointerId: number) {
   const el = rootEl.value
+  const container = el?.parentElement
+  // The desktop container does not resize during a pointer gesture. Reading
+  // clientWidth/clientHeight in the rAF callback can force layout after the
+  // previous frame's style write, so snapshot the clamp limits once here.
+  const minX = props.insetLeft ?? 0
+  const maxX = Math.max(minX, (container?.clientWidth ?? 0) - (props.insetRight ?? 0) - props.width)
+  const maxY = Math.max(0, (container?.clientHeight ?? 0) - (props.insetBottom ?? 0) - props.height)
+
+  function clampDrag(x: number, y: number): [number, number] {
+    if (!container) return [x, y]
+    return [Math.min(Math.max(x, minX), maxX), Math.min(Math.max(y, 0), maxY)]
+  }
+
   suppressSelection()
   interacting.value = true
 
@@ -307,16 +320,19 @@ function beginDrag(startX: number, startY: number, originX: number, originY: num
   let finalX = originX
   let finalY = originY
 
-  // Moves the window via a compositor-only transform instead of writing
-  // x/y to Vue state on every frame — with heavy content (terminal, PDF
-  // preview) in .fwin-body, patching that subtree every frame was the
-  // remaining CPU cost the rAF throttle alone didn't remove. The real x/y
-  // are committed once, at drag end.
+  // Moves the window via a compositor-only translate instead of writing x/y
+  // to Vue state on every frame — with heavy content (terminal, PDF preview)
+  // in .fwin-body, patching that subtree every frame was the remaining CPU
+  // cost the rAF throttle alone didn't remove. Keep this separate from
+  // `transform`: transform is also controlled by Vue/CSS for minimize and
+  // maximize animations, and mixing an imperative transform into that
+  // binding makes a parent update erase the in-progress drag offset. The
+  // translate property is deliberately outside Vue's bound style object.
   const scheduleApply = rafThrottle(() => {
-    const [x, y] = clampToContainer(originX + (lastX - startX), originY + (lastY - startY))
+    const [x, y] = clampDrag(originX + (lastX - startX), originY + (lastY - startY))
     finalX = x
     finalY = y
-    if (el) el.style.transform = `translate3d(${x - originX}px, ${y - originY}px, 0)`
+    if (el) el.style.translate = `${x - originX}px ${y - originY}px`
   })
 
   function onMove(ev: PointerEvent) {
@@ -327,7 +343,7 @@ function beginDrag(startX: number, startY: number, originX: number, originY: num
 
   function onEnd() {
     scheduleApply.flush()
-    if (el) el.style.transform = ''
+    if (el) el.style.translate = ''
     emit('update:bounds', { x: finalX, y: finalY })
     restoreSelection()
     interacting.value = false
@@ -512,7 +528,9 @@ function startResize(e: PointerEvent, dir: string) {
 /* Dragging/resizing must track the pointer exactly — a transition here would lag. */
 .floating-window.is-interacting {
   transition: none;
-  will-change: transform;
+  /* Drag uses the individual translate property so it cannot conflict with
+     the transform used by the minimize/maximize morphs. */
+  will-change: translate;
 }
 
 .floating-window.is-maximized,
