@@ -170,16 +170,52 @@ function restoreSelection() {
   document.body.style.userSelect = ''
 }
 
+// Distance the pointer must move, while the window is maximized, before a
+// titlebar press counts as a drag-to-restore rather than a plain click.
+const RESTORE_DRAG_THRESHOLD = 6
+
+// Manual double-click detection for the titlebar. The native 'dblclick'
+// event can't be used here: beginDrag captures the pointer (setPointerCapture)
+// as soon as a drag starts, and a captured pointer's click/dblclick retarget
+// to the capturing element (confirmed empirically) rather than .fwin-titlebar,
+// so a @dblclick listener bound there would miss it. Comparing consecutive
+// pointerdowns by time and distance sidesteps that entirely, and leaves
+// beginDrag/trackPointer exactly as they were (dragging is unaffected).
+const DOUBLE_CLICK_MS = 400
+const DOUBLE_CLICK_DIST = 10
+let lastClickTime = 0
+let lastClickX = 0
+let lastClickY = 0
+
 function startDrag(e: PointerEvent) {
   const target = e.target as HTMLElement
-  // Only interactive elements (buttons, inputs) opt out of dragging.
-  if (target.closest('.fwin-controls, button, input')) return
+  // Buttons/inputs opt out automatically. .fwin-no-drag is an opt-out an
+  // embedded toolbar (see floatingWindowToolbar.ts) can apply to a non-button
+  // widget that still needs its own clicks — e.g. the files app's breadcrumb
+  // search box — without losing the rest of the titlebar as a drag handle
+  // (unlike excluding the whole toolbar host, which for apps whose toolbar
+  // fills the titlebar — terminal, files — would make it undraggable).
+  if (target.closest('.fwin-controls, .fwin-no-drag, button, input')) return
   // Titlebar isn't a focusable element, but the browser's default pointerdown
   // action still shifts focus to it (blurring whatever had it, e.g. the terminal).
   e.preventDefault()
   if (props.mobile || isFullscreen.value) return
 
   emit('focus')
+
+  const now = Date.now()
+  const isDoubleClick =
+    now - lastClickTime < DOUBLE_CLICK_MS &&
+    Math.hypot(e.clientX - lastClickX, e.clientY - lastClickY) < DOUBLE_CLICK_DIST
+  // Reset on a hit so a third rapid click isn't paired with the second.
+  lastClickTime = isDoubleClick ? 0 : now
+  lastClickX = e.clientX
+  lastClickY = e.clientY
+
+  if (isDoubleClick) {
+    void requestToggleMaximize()
+    return
+  }
 
   // Restore under the pointer's grab point rather than the old bounds.
   if (props.maximized) {
@@ -189,25 +225,28 @@ function startDrag(e: PointerEvent) {
     const grabOffsetY = startY - props.y
     const pointerId = e.pointerId
 
-    // The pointer can go up before this resolves (a very quick click) — with
-    // no listener registered yet at that point, beginDrag would never get a
-    // matching pointerup/cancel and interacting/userSelect would stay stuck.
-    let released = false
-    const markReleased = (event: PointerEvent) => {
-      if (event.pointerId === pointerId) released = true
+    function onMove(ev: PointerEvent) {
+      if (ev.pointerId !== pointerId) return
+      if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < RESTORE_DRAG_THRESHOLD) return
+      cleanup()
+      emit('toggle-maximize')
+      void nextTick(() => {
+        const [originX, originY] = clampToContainer(startX - grabFracX * props.width, startY - grabOffsetY)
+        emit('update:bounds', { x: originX, y: originY })
+        beginDrag(startX, startY, originX, originY, pointerId)
+      })
     }
-    window.addEventListener('pointerup', markReleased)
-    window.addEventListener('pointercancel', markReleased)
-
-    emit('toggle-maximize')
-    void nextTick(() => {
-      window.removeEventListener('pointerup', markReleased)
-      window.removeEventListener('pointercancel', markReleased)
-      const [originX, originY] = clampToContainer(startX - grabFracX * props.width, startY - grabOffsetY)
-      emit('update:bounds', { x: originX, y: originY })
-      if (released) return
-      beginDrag(startX, startY, originX, originY, pointerId)
-    })
+    function onUp(ev: PointerEvent) {
+      if (ev.pointerId === pointerId) cleanup()
+    }
+    function cleanup() {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
     return
   }
 
@@ -352,13 +391,6 @@ function beginDrag(startX: number, startY: number, originX: number, originY: num
   trackPointer(pointerId, onMove, onEnd)
 }
 
-function onTitlebarDoubleClick(e: MouseEvent) {
-  const target = e.target as HTMLElement
-  if (target.closest('.fwin-controls, button, input')) return
-  if (props.mobile || isFullscreen.value) return
-  void requestToggleMaximize()
-}
-
 function startResize(e: PointerEvent, dir: string) {
   if (props.mobile || props.maximized || isFullscreen.value) return
   e.stopPropagation()
@@ -450,7 +482,7 @@ function startResize(e: PointerEvent, dir: string) {
     }"
     @pointerdown="$emit('focus')"
   >
-    <div class="fwin-titlebar" :class="{ 'fwin-titlebar--dark': darkTitlebar }" @pointerdown="startDrag" @dblclick="onTitlebarDoubleClick" @contextmenu.prevent>
+    <div class="fwin-titlebar" :class="{ 'fwin-titlebar--dark': darkTitlebar }" @pointerdown="startDrag" @contextmenu.prevent>
       <template v-if="!useToolbarTitlebar">
         <span class="fwin-icon" :style="{ color: iconColor, background: iconBg }">
           <i class="bi" :class="icon"></i>
