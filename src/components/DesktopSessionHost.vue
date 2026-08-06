@@ -48,7 +48,6 @@ const {
   toggleMaximize,
   updateBounds,
   updateTitle,
-  updateDirty,
   syncMaximizedBounds,
 } = desktopSessionsStore.getOrCreate(props.realm)
 
@@ -480,8 +479,6 @@ function windowRef(id: string) {
 }
 
 async function onCloseWindow(id: string) {
-  const win = windows.value.find((w) => w.id === id)
-  if (win?.dirty && !window.confirm('You have unsaved changes. Close this window anyway?')) return
   const canClose = await windowInstances.get(id)?.requestClose?.()
   if (canClose === false) return
   closeWindow(id)
@@ -633,7 +630,6 @@ onUnmounted(() => {
             @open-files="onOpenFiles"
             @preview-file="onPreviewFile"
             @update-title="updateTitle(win.id, $event)"
-            @dirty-change="updateDirty(win.id, $event)"
           />
         </FloatingWindow>
       </div>

@@ -6,6 +6,7 @@
 import { ref, computed, inject, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { type Session } from 'xconn'
 import { floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSessionEncryptionStore } from '@/stores/sessionEncryption'
 import { streamFileCat } from '@/utils/fileCat'
@@ -27,7 +28,7 @@ const props = defineProps<{
   focused?: boolean
 }>()
 
-const emit = defineEmits<{ 'update-title': [title: string]; 'dirty-change': [dirty: boolean] }>()
+const emit = defineEmits<{ 'update-title': [title: string] }>()
 
 // Absent when there's no FloatingWindow ancestor — the Save button then
 // renders inline instead of teleporting into the window's titlebar.
@@ -121,7 +122,6 @@ let savedFlashTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(dirty, (isDirty) => {
   emit('update-title', isDirty ? `${props.entry.name} •` : props.entry.name)
-  emit('dirty-change', isDirty)
 })
 
 async function loadFile() {
@@ -185,6 +185,30 @@ async function saveFile() {
   } finally {
     saving.value = false
   }
+}
+
+// Called by DesktopSessionHost before it unmounts this window (see
+// TerminalPanel's requestClose for the same pattern) — takes over from the
+// browser's native confirm() dialog so the app gets its own themed one.
+const pendingCloseResolve = ref<((ok: boolean) => void) | null>(null)
+
+function requestClose(): Promise<boolean> {
+  if (!dirty.value) return Promise.resolve(true)
+  return new Promise<boolean>((resolve) => {
+    pendingCloseResolve.value = resolve
+  })
+}
+
+defineExpose({ requestClose })
+
+function confirmClose() {
+  pendingCloseResolve.value?.(true)
+  pendingCloseResolve.value = null
+}
+
+function cancelClose() {
+  pendingCloseResolve.value?.(false)
+  pendingCloseResolve.value = null
 }
 
 async function reloadFromDevice() {
@@ -280,6 +304,15 @@ onUnmounted(() => {
       <div v-if="savedFlash" class="editor-saved-toast"><i class="bi bi-check-circle-fill"></i> Saved</div>
     </Transition>
   </Teleport>
+
+  <ConfirmDialog
+    :open="!!pendingCloseResolve"
+    title="Unsaved changes"
+    :message="`${entry.name} has unsaved changes. Close this window anyway?`"
+    confirm-label="Close"
+    @confirm="confirmClose"
+    @cancel="cancelClose"
+  />
 </template>
 
 <style scoped>
