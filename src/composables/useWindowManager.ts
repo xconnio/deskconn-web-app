@@ -27,8 +27,6 @@ export interface AppWindow {
   maximized: boolean
   prevBounds?: WindowBounds
   props: Record<string, unknown>
-  /** Unsaved changes — closing prompts for confirmation instead of closing outright. */
-  dirty: boolean
 }
 
 export interface OpenWindowOptions {
@@ -113,7 +111,6 @@ export function useWindowManager() {
       minimized: false,
       maximized: false,
       props: options.props ?? {},
-      dirty: false,
     }
 
     windows.value.push(win)
@@ -135,13 +132,6 @@ export function useWindowManager() {
     const win = windows.value.find((w) => w.id === id)
     if (!win) return
     win.title = title
-  }
-
-  // Lets an embedded app report unsaved changes, so closing can confirm first.
-  function updateDirty(id: string, dirty: boolean) {
-    const win = windows.value.find((w) => w.id === id)
-    if (!win) return
-    win.dirty = dirty
   }
 
   function minimizeWindow(id: string) {
@@ -214,7 +204,6 @@ export function useWindowManager() {
     toggleMaximize,
     updateBounds,
     updateTitle,
-    updateDirty,
     syncMaximizedBounds,
   }
 }
