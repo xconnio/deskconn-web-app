@@ -1693,7 +1693,7 @@ onUnmounted(() => {
           />
 
           <div
-            class="breadcrumb-search-area"
+            class="breadcrumb-search-area fwin-no-drag"
             :class="{ 'breadcrumb-search-active': searchMode || fileSearchActive, 'breadcrumb-search-area--embedded': !!toolbarTarget }"
             @click="!searchMode && !fileSearchActive && enterSearchMode()"
           >
