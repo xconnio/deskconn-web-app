@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { provide, ref, onMounted, onUnmounted, nextTick } from 'vue'
-import { floatingWindowToolbarKey, floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
+import { floatingWindowToolbarKey, floatingWindowActionsKey, floatingWindowMenuKey } from '@/composables/floatingWindowToolbar'
 
 const rootEl = ref<HTMLElement | null>(null)
 const toolbarHostEl = ref<HTMLElement | null>(null)
 const actionsHostEl = ref<HTMLElement | null>(null)
+const menuExtraHostEl = ref<HTMLElement | null>(null)
 provide(floatingWindowToolbarKey, toolbarHostEl)
 provide(floatingWindowActionsKey, actionsHostEl)
+provide(floatingWindowMenuKey, menuExtraHostEl)
 
 const props = defineProps<{
   title: string
@@ -514,7 +516,8 @@ function startResize(e: PointerEvent, dir: string) {
            window is the Fullscreen API's fullscreen element, the browser only
            paints that element's own subtree, so anything teleported to
            <body> (a sibling, not a descendant) would be invisible/unclickable. -->
-      <div v-if="menuOpen" ref="menuDropdownRef" class="fwin-menu" @click.stop>
+      <div v-show="menuOpen" ref="menuDropdownRef" class="fwin-menu" @click.stop>
+        <div ref="menuExtraHostEl" class="fwin-menu-extra"></div>
         <button class="fwin-menu-item" @click="toggleFullscreen">
           <i class="bi" :class="isFullscreen ? 'bi-arrows-angle-contract' : 'bi-arrows-angle-expand'"></i>
           {{ isFullscreen ? 'Exit full screen' : 'Full screen' }}
@@ -774,6 +777,16 @@ function startResize(e: PointerEvent, dir: string) {
 
 .fwin-menu-item:hover {
   background: #eef2f6;
+}
+
+.fwin-menu-extra:empty {
+  display: none;
+}
+
+.fwin-menu-extra:not(:empty) {
+  padding-bottom: 0.3rem;
+  margin-bottom: 0.3rem;
+  border-bottom: 1px solid #eef2f6;
 }
 
 .fwin-btn-close:hover {
