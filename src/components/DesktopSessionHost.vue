@@ -237,7 +237,7 @@ const apps: AppDef[] = [
   {
     id: 'files',
     label: 'Files',
-    icon: 'bi-folder-fill',
+    icon: 'bi-folder2-open',
     iconColor: '#ffffff',
     iconBg: '#2563eb',
     // Its titlebar toolbar (6 buttons + breadcrumb/search) can't compress
@@ -263,14 +263,14 @@ const apps: AppDef[] = [
   {
     id: 'videos',
     label: 'Videos',
-    icon: 'bi-collection-play-fill',
+    icon: 'bi-collection-play',
     iconColor: '#ffffff',
     iconBg: '#7c3aed',
   },
   {
     id: 'documents',
     label: 'Documents',
-    icon: 'bi-file-earmark-richtext-fill',
+    icon: 'bi-file-earmark-richtext',
     iconColor: '#ffffff',
     iconBg: '#d97706',
   },
@@ -286,7 +286,7 @@ const apps: AppDef[] = [
   {
     id: 'screenshot',
     label: 'Screenshot',
-    icon: 'bi-camera-fill',
+    icon: 'bi-camera',
     iconColor: '#ffffff',
     iconBg: '#4f46e5',
     width: 760,
@@ -295,7 +295,7 @@ const apps: AppDef[] = [
   {
     id: 'settings',
     label: 'Settings',
-    icon: 'bi-gear-fill',
+    icon: 'bi-gear',
     iconColor: '#ffffff',
     iconBg: '#475569',
   },
@@ -306,7 +306,7 @@ const apps: AppDef[] = [
 const imageViewerApp: AppDef = {
   id: 'image-viewer',
   label: 'Image Viewer',
-  icon: 'bi-image-fill',
+  icon: 'bi-image',
   iconColor: '#ffffff',
   iconBg: '#db2777',
   launchable: false,
@@ -315,7 +315,7 @@ const imageViewerApp: AppDef = {
 const videoPlayerApp: AppDef = {
   id: 'video-player',
   label: 'Video Player',
-  icon: 'bi-file-earmark-play-fill',
+  icon: 'bi-collection-play',
   iconColor: '#ffffff',
   iconBg: '#7c3aed',
   launchable: false,
@@ -324,7 +324,7 @@ const videoPlayerApp: AppDef = {
 const textEditorApp: AppDef = {
   id: 'text-editor',
   label: 'Text Editor',
-  icon: 'bi-file-earmark-text-fill',
+  icon: 'bi-file-earmark-richtext',
   iconColor: '#ffffff',
   iconBg: '#0f766e',
   launchable: false,
@@ -429,13 +429,13 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
 
 type PreviewEntry = { path: string; name: string; size: number }
 
-const PREVIEW_ICONS: Record<FilePreviewType, string> = {
-  image: 'bi-image-fill',
-  video: 'bi-file-earmark-play-fill',
-  audio: 'bi-file-earmark-music-fill',
-  pdf: 'bi-file-earmark-pdf-fill',
-  text: 'bi-file-earmark-text-fill',
-  none: 'bi-file-earmark-fill',
+const PREVIEW_STYLE: Record<FilePreviewType, { icon: string; color: string; bg: string }> = {
+  image: { icon: imageViewerApp.icon, color: imageViewerApp.iconColor, bg: imageViewerApp.iconBg },
+  video: { icon: videoPlayerApp.icon, color: videoPlayerApp.iconColor, bg: videoPlayerApp.iconBg },
+  text: { icon: textEditorApp.icon, color: textEditorApp.iconColor, bg: textEditorApp.iconBg },
+  audio: { icon: 'bi-file-earmark-music', color: '#ffffff', bg: '#e11d48' },
+  pdf: { icon: 'bi-file-earmark-pdf', color: '#ffffff', bg: '#dc2626' },
+  none: { icon: 'bi-file-earmark', color: '#ffffff', bg: '#475569' },
 }
 
 const downloadProgress = ref<DownloadProgressState | null>(null)
@@ -449,12 +449,13 @@ function onPreviewFile(session: Session, entry: PreviewEntry, entries: PreviewEn
   }
 
   const appId = pt === 'image' ? 'image-viewer' : pt === 'video' ? 'video-player' : pt === 'text' ? 'text-editor' : 'preview'
+  const style = PREVIEW_STYLE[pt]
   openWindow({
     appId,
     title: entry.name,
-    icon: PREVIEW_ICONS[pt],
-    iconColor: '#334155',
-    iconBg: '#e2e8f0',
+    icon: style.icon,
+    iconColor: style.color,
+    iconBg: style.bg,
     width: 760,
     height: 560,
     props: { session: markRaw(session), entry, entries },
