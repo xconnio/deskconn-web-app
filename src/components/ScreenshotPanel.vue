@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, inject, onMounted, onUnmounted } from 'vue'
 import { ApplicationError } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
+import { floatingWindowActionsKey, floatingWindowMenuKey } from '@/composables/floatingWindowToolbar'
 import { downloadUrl } from '@/utils/download'
 import { formatDesktopError, isDesktopOfflineError } from '@/utils/desktopError'
 
-const props = defineProps<{ realm: string }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{ realm: string; focused?: boolean }>()
 
 const sessionCacheStore = useSessionCacheStore()
+
+// Absent when there's no FloatingWindow ancestor — the action buttons then
+// render inline instead of teleporting into the window's titlebar/menu.
+const actionsHostRef = inject(floatingWindowActionsKey)
+const actionsTarget = computed(() => actionsHostRef?.value ?? null)
+const menuHostRef = inject(floatingWindowMenuKey)
+const menuTarget = computed(() => menuHostRef?.value ?? null)
 
 const imageUrl = ref<string | null>(null)
 const loading = ref(true)
@@ -69,10 +76,6 @@ async function copyCommand() {
 const imgTransform = computed(
   () => `scale(${zoom.value}) translate(${panX.value}px, ${panY.value}px)`,
 )
-
-function close() {
-  emit('close')
-}
 
 function download() {
   if (!imageUrl.value) return
@@ -185,9 +188,11 @@ function onTouchEnd() {
   dragging.value = false
 }
 
+// Only act on these while this window is focused — several screenshot
+// windows can be open at once, each with its own zoom state.
 function onKeyDown(e: KeyboardEvent) {
-  if (e.key === 'Escape') close()
-  else if (e.key === '+' || e.key === '=') zoom.value = clampZoom(zoom.value * 1.2)
+  if (!props.focused || !imageUrl.value) return
+  if (e.key === '+' || e.key === '=') zoom.value = clampZoom(zoom.value * 1.2)
   else if (e.key === '-') zoom.value = clampZoom(zoom.value / 1.2)
   else if (e.key === '0') fitToScreen()
 }
@@ -203,179 +208,169 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="sc-overlay" @click.self="close">
-
-      <!-- Light info dialog: loading / disabled / error -->
-      <div v-if="!imageUrl" class="sc-info-dialog">
-        <div class="sc-info-header">
-          <span class="sc-info-title">Screenshot</span>
-          <button class="sc-info-close" title="Close" @click="close">
-            <i class="bi bi-x-lg"></i>
-          </button>
-        </div>
-
-        <!-- Loading -->
-        <div v-if="loading" class="sc-info-body sc-info-loading">
-          <div class="spinner-border text-secondary" role="status">
-            <span class="visually-hidden">Capturing…</span>
-          </div>
-          <span class="sc-info-label">Capturing screenshot…</span>
-        </div>
-
-        <!-- Disabled -->
-        <div v-else-if="disabled" class="sc-info-body">
-          <p class="sc-info-text">Screenshots are disabled on this machine.</p>
-          <p class="sc-info-sub">Run on the machine to enable:</p>
-          <div class="sc-cmd-row">
-            <code class="sc-cmd">desk screenshot enable</code>
-            <button class="sc-copy-btn" :title="copied ? 'Copied!' : 'Copy'" @click="copyCommand">
-              <i class="bi" :class="copied ? 'bi-check-lg' : 'bi-clipboard'"></i>
-            </button>
-          </div>
-        </div>
-
-        <!-- Error -->
-        <div v-else-if="error" class="sc-info-body">
-          <i class="bi bi-exclamation-triangle-fill sc-error-icon"></i>
-          <p class="sc-info-text">{{ error }}</p>
-        </div>
-
-        <div class="sc-info-footer">
-          <button v-if="!loading" class="sc-info-action" @click="capture">
-            <i class="bi bi-arrow-clockwise"></i> Retry
-          </button>
-          <button class="sc-info-action sc-info-action--primary" @click="close">OK</button>
-        </div>
+  <div class="screenshot-panel">
+    <Teleport :to="menuTarget ?? 'body'" :disabled="!menuTarget">
+      <div v-if="imageUrl" class="sc-zoom-group">
+        <button class="sc-action-btn" title="Zoom out (-)" @click="zoom = clampZoom(zoom / 1.2)">
+          <i class="bi bi-zoom-out"></i>
+        </button>
+        <span class="sc-zoom-pct">{{ Math.round(zoom * 100) }}%</span>
+        <button class="sc-action-btn" title="Zoom in (+)" @click="zoom = clampZoom(zoom * 1.2)">
+          <i class="bi bi-zoom-in"></i>
+        </button>
+        <button class="sc-action-btn" title="Reset (0)" @click="fitToScreen">
+          <i class="bi bi-arrow-counterclockwise"></i>
+        </button>
       </div>
+    </Teleport>
 
-      <!-- Dark image viewer -->
-      <div v-else class="sc-viewer">
-        <div class="sc-header">
-          <button class="sc-btn" title="Close (Esc)" @click="close">
-            <i class="bi bi-x-lg"></i>
-          </button>
-          <span class="sc-title">Screenshot</span>
-          <span class="sc-zoom-pct">{{ Math.round(zoom * 100) }}%</span>
-          <button class="sc-btn" title="Fit (0)" @click="fitToScreen">
-            <i class="bi bi-fullscreen-exit"></i>
-          </button>
-          <button class="sc-btn" title="Zoom in (+)" @click="zoom = clampZoom(zoom * 1.2)">
-            <i class="bi bi-zoom-in"></i>
-          </button>
-          <button class="sc-btn" title="Zoom out (-)" @click="zoom = clampZoom(zoom / 1.2)">
-            <i class="bi bi-zoom-out"></i>
-          </button>
-          <button class="sc-btn" title="Retake" @click="capture">
-            <i class="bi bi-arrow-clockwise"></i>
-          </button>
-          <button class="sc-btn sc-btn-save" title="Save" @click="download">
-            <i class="bi bi-download"></i>
-          </button>
-        </div>
-        <div
-          ref="imgAreaRef"
-          class="sc-image-area"
-          :class="{ dragging }"
-          @wheel.prevent="onWheel"
-          @mousedown="onMouseDown"
-          @mousemove="onMouseMove"
-          @mouseup="onMouseUp"
-          @mouseleave="onMouseUp"
-          @touchstart.prevent="onTouchStart"
-          @touchmove.prevent="onTouchMove"
-          @touchend="onTouchEnd"
-        >
-          <img
-            :src="imageUrl"
-            class="sc-image"
-            :style="{ transform: imgTransform }"
-            draggable="false"
-            alt="Screenshot"
-          />
-        </div>
+    <Teleport :to="actionsTarget ?? 'body'" :disabled="!actionsTarget">
+      <button class="sc-action-btn" title="Retake" :disabled="loading" @click="capture">
+        <i class="bi bi-arrow-clockwise"></i>
+      </button>
+      <button v-if="imageUrl" class="sc-action-btn" title="Download" @click="download">
+        <i class="bi bi-download"></i>
+      </button>
+    </Teleport>
+
+    <!-- Loading -->
+    <div v-if="loading" class="sc-state">
+      <div class="spinner-border text-secondary" role="status">
+        <span class="visually-hidden">Capturing…</span>
       </div>
-
+      <p class="sc-state-label">Capturing screenshot…</p>
     </div>
-  </Teleport>
+
+    <!-- Disabled -->
+    <div v-else-if="disabled" class="sc-state">
+      <p class="sc-state-text">Screenshots are disabled on this machine.</p>
+      <p class="sc-state-sub">Run on the machine to enable:</p>
+      <div class="sc-cmd-row">
+        <code class="sc-cmd">desk screenshot enable</code>
+        <button class="sc-copy-btn" :title="copied ? 'Copied!' : 'Copy'" @click="copyCommand">
+          <i class="bi" :class="copied ? 'bi-check-lg' : 'bi-clipboard'"></i>
+        </button>
+      </div>
+      <button class="sc-retry-btn" @click="capture">Retry</button>
+    </div>
+
+    <!-- Error -->
+    <div v-else-if="error" class="sc-state">
+      <i class="bi bi-exclamation-triangle-fill sc-error-icon"></i>
+      <p class="sc-state-text">{{ error }}</p>
+      <button class="sc-retry-btn" @click="capture">Retry</button>
+    </div>
+
+    <!-- Image viewer -->
+    <div
+      v-else
+      ref="imgAreaRef"
+      class="sc-image-area"
+      :class="{ dragging }"
+      @wheel.prevent="onWheel"
+      @mousedown="onMouseDown"
+      @mousemove="onMouseMove"
+      @mouseup="onMouseUp"
+      @mouseleave="onMouseUp"
+      @touchstart.prevent="onTouchStart"
+      @touchmove.prevent="onTouchMove"
+      @touchend="onTouchEnd"
+    >
+      <img
+        :src="imageUrl ?? undefined"
+        class="sc-image"
+        :style="{ transform: imgTransform }"
+        draggable="false"
+        alt="Screenshot"
+      />
+    </div>
+  </div>
 </template>
 
 <style scoped>
-/* ── Shared overlay ───────────────────────────── */
-.sc-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.5rem;
-}
-
-/* ── Light info dialog (loading / disabled / error) ── */
-.sc-info-dialog {
-  background: #fff;
-  border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
-  width: 100%;
-  max-width: 420px;
-  overflow: hidden;
-}
-
-.sc-info-header {
-  display: flex;
-  align-items: center;
-  padding: 1.1rem 1.25rem 0.75rem;
-}
-
-.sc-info-title {
-  flex: 1;
-  font-size: 1rem;
-  font-weight: 600;
-  color: #111;
-}
-
-.sc-info-close {
-  background: none;
-  border: none;
-  color: #999;
-  font-size: 0.9rem;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  line-height: 1;
-}
-
-.sc-info-close:hover {
-  color: #333;
-}
-
-.sc-info-body {
-  padding: 0.25rem 1.25rem 1rem;
+.screenshot-panel {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
 }
 
-.sc-info-loading {
+/* Teleported into the FloatingWindow's titlebar, beside minimize/maximize/close
+   (see floatingWindowActionsKey) — sized to match FloatingWindow's own .fwin-btn. */
+.sc-action-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #d9dee4;
+  border-radius: 50%;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 0.6rem;
+  display: inline-flex;
   align-items: center;
-  padding-top: 1rem;
-  padding-bottom: 1.5rem;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.sc-info-label {
+.sc-action-btn:hover {
+  background: #e2e8f0;
+  color: #111827;
+}
+
+.sc-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Rendered inside the titlebar's "Menu" dropdown (see floatingWindowMenuKey),
+   above the built-in "Full screen" item — not the titlebar strip itself. */
+.sc-zoom-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.15rem 0.35rem;
+}
+
+.sc-zoom-pct {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #94a3b8;
+  min-width: 2.4rem;
+  text-align: center;
+}
+
+/* ── Loading / disabled / error states ── */
+.sc-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 2rem;
+  text-align: center;
+  color: #617182;
+}
+
+.sc-state-label {
   font-size: 0.85rem;
   color: #888;
+  margin: 0;
 }
 
-.sc-info-text {
+.sc-state-text {
   margin: 0;
   font-size: 0.9rem;
   color: #333;
 }
 
-.sc-info-sub {
+.sc-state-sub {
   margin: 0;
   font-size: 0.82rem;
   color: #777;
@@ -384,40 +379,25 @@ onUnmounted(() => {
 .sc-error-icon {
   font-size: 1.6rem;
   color: #ef4444;
-  align-self: center;
-  margin-bottom: 0.25rem;
 }
 
-.sc-info-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem 1rem;
-  border-top: 1px solid #f0f0f0;
-}
-
-.sc-info-action {
-  background: none;
-  border: none;
-  padding: 0.4rem 0.9rem;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  cursor: pointer;
-  color: #555;
-  transition: background 0.12s;
-}
-
-.sc-info-action:hover {
-  background: #f5f5f5;
-}
-
-.sc-info-action--primary {
+.sc-retry-btn {
+  margin-top: 0.25rem;
+  padding: 0.4rem 1.1rem;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
   font-weight: 600;
-  color: #2563eb;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.13s, border-color 0.13s;
 }
 
-.sc-info-action--primary:hover {
-  background: #eff6ff;
+.sc-retry-btn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
 }
 
 /* ── Command copy row ─────────────────────────── */
@@ -461,73 +441,7 @@ onUnmounted(() => {
   color: #374151;
 }
 
-/* ── Dark image viewer ────────────────────────── */
-.sc-viewer {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-width: 960px;
-  height: 80vh;
-  background: #111;
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
-}
-
-.sc-header {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  height: 44px;
-  padding: 0 0.75rem;
-  background: rgba(0, 0, 0, 0.5);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  flex-shrink: 0;
-}
-
-.sc-title {
-  flex: 1;
-  font-size: 0.82rem;
-  color: #888;
-  padding-left: 0.25rem;
-}
-
-.sc-zoom-pct {
-  font-size: 0.75rem;
-  color: #555;
-  min-width: 3rem;
-  text-align: right;
-  padding-right: 0.25rem;
-}
-
-.sc-btn {
-  width: 32px;
-  height: 32px;
-  background: transparent;
-  border: none;
-  color: #888;
-  font-size: 0.9rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transition: background 0.12s, color 0.12s;
-}
-
-.sc-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #ddd;
-}
-
-.sc-btn-save {
-  color: #60a5fa;
-}
-
-.sc-btn-save:hover {
-  color: #93c5fd;
-}
-
+/* ── Image viewer ────────────────────────── */
 .sc-image-area {
   flex: 1;
   min-height: 0;
@@ -535,6 +449,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  background: #0d0d0d;
   cursor: grab;
   user-select: none;
 }
@@ -551,6 +466,5 @@ onUnmounted(() => {
   transform-origin: center center;
   will-change: transform;
   pointer-events: none;
-  border-radius: 2px;
 }
 </style>

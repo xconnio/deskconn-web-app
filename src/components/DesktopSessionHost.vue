@@ -217,7 +217,6 @@ function updateIsMobile() {
 // Vertical docks are awkward on narrow screens — always use the bottom dock there.
 // Position is per-machine (see stores/settings.ts), set via the in-dock Settings app.
 const dockPosition = computed(() => (isMobile.value ? 'bottom' : settingsStore.getDockPosition(props.realm)))
-const screenshotOpen = ref(false)
 
 interface AppDef {
   id: string
@@ -290,6 +289,8 @@ const apps: AppDef[] = [
     icon: 'bi-camera-fill',
     iconColor: '#ffffff',
     iconBg: '#4f46e5',
+    width: 760,
+    height: 560,
   },
   {
     id: 'settings',
@@ -338,11 +339,6 @@ const dockApps = computed(() => {
 })
 
 function launchApp(app: AppDef, initialPath?: string) {
-  if (app.id === 'screenshot') {
-    screenshotOpen.value = true
-    return
-  }
-
   openWindow({
     appId: app.id,
     title: app.label,
@@ -363,6 +359,7 @@ const appComponents: Record<string, Component> = {
   videos: EmbeddedIndexedFiles,
   documents: EmbeddedIndexedFiles,
   'resource-monitor': ResourceMonitor,
+  screenshot: ScreenshotPanel,
   settings: DesktopSettingsPanel,
   preview: FilePreviewModal,
   'image-viewer': FilePreviewModal,
@@ -391,6 +388,11 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
       return {
         realm: props.realm,
         desktopName: desktopName.value,
+        focused,
+      }
+    case 'screenshot':
+      return {
+        realm: props.realm,
         focused,
       }
     case 'settings':
@@ -648,8 +650,6 @@ onUnmounted(() => {
       />
     </div>
     </Teleport>
-
-    <ScreenshotPanel v-if="screenshotOpen" :realm="realm" @close="screenshotOpen = false" />
 
     <DownloadToast v-if="downloadProgress" :progress="downloadProgress" />
 
