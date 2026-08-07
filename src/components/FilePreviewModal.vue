@@ -24,6 +24,8 @@ import {
 
 type PreviewEntry = { path: string; name: string; size: number }
 
+const MAX_IMG_PDF = 100 * 1024 * 1024
+
 const props = defineProps<{
   session: Session
   realm: string
@@ -113,6 +115,79 @@ async function fetchFileData(remotePath: string): Promise<Uint8Array> {
   return combined
 }
 
+// Rolling cache of decoded image blob URLs, keyed by path — holds only the
+// image currently shown plus its immediate prev/next neighbors (see
+// preloadImageNeighbors), so Prev/Next resolves instantly instead of
+// re-fetching over the wire, without buffering the whole album into memory.
+const imageBlobCache = new Map<string, string>()
+const imagePreloads = new Map<string, Promise<string | null>>()
+
+async function fetchImageBlobUrl(
+  entry: PreviewEntry,
+  onProgress?: (received: number, total: number) => void,
+): Promise<string | null> {
+  try {
+    const chunks: Uint8Array[] = []
+    let total = 0
+    await streamFileData(props.session, entry.path, (chunk, expectedTotal) => {
+      chunks.push(chunk)
+      total += chunk.length
+      onProgress?.(total, expectedTotal)
+    })
+    const combined = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.length }
+    return URL.createObjectURL(new Blob([combined], { type: getMimeType(entry.name) }))
+  } catch {
+    return null
+  }
+}
+
+// Dedupes concurrent requests for the same path — a neighbor already
+// in-flight or cached from an earlier preload resolves immediately.
+function loadImageBlobUrl(
+  entry: PreviewEntry,
+  onProgress?: (received: number, total: number) => void,
+): Promise<string | null> {
+  const cached = imageBlobCache.get(entry.path)
+  if (cached) return Promise.resolve(cached)
+  let promise = imagePreloads.get(entry.path)
+  if (!promise) {
+    promise = fetchImageBlobUrl(entry, onProgress).then((url) => {
+      imagePreloads.delete(entry.path)
+      if (url) imageBlobCache.set(entry.path, url)
+      return url
+    })
+    imagePreloads.set(entry.path, promise)
+  }
+  return promise
+}
+
+function pruneImageBlobCache(keep: Set<string>) {
+  for (const [path, url] of imageBlobCache) {
+    if (!keep.has(path)) {
+      URL.revokeObjectURL(url)
+      imageBlobCache.delete(path)
+    }
+  }
+}
+
+// Fires off (at most) two background fetches — the entries immediately
+// before/after the one just shown — so stepping further in either direction
+// only ever has to fetch the single new entry at that edge; the other
+// neighbor is already cached from the previous step.
+function preloadImageNeighbors() {
+  const idx = currentImageIndex.value
+  if (idx < 0) return
+  const keep = new Set([currentEntry.value.path])
+  for (const neighbor of [imageEntries.value[idx - 1], imageEntries.value[idx + 1]]) {
+    if (!neighbor || neighbor.size > MAX_IMG_PDF) continue
+    keep.add(neighbor.path)
+    void loadImageBlobUrl(neighbor)
+  }
+  pruneImageBlobCache(keep)
+}
+
 // Bridges range-request messages coming from the stream service worker (see
 // sw-download.ts) to the raw WebRTC data channel range protocol (fileStream.ts).
 // Multiple range requests (e.g. a browser probing both the start and end of an
@@ -191,16 +266,51 @@ async function openStreamedMedia(pt: FilePreviewType): Promise<boolean> {
   return true
 }
 
+// Images are served entirely from the neighbor-preload cache above: a fresh
+// fetch only happens when the target isn't already cached (first open, or a
+// jump beyond the preloaded neighbors). Guards against a stale response
+// landing after the user has since navigated elsewhere.
+async function openImagePreview() {
+  stopActiveStream()
+  const target = currentEntry.value
+  const swapping = previewType.value === 'image' && !!previewBlobUrl.value
+  previewType.value = 'image'
+  previewLoading.value = !swapping
+  imageSwapping.value = swapping
+  previewExpectedBytes.value = target.size
+  previewReceivedBytes.value = 0
+  previewError.value = ''
+
+  const url = await loadImageBlobUrl(target, (received, total) => {
+    if (currentEntry.value.path !== target.path) return
+    previewReceivedBytes.value = received
+    previewExpectedBytes.value = total
+  })
+  if (!mounted || currentEntry.value.path !== target.path) return
+
+  if (url) {
+    previewBlobUrl.value = url
+    preloadImageNeighbors()
+  } else {
+    previewError.value = 'Failed to load file'
+  }
+  previewLoading.value = false
+  imageSwapping.value = false
+}
+
 async function openFile(isRetry = false) {
   if (!isRetry) mediaRetryUsed.value = false
   const pt = getFilePreviewType(currentEntry.value.name)
-  const MAX_IMG_PDF = 100 * 1024 * 1024
 
   if (pt === 'none' || (pt === 'text' && currentEntry.value.size > 5 * 1024 * 1024)) {
     await downloadFileToClient(); return
   }
   if ((pt === 'image' || pt === 'pdf') && currentEntry.value.size > MAX_IMG_PDF) {
     await downloadFileToClient(); return
+  }
+  if (pt === 'image') {
+    await openImagePreview()
+    return
   }
   if ((pt === 'audio' || pt === 'video') && !isRetry) {
     const streamed = await openStreamedMedia(pt)
@@ -212,15 +322,13 @@ async function openFile(isRetry = false) {
     return
   }
 
-  // Full-buffer fallback: images/pdf/text, and audio/video retried once after a
+  // Full-buffer fallback: pdf/text, and audio/video retried once after a
   // playback error (see handleMediaError).
   stopActiveStream()
-  const outgoingBlobUrl = previewBlobUrl.value
-  const swappingImage = pt === 'image' && previewType.value === 'image' && !!outgoingBlobUrl
-  if (!swappingImage && outgoingBlobUrl) { URL.revokeObjectURL(outgoingBlobUrl); previewBlobUrl.value = '' }
+  if (previewBlobUrl.value) { URL.revokeObjectURL(previewBlobUrl.value); previewBlobUrl.value = '' }
   previewType.value = pt
-  previewLoading.value = !swappingImage
-  imageSwapping.value = swappingImage
+  previewLoading.value = true
+  imageSwapping.value = false
   previewExpectedBytes.value = currentEntry.value.size
   previewReceivedBytes.value = 0
   previewError.value = ''
@@ -234,12 +342,10 @@ async function openFile(isRetry = false) {
       const blob = new Blob([data.slice()], { type: getMimeType(currentEntry.value.name) })
       previewBlobUrl.value = URL.createObjectURL(blob)
     }
-    if (swappingImage) URL.revokeObjectURL(outgoingBlobUrl)
   } catch (err) {
     if (mounted) previewError.value = err instanceof Error ? err.message : 'Failed to load file'
-    if (swappingImage) { URL.revokeObjectURL(outgoingBlobUrl); previewBlobUrl.value = '' }
   } finally {
-    if (mounted) { previewLoading.value = false; imageSwapping.value = false }
+    if (mounted) previewLoading.value = false
   }
 }
 
@@ -532,7 +638,11 @@ onMounted(() => {
 onUnmounted(() => {
   mounted = false
   document.removeEventListener('keydown', handleKeydown)
-  if (previewBlobUrl.value) URL.revokeObjectURL(previewBlobUrl.value)
+  // previewBlobUrl for an image points into imageBlobCache (revoked below) —
+  // only a non-image preview (pdf/text/audio-video-retry) owns its URL directly.
+  if (previewBlobUrl.value && previewType.value !== 'image') URL.revokeObjectURL(previewBlobUrl.value)
+  for (const url of imageBlobCache.values()) URL.revokeObjectURL(url)
+  imageBlobCache.clear()
   if (editImageUrl.value) URL.revokeObjectURL(editImageUrl.value)
   editStageResizeObserver?.disconnect()
   stopActiveStream()
