@@ -323,7 +323,7 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
         :ref="(el) => setIconRef(app.id, el as Element | null)"
       >
         <button
-          class="dock-icon"
+          class="dock-icon dock-icon-app"
           :class="{ 'dock-icon-focused': isAppFocused(app.id), 'dock-icon-disabled': offline }"
           :style="{ color: app.iconColor, background: app.iconBg }"
           :aria-label="offline ? `${app.label} (offline)` : app.label"
@@ -501,13 +501,13 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
   width: 46px;
   height: 46px;
   border: none;
-  border-radius: 10px;
-  background: #eef2f6;
+  border-radius: 12px;
+  background: transparent;
   color: #475569;
-  font-size: 2rem;
+  font-size: 1.65rem;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.13s ease, transform 0.1s ease;
+  transition: background 0.13s ease, transform 0.1s ease, filter 0.13s ease, box-shadow 0.13s ease;
 }
 
 .dock-icon:hover {
@@ -519,9 +519,33 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
   transform: translateX(2px);
 }
 
-.dock-icon-machines {
+/* App tiles carry their own per-app background color (see :style binding),
+   so hover feedback has to layer on top via filter/shadow rather than
+   overriding background — an inline style always wins over a stylesheet
+   :hover rule regardless of specificity. */
+.dock-icon-app {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.dock-icon-app:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.dock-icon-app.dock-icon-disabled {
+  box-shadow: none;
+}
+
+.dock-icon-machines,
+.dock-icon-exit {
   color: rgba(255, 255, 255, 0.85);
   background: transparent;
+  font-size: 2rem;
+}
+
+.dock-icon-machines:hover,
+.dock-icon-exit:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .dock-icon-focused {
@@ -708,10 +732,5 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
 .dock-popover-icon-quit {
   background: #fee2e2;
   color: #dc2626;
-}
-
-.dock-icon-exit {
-  color: rgba(255, 255, 255, 0.85);
-  background: transparent;
 }
 </style>
