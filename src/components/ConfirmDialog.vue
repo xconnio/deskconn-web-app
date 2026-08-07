@@ -31,8 +31,11 @@ const emit = defineEmits<{ confirm: []; cancel: [] }>()
 </template>
 
 <style scoped>
+/* Absolute, not fixed — scopes the overlay to the nearest positioned
+   ancestor, which is the FloatingWindow it's rendered inside (always
+   position: absolute/fixed itself), instead of covering the whole page. */
 .fs-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.4);
   z-index: 2000;

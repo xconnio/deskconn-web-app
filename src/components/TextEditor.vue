@@ -297,6 +297,14 @@ onUnmounted(() => {
       </div>
     </template>
 
+    <ConfirmDialog
+      :open="!!pendingCloseResolve"
+      title="Unsaved changes"
+      :message="`${entry.name} has unsaved changes. Close this window anyway?`"
+      confirm-label="Close"
+      @confirm="confirmClose"
+      @cancel="cancelClose"
+    />
   </div>
 
   <Teleport to="body">
@@ -304,19 +312,11 @@ onUnmounted(() => {
       <div v-if="savedFlash" class="editor-saved-toast"><i class="bi bi-check-circle-fill"></i> Saved</div>
     </Transition>
   </Teleport>
-
-  <ConfirmDialog
-    :open="!!pendingCloseResolve"
-    title="Unsaved changes"
-    :message="`${entry.name} has unsaved changes. Close this window anyway?`"
-    confirm-label="Close"
-    @confirm="confirmClose"
-    @cancel="cancelClose"
-  />
 </template>
 
 <style scoped>
 .editor-window {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
