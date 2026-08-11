@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+import { ref, computed, onMounted, type ComponentPublicInstance } from 'vue'
 import { useMachinesStore } from '@/stores/machines'
 import { useDesktopSessionsStore } from '@/stores/desktopSessions'
 import { useMachinesOverviewStore } from '@/stores/machinesOverview'
@@ -41,12 +41,7 @@ async function loadCardImages() {
   }
 }
 
-watch(
-  () => machinesOverviewStore.isOpen,
-  (open) => {
-    if (open) loadCardImages()
-  },
-)
+onMounted(loadCardImages)
 
 // Registers this card's slot for DesktopSessionHost to teleport its live desktop into.
 function setPreviewTarget(realm: string, el: Element | null) {
@@ -69,34 +64,23 @@ function previewRef(realm: string): TemplateRefCallback {
 }
 
 function selectMachine(realm: string, name: string) {
-  machinesOverviewStore.close()
   openLauncher(realm, name)
 }
-
-function onKeydown(e: KeyboardEvent) {
-  if (!machinesOverviewStore.isOpen) return
-  if (e.key === 'Escape') machinesOverviewStore.close()
-}
-
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
-  <div
-    class="machines-overview"
-    v-show="machinesOverviewStore.isOpen"
-    @click.self="machinesOverviewStore.close()"
-    @contextmenu.prevent
-  >
+  <div class="machines-overview">
     <div class="machines-overview-header">
       <h2 class="machines-overview-title">Machines</h2>
-      <button class="machines-overview-close" @click="machinesOverviewStore.close()">
-        <i class="bi bi-x-lg"></i>
-      </button>
     </div>
 
-    <div class="machines-grid">
+    <div v-if="!machinesStore.hasLoadedDesktops" class="machines-loading">
+      <div class="spinner-border" role="status">
+        <span class="visually-hidden">Loading...</span>
+      </div>
+    </div>
+
+    <div v-else class="machines-grid">
       <div
         v-for="desktop in displayDesktops"
         :key="desktop.realm"
@@ -134,9 +118,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   flex-direction: column;
   gap: 1.5rem;
   padding: 2.5rem 3rem;
-  background: rgba(15, 23, 42, 0.82);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: #0f172a;
   overflow-y: auto;
 }
 
@@ -153,23 +135,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   margin: 0;
 }
 
-.machines-overview-close {
-  display: inline-flex;
+.machines-loading {
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: background 0.15s ease;
+  flex: 1;
 }
 
-.machines-overview-close:hover {
-  background: rgba(255, 255, 255, 0.22);
+.machines-loading .spinner-border {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .machines-grid {

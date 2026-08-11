@@ -15,6 +15,7 @@ function readResourceMonitorInterval(realm: string): number {
 }
 
 export const useSettingsStore = defineStore('settings', () => {
+  const lastRealm = ref(localStorage.getItem('setting_last_realm'))
   const useWebRTC = ref(localStorage.getItem('setting_use_webrtc') === 'true')
   const singleClickOpen = ref(localStorage.getItem('setting_single_click_open') === 'true')
   const useRemoteWallpaper = ref(localStorage.getItem('setting_use_remote_wallpaper') !== 'false')
@@ -70,7 +71,22 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem('setting_show_logical_cpus', String(value))
   }
 
+  function setLastRealm(realm: string) {
+    lastRealm.value = realm
+    localStorage.setItem('setting_last_realm', realm)
+  }
+
+  // Clears which machine to land on next — used when the user explicitly
+  // navigates to the Machines picker, so reopening the app later (even in a
+  // fresh browser session) lands back on the picker instead of jumping
+  // straight into whatever machine was open before.
+  function clearLastRealm() {
+    lastRealm.value = null
+    localStorage.removeItem('setting_last_realm')
+  }
+
   return {
+    lastRealm, setLastRealm, clearLastRealm,
     useWebRTC, setUseWebRTC,
     singleClickOpen, setSingleClickOpen,
     useRemoteWallpaper, setUseRemoteWallpaper,

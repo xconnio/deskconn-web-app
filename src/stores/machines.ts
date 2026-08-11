@@ -40,6 +40,7 @@ export const useMachinesStore = defineStore('machines', () => {
   return {
     desktops,
     isLoadingDesktops,
+    hasLoadedDesktops,
     fetchMachines,
     clearMachines,
   }

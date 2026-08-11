@@ -7,21 +7,8 @@ export const PREVIEW_WIDTH = 240
 export const PREVIEW_HEIGHT = 150
 
 export const useMachinesOverviewStore = defineStore('machinesOverview', () => {
-  const isOpen = ref(false)
-
-  function open() {
-    isOpen.value = true
-  }
-
-  function close() {
-    isOpen.value = false
-  }
-
-  function toggle() {
-    isOpen.value = !isOpen.value
-  }
-
-  // Per-realm slot a live DesktopSessionHost teleports its desktop into.
+  // Per-realm slot a live DesktopSessionHost teleports its desktop into —
+  // only populated while the Machines page (MachinesOverview.vue) is mounted.
   const previewTargets = ref<Record<string, HTMLElement>>({})
 
   function registerPreviewTarget(realm: string, el: HTMLElement) {
@@ -40,5 +27,5 @@ export const useMachinesOverviewStore = defineStore('machinesOverview', () => {
     previewTargets.value = next
   }
 
-  return { isOpen, open, close, toggle, previewTargets, registerPreviewTarget, unregisterPreviewTarget }
+  return { previewTargets, registerPreviewTarget, unregisterPreviewTarget }
 })

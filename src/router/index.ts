@@ -2,8 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import VerifyView from '../views/VerifyView.vue'
-import HomeView from '../views/HomeView.vue'
 import { useAuthStore } from '../stores/auth'
+import { useSettingsStore } from '../stores/settings'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -11,31 +11,7 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: HomeView,
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/organizations',
-      name: 'organizations',
-      component: () => import('../views/OrganizationsView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/organizations/:id',
-      name: 'organization-detail',
-      component: () => import('../views/OrganizationDetailView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/profile',
-      name: 'profile',
-      component: () => import('../views/ProfileView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/settings',
-      name: 'settings',
-      component: () => import('../views/SettingsView.vue'),
+      component: () => import('../components/MachinesOverview.vue'),
       meta: { requiresAuth: true },
     },
     {
@@ -63,24 +39,6 @@ const router = createRouter({
       meta: { requiresGuest: true },
     },
     {
-      path: '/access-management',
-      name: 'access-management',
-      component: () => import('../views/AccessManagementView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/access-management/machines/:id',
-      name: 'machine-access',
-      component: () => import('../views/MachineAccessView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
-      path: '/access-management/machines/:desktopId/orgs/:accessId',
-      name: 'desktop-org-access',
-      component: () => import('../views/OrgDesktopAccessView.vue'),
-      meta: { requiresAuth: true },
-    },
-    {
       path: '/desktops/:realm/launcher',
       name: 'desktop-launcher',
       component: () => import('../views/LauncherView.vue'),
@@ -101,6 +59,22 @@ const router = createRouter({
   ],
 })
 
+// Explicitly requesting the Machines picker (e.g. the dock's Machines
+// button) clears the last-used realm first, so the redirect below doesn't
+// bounce this navigation straight back to the machine it came from — and,
+// since it's persisted, reopening the app later (even a fresh browser
+// session) lands back on the picker too, instead of jumping into a machine.
+export function requestMachinesPicker() {
+  useSettingsStore().clearLastRealm()
+  router.push('/')
+}
+
+// The auto-redirect below only ever fires once per page load (browser open
+// or refresh) — otherwise every later trip back to '/' (pressing Back from
+// a machine, clicking the Machines button) would immediately bounce right
+// back into whatever machine is currently the last-used one.
+let hasResolvedHome = false
+
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
 
@@ -108,6 +82,17 @@ router.beforeEach((to, from, next) => {
     next('/login')
   } else if (to.meta.requiresGuest && authStore.isAuthenticated) {
     next('/')
+  } else if (to.path === '/' && authStore.isAuthenticated) {
+    // Skip the machine picker entirely when a last-used machine is known —
+    // it becomes the landing page instead of MachinesOverview.
+    const lastRealm = useSettingsStore().lastRealm
+    if (lastRealm && !hasResolvedHome) {
+      hasResolvedHome = true
+      next({ name: 'desktop-launcher', params: { realm: lastRealm } })
+    } else {
+      hasResolvedHome = true
+      next()
+    }
   } else {
     next()
   }

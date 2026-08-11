@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import type { AppWindow } from '@/composables/useWindowManager'
-import { useMachinesOverviewStore } from '@/stores/machinesOverview'
+import { requestMachinesPicker } from '@/router/index'
+import { useAccountPanelStore } from '@/stores/accountPanel'
 
 export interface DockAppDef {
   id: string
@@ -27,10 +28,9 @@ const emit = defineEmits<{
   launch: [appId: string]
   activate: [windowId: string]
   close: [windowId: string]
-  exit: []
 }>()
 
-const machinesOverviewStore = useMachinesOverviewStore()
+const accountPanelStore = useAccountPanelStore()
 
 const dockRootRef = ref<HTMLElement | null>(null)
 const iconEls = new Map<string, HTMLElement>()
@@ -309,7 +309,7 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
       <button
         class="dock-icon dock-icon-machines"
         title="Machines"
-        @click="machinesOverviewStore.toggle()"
+        @click="requestMachinesPicker()"
       >
         <i class="bi bi-grid-3x3-gap-fill"></i>
       </button>
@@ -395,8 +395,8 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
 
       <div class="dock-divider"></div>
 
-      <button class="dock-icon dock-icon-exit" title="Exit to Dashboard" @click="emit('exit')">
-        <i class="bi bi-house-door-fill"></i>
+      <button class="dock-icon dock-icon-account" title="Profile" @click="accountPanelStore.open('account')">
+        <i class="bi bi-person-circle"></i>
       </button>
     </div>
   </div>
@@ -537,14 +537,14 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
 }
 
 .dock-icon-machines,
-.dock-icon-exit {
+.dock-icon-account {
   color: rgba(255, 255, 255, 0.85);
   background: transparent;
   font-size: 2rem;
 }
 
 .dock-icon-machines:hover,
-.dock-icon-exit:hover {
+.dock-icon-account:hover {
   background: rgba(255, 255, 255, 0.1);
 }
 
