@@ -2,12 +2,14 @@
 import { ref, onMounted, onUnmounted, computed, watch, nextTick, markRaw, type Component } from 'vue'
 import { type Session } from 'xconn'
 import { requestMachinesPicker } from '@/router/index'
+import type { AppWindow } from '@/composables/useWindowManager'
 
 import { useMachinesStore } from '@/stores/machines'
 import { useSettingsStore } from '@/stores/settings'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useDesktopSessionsStore } from '@/stores/desktopSessions'
 import { useMachinesOverviewStore, PREVIEW_WIDTH, PREVIEW_HEIGHT } from '@/stores/machinesOverview'
+import { useWindowsOverviewStore, WINDOW_PREVIEW_WIDTH, WINDOW_PREVIEW_HEIGHT } from '@/stores/windowsOverview'
 import EmbeddedDesktopFiles from '@/components/EmbeddedDesktopFiles.vue'
 import EmbeddedIndexedFiles from '@/components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
@@ -30,6 +32,7 @@ const settingsStore = useSettingsStore()
 const sessionCacheStore = useSessionCacheStore()
 const desktopSessionsStore = useDesktopSessionsStore()
 const machinesOverviewStore = useMachinesOverviewStore()
+const windowsOverviewStore = useWindowsOverviewStore()
 
 const desktopName = computed(() => machinesStore.desktops.find((d) => d.realm === props.realm)?.name ?? props.realm)
 
@@ -103,6 +106,26 @@ const launcherBodyStyle = computed(() => {
     pointerEvents: 'none',
   }
 })
+
+// Same scale-in-place technique as the machine-level preview above, but per
+// window — the teleported content keeps its real pixel size (so nothing
+// reflows) and is just visually shrunk to fit AppDock's overview tile.
+function windowPreviewTarget(windowId: string): HTMLElement | undefined {
+  return windowsOverviewStore.previewTargets[windowId]
+}
+
+function windowPreviewStyle(win: AppWindow): Record<string, string> {
+  return {
+    position: 'absolute',
+    top: '0',
+    left: '0',
+    width: `${win.width}px`,
+    height: `${win.height}px`,
+    transform: `scale(${WINDOW_PREVIEW_WIDTH / win.width}, ${WINDOW_PREVIEW_HEIGHT / win.height})`,
+    transformOrigin: 'top left',
+    pointerEvents: 'none',
+  }
+}
 
 function applyWallpaperUrl(url: string | null) {
   if (activeWallpaperObjUrl && activeWallpaperObjUrl !== url) URL.revokeObjectURL(activeWallpaperObjUrl)
@@ -620,15 +643,22 @@ onUnmounted(() => {
           @toggle-maximize="onToggleMaximize(win.id)"
           @update:bounds="updateBounds(win.id, $event)"
         >
-          <component
-            :is="appComponents[win.appId]"
-            :ref="windowRef(win.id)"
-            v-bind="windowProps(win)"
-            @close="onCloseWindow(win.id)"
-            @open-files="onOpenFiles"
-            @preview-file="onPreviewFile"
-            @update-title="updateTitle(win.id, $event)"
-          />
+          <!-- display:contents when not targeted keeps this wrapper out of
+               .fwin-body's flex layout entirely, so it's a no-op box until
+               the overview actually teleports it (see windowPreviewStyle). -->
+          <Teleport :to="windowPreviewTarget(win.id)" :disabled="!windowPreviewTarget(win.id)">
+            <div :style="windowPreviewTarget(win.id) ? windowPreviewStyle(win) : { display: 'contents' }">
+              <component
+                :is="appComponents[win.appId]"
+                :ref="windowRef(win.id)"
+                v-bind="windowProps(win)"
+                @close="onCloseWindow(win.id)"
+                @open-files="onOpenFiles"
+                @preview-file="onPreviewFile"
+                @update-title="updateTitle(win.id, $event)"
+              />
+            </div>
+          </Teleport>
         </FloatingWindow>
       </div>
 
