@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { authService } from '../services/authService'
 import type { Organization, OrganizationInvite } from '../types'
 import { ApplicationError } from 'xconn'
 
-const route = useRoute()
-const router = useRouter()
+// Only ever rendered as a drill-down inside AccountPanel's popup
+// Organizations list — takes `orgId` as a prop and emits `back` instead of
+// routing to a separate page.
+const props = defineProps<{ orgId: string }>()
+const emit = defineEmits<{ back: [] }>()
+
 const authStore = useAuthStore()
-const orgId = route.params.id as string
+const orgId = props.orgId
 
 // --- Detail ---
 const organization = ref<Organization | null>(null)
@@ -175,7 +178,7 @@ const handleDeleteOrg = async () => {
   try {
     if (!authStore.session) throw new Error('No active session')
     await authService.deleteOrganization(authStore.session, orgId)
-    router.push('/access-management')
+    emit('back')
   } catch (err: unknown) {
     deleteErrorMessage.value = err instanceof Error ? err.message : 'Failed to delete organization'
   } finally {
@@ -291,248 +294,227 @@ const handleRemoveMember = async (userId: string) => {
 </script>
 
 <template>
-  <div class="container py-3 py-md-5 fade-in-up">
+  <div class="container py-0">
     <div v-if="inviteSuccessToast" class="alert alert-success d-flex align-items-center py-2 small position-fixed top-0 start-50 translate-middle-x mt-3 shadow" style="z-index:1100;min-width:260px" role="alert">
       <i class="bi bi-check-circle-fill me-2"></i> Invitation sent successfully!
     </div>
-    <!-- Navigation -->
-    <div class="row mb-4 justify-content-center">
-      <div class="col-lg-10">
-        <router-link
-          to="/access-management"
-          class="btn btn-link text-decoration-none text-muted p-0 d-flex align-items-center back-link mb-3"
-        >
-          <i class="bi bi-arrow-left-short fs-2 me-1"></i>
-          <span class="fw-semibold">Back to Access Management</span>
-        </router-link>
-        <nav aria-label="breadcrumb">
-          <ol class="breadcrumb mb-0">
-            <li class="breadcrumb-item">
-              <router-link
-                to="/access-management"
-                class="text-decoration-none text-primary opacity-75"
-              >
-                Access Management
-              </router-link>
-            </li>
-            <li class="breadcrumb-item active" aria-current="page">Organization</li>
-          </ol>
-        </nav>
-      </div>
-    </div>
+
+    <!-- Back -->
+    <button
+      type="button"
+      class="btn btn-link text-decoration-none text-muted p-0 d-flex align-items-center back-link back-link-sm mb-3"
+      @click="emit('back')"
+    >
+      <i class="bi bi-arrow-left-short fs-4 me-1"></i>
+      <span class="fw-semibold">Back to Organizations</span>
+    </button>
 
     <!-- Header -->
-    <div v-if="organization" class="row mb-5 justify-content-center">
-      <div class="col-lg-10">
-        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-          <div>
-            <h1 class="display-5 fw-bold mb-0">{{ organization.name }}</h1>
-            <p class="text-muted lead mb-0">Organization Management</p>
-          </div>
-          <div v-if="isOwner" class="d-flex gap-2 flex-shrink-0">
-            <button
-              @click="handleOpenEditModal"
-              class="btn btn-primary rounded-pill px-3 px-md-4 py-2 fw-bold shadow-sm"
-            >
-              <i class="bi bi-pencil-square me-1 me-md-2"></i
-              ><span class="d-none d-sm-inline">Edit</span>
-            </button>
-            <button
-              @click="handleOpenDeleteModal"
-              class="btn btn-theme-danger rounded-pill px-3 px-md-4 py-2 fw-bold shadow-sm"
-            >
-              <i class="bi bi-trash me-1 me-md-2"></i><span class="d-none d-sm-inline">Delete</span>
-            </button>
-          </div>
-        </div>
+    <div v-if="organization" class="d-flex align-items-center gap-3 mb-4">
+      <div class="avatar-circle avatar-org-hero">
+        <i class="bi bi-building"></i>
       </div>
-    </div>
-
-    <!-- Error -->
-    <div v-if="errorMessage" class="row justify-content-center">
-      <div class="col-lg-10">
-        <div class="alert alert-danger d-flex align-items-center" role="alert">
-          <i class="bi bi-exclamation-triangle-fill me-2"></i>
-          <div>{{ errorMessage }}</div>
-        </div>
-        <button @click="router.push('/access-management')" class="btn btn-outline-primary mt-3">
-          <i class="bi bi-arrow-left me-2"></i> Back to Access Management
+      <div class="flex-grow-1 min-w-0">
+        <h2 class="mb-0 fw-bold fs-5 text-truncate">{{ organization.name }}</h2>
+        <p class="text-muted mb-0 access-subtext">Organization management</p>
+      </div>
+      <div v-if="isOwner" class="d-flex gap-2 flex-shrink-0">
+        <button
+          class="btn btn-outline-secondary btn-icon rounded-circle"
+          title="Edit organization"
+          @click="handleOpenEditModal"
+        >
+          <i class="bi bi-pencil-square"></i>
+        </button>
+        <button
+          class="btn btn-outline-danger btn-icon rounded-circle"
+          title="Delete organization"
+          @click="handleOpenDeleteModal"
+        >
+          <i class="bi bi-trash"></i>
         </button>
       </div>
     </div>
 
+    <!-- Error -->
+    <div v-if="errorMessage">
+      <div class="alert alert-danger d-flex align-items-center" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+        <div>{{ errorMessage }}</div>
+      </div>
+      <button class="btn btn-outline-primary mt-3" @click="emit('back')">
+        <i class="bi bi-arrow-left me-2"></i> Back to Organizations
+      </button>
+    </div>
+
     <!-- Loading -->
-    <div v-if="isLoading && !organization" class="row justify-content-center">
-      <div class="col-lg-10 text-center py-5">
-        <div class="spinner-border text-primary" role="status">
-          <span class="visually-hidden">Loading...</span>
-        </div>
+    <div v-if="isLoading && !organization" class="text-center py-5">
+      <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
       </div>
     </div>
 
-    <div v-if="organization" class="row justify-content-center g-4">
-      <div class="col-lg-10">
-        <!-- Remove member error -->
-        <div
-          v-if="removeError"
-          class="alert alert-danger d-flex align-items-center mb-3 py-2"
-          role="alert"
+    <div v-if="organization">
+      <!-- Remove member error -->
+      <div
+        v-if="removeError"
+        class="alert alert-danger d-flex align-items-center mb-3 py-2"
+        role="alert"
+      >
+        <i class="bi bi-exclamation-triangle-fill me-2"></i>{{ removeError }}
+      </div>
+
+      <!-- Members section -->
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h5 class="discord-group-heading mb-0">Members</h5>
+          <p class="text-muted mb-0 access-subtext">People with access to this organization</p>
+        </div>
+        <button
+          v-if="isAdminOrOwner"
+          class="btn btn-sm btn-outline-primary rounded-pill btn-compact"
+          @click="openInviteModal"
         >
-          <i class="bi bi-exclamation-triangle-fill me-2"></i>{{ removeError }}
-        </div>
+          <i class="bi bi-person-plus me-1"></i> Invite member
+        </button>
+      </div>
 
-        <!-- Members section -->
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h4 class="mb-0 d-flex align-items-center">
-            <span class="badge bg-dark me-3 p-2"><i class="bi bi-people"></i></span>
-            Members
-          </h4>
-          <button
-            v-if="isAdminOrOwner"
-            class="btn btn-sm btn-outline-primary rounded-pill px-3"
-            @click="openInviteModal"
+      <div class="card border-0 shadow-sm mb-3">
+        <div class="list-group list-group-flush rounded-3">
+          <div
+            v-for="member in organization.members"
+            :key="member.user_id"
+            class="list-group-item border-0 px-3 py-2"
           >
-            <i class="bi bi-person-plus me-1"></i> Invite member
-          </button>
+            <div class="d-flex align-items-center justify-content-between gap-3">
+              <div class="d-flex align-items-center gap-3 min-w-0">
+                <div
+                  class="avatar-circle avatar-circle-sm"
+                  :class="member.role === 'owner' ? 'avatar-owner' : 'avatar-member'"
+                >
+                  {{
+                    member.user.name?.charAt(0)?.toUpperCase() ||
+                    member.user.email?.charAt(0)?.toUpperCase() ||
+                    '?'
+                  }}
+                </div>
+                <div class="min-w-0">
+                  <div class="fw-semibold text-truncate">{{ member.user.name || 'Unknown' }}</div>
+                  <div class="text-muted small text-truncate">
+                    {{ member.user.email || 'No email' }}
+                  </div>
+                </div>
+              </div>
+              <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                <div
+                  v-if="updatingRoleUserId === String(member.user_id)"
+                  class="spinner-border spinner-border-sm text-primary"
+                ></div>
+                <span
+                  v-if="member.role === 'owner'"
+                  class="badge bg-dark text-capitalize px-2 py-1"
+                  >Owner</span
+                >
+                <select
+                  v-else-if="isOwner"
+                  class="form-select form-select-sm role-select role-select-sm"
+                  :value="member.role"
+                  :disabled="updatingRoleUserId === String(member.user_id)"
+                  @change="
+                    handleMemberRoleChange(
+                      String(member.user_id),
+                      ($event.target as HTMLSelectElement).value,
+                    )
+                  "
+                >
+                  <option value="admin">Admin</option>
+                  <option value="member">Member</option>
+                </select>
+                <span v-else class="badge bg-light text-dark border text-capitalize">{{
+                  member.role
+                }}</span>
+                <button
+                  v-if="isOwner && member.role !== 'owner'"
+                  class="btn btn-sm btn-outline-danger rounded-pill px-2 py-1"
+                  :disabled="removingUserId === String(member.user_id)"
+                  style="font-size: 0.75rem"
+                  @click="handleRemoveMember(String(member.user_id))"
+                >
+                  <span
+                    v-if="removingUserId === String(member.user_id)"
+                    class="spinner-border spinner-border-sm"
+                  ></span>
+                  <i v-else class="bi bi-person-dash"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pending Invitations section (admin/owner only) -->
+      <template v-if="isAdminOrOwner">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <div>
+            <h5 class="discord-group-heading mb-0">Pending Invitations</h5>
+            <p class="text-muted mb-0 access-subtext">Invitations sent that are awaiting a response</p>
+          </div>
         </div>
 
-        <div class="card border-0 shadow-sm mb-4">
+        <div v-if="isLoadingInvites" class="text-center py-3">
+          <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+        </div>
+
+        <div
+          v-else-if="pendingInvites.length === 0"
+          class="card border-dashed text-center bg-transparent p-3 mb-3"
+        >
+          <p class="text-muted small mb-0">No pending invitations.</p>
+        </div>
+
+        <div v-else class="card border-0 shadow-sm mb-3">
           <div class="list-group list-group-flush rounded-3">
             <div
-              v-for="member in organization.members"
-              :key="member.user_id"
-              class="list-group-item border-0 p-3"
+              v-for="invite in pendingInvites"
+              :key="invite.id"
+              class="list-group-item border-0 px-3 py-2"
             >
               <div class="d-flex align-items-center justify-content-between gap-3">
                 <div class="d-flex align-items-center gap-3 min-w-0">
-                  <div
-                    class="avatar-circle"
-                    :class="member.role === 'owner' ? 'avatar-owner' : 'avatar-member'"
-                  >
-                    {{
-                      member.user.name?.charAt(0)?.toUpperCase() ||
-                      member.user.email?.charAt(0)?.toUpperCase() ||
-                      '?'
-                    }}
+                  <div class="avatar-circle avatar-circle-sm avatar-member">
+                    {{ invite.invitee?.email?.charAt(0)?.toUpperCase() ?? '?' }}
                   </div>
                   <div class="min-w-0">
-                    <div class="fw-semibold text-truncate">{{ member.user.name || 'Unknown' }}</div>
-                    <div class="text-muted small text-truncate">
-                      {{ member.user.email || 'No email' }}
+                    <div class="fw-semibold text-truncate">
+                      {{ invite.invitee?.email ?? 'Unknown' }}
+                    </div>
+                    <div class="text-muted small">
+                      Invited as
+                      <span class="badge bg-light text-dark border ms-1 text-capitalize">{{
+                        invite.role
+                      }}</span>
                     </div>
                   </div>
                 </div>
                 <div class="d-flex align-items-center gap-2 flex-shrink-0">
-                  <div
-                    v-if="updatingRoleUserId === String(member.user_id)"
-                    class="spinner-border spinner-border-sm text-primary"
-                  ></div>
-                  <span
-                    v-if="member.role === 'owner'"
-                    class="badge bg-dark text-capitalize px-3 py-2"
-                    >Owner</span
-                  >
-                  <select
-                    v-else-if="isOwner"
-                    class="form-select form-select-sm role-select"
-                    :value="member.role"
-                    :disabled="updatingRoleUserId === String(member.user_id)"
-                    @change="
-                      handleMemberRoleChange(
-                        String(member.user_id),
-                        ($event.target as HTMLSelectElement).value,
-                      )
-                    "
-                  >
-                    <option value="admin">Admin</option>
-                    <option value="member">Member</option>
-                  </select>
-                  <span v-else class="badge bg-light text-dark border text-capitalize">{{
-                    member.role
-                  }}</span>
+                  <span class="badge bg-warning-subtle text-warning border border-warning-subtle">
+                    Pending
+                  </span>
                   <button
-                    v-if="isOwner && member.role !== 'owner'"
                     class="btn btn-sm btn-outline-danger rounded-pill px-2 py-1"
-                    :disabled="removingUserId === String(member.user_id)"
                     style="font-size: 0.75rem"
-                    @click="handleRemoveMember(String(member.user_id))"
+                    :disabled="cancelingInviteId === invite.id"
+                    @click="handleCancelInvite(invite.id)"
                   >
-                    <span
-                      v-if="removingUserId === String(member.user_id)"
-                      class="spinner-border spinner-border-sm"
-                    ></span>
-                    <i v-else class="bi bi-person-dash"></i>
+                    <span v-if="cancelingInviteId === invite.id" class="spinner-border spinner-border-sm"></span>
+                    <i v-else class="bi bi-x-lg"></i>
                   </button>
                 </div>
               </div>
             </div>
           </div>
         </div>
-
-        <!-- Pending Invitations section (admin/owner only) -->
-        <template v-if="isAdminOrOwner">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h4 class="mb-0 d-flex align-items-center">
-              <span class="badge bg-secondary me-3 p-2"><i class="bi bi-envelope"></i></span>
-              Pending Invitations
-            </h4>
-          </div>
-
-          <div v-if="isLoadingInvites" class="text-center py-3">
-            <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
-          </div>
-
-          <div
-            v-else-if="pendingInvites.length === 0"
-            class="card border-dashed p-4 text-center bg-transparent mb-4"
-          >
-            <p class="text-muted small mb-0">No pending invitations.</p>
-          </div>
-
-          <div v-else class="card border-0 shadow-sm mb-4">
-            <div class="list-group list-group-flush rounded-3">
-              <div
-                v-for="invite in pendingInvites"
-                :key="invite.id"
-                class="list-group-item border-0 p-3"
-              >
-                <div class="d-flex align-items-center justify-content-between gap-3">
-                  <div class="d-flex align-items-center gap-3 min-w-0">
-                    <div class="avatar-circle avatar-member">
-                      {{ invite.invitee?.email?.charAt(0)?.toUpperCase() ?? '?' }}
-                    </div>
-                    <div class="min-w-0">
-                      <div class="fw-semibold text-truncate">
-                        {{ invite.invitee?.email ?? 'Unknown' }}
-                      </div>
-                      <div class="text-muted small">
-                        Invited as
-                        <span class="badge bg-light text-dark border ms-1 text-capitalize">{{
-                          invite.role
-                        }}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="d-flex align-items-center gap-2 flex-shrink-0">
-                    <span class="badge bg-warning-subtle text-warning border border-warning-subtle">
-                      Pending
-                    </span>
-                    <button
-                      class="btn btn-sm btn-outline-danger rounded-pill px-2 py-1"
-                      style="font-size: 0.75rem"
-                      :disabled="cancelingInviteId === invite.id"
-                      @click="handleCancelInvite(invite.id)"
-                    >
-                      <span v-if="cancelingInviteId === invite.id" class="spinner-border spinner-border-sm"></span>
-                      <i v-else class="bi bi-x-lg"></i>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </template>
-      </div>
+      </template>
     </div>
 
     <!-- ── Invite member modal ── -->
@@ -702,12 +684,6 @@ const handleRemoveMember = async (userId: string) => {
 </template>
 
 <style scoped>
-.breadcrumb-item + .breadcrumb-item::before {
-  content: '›';
-  font-size: 1.2rem;
-  line-height: 1;
-}
-
 .back-link {
   transition: all 0.2s ease;
   opacity: 0.8;
@@ -730,6 +706,24 @@ const handleRemoveMember = async (userId: string) => {
   font-weight: 700;
   font-size: 0.9rem;
   flex-shrink: 0;
+}
+
+.avatar-org-hero {
+  width: 42px;
+  height: 42px;
+  font-size: 1.3rem;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
 }
 
 .avatar-owner {

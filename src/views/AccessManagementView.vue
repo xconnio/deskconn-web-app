@@ -1,17 +1,27 @@
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, watch, onUnmounted, computed } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useMachinesStore } from '../stores/machines'
 import { authService } from '../services/authService'
 import type { Organization, DesktopInvite, OrganizationInvite } from '../types'
+import MachineAccessView from './MachineAccessView.vue'
+import OrganizationDetailView from './OrganizationDetailView.vue'
 
-const router = useRouter()
 const authStore = useAuthStore()
 const machinesStore = useMachinesStore()
 
-type Tab = 'machines' | 'organizations' | 'invitations'
-const activeTab = ref<Tab>('machines')
+// Only ever rendered inside AccountPanel's popup — drills into a machine's
+// or organization's detail page in place instead of navigating to a
+// separate route (which would just close the popup).
+const selectedMachineId = ref<string | null>(null)
+function openMachineAccess(id: string) {
+  selectedMachineId.value = id
+}
+
+const selectedOrgId = ref<string | null>(null)
+function openOrgDetail(id: string) {
+  selectedOrgId.value = id
+}
 
 // --- Organizations ---
 const organizations = ref<Organization[]>([])
@@ -121,15 +131,6 @@ const handleCreateOrg = async () => {
   }
 }
 
-// --- Tab switching with refetch ---
-const setTab = (tab: Tab) => {
-  activeTab.value = tab
-  if (!authStore.session) return
-  if (tab === 'machines') machinesStore.fetchMachines(authStore.session, true)
-  if (tab === 'organizations') fetchOrganizations()
-  if (tab === 'invitations') { fetchInvitations(); fetchOrgInvitations() }
-}
-
 // --- Respond to org invite ---
 const handleRespondOrg = async (invite: OrganizationInvite, status: 'accepted' | 'rejected') => {
   if (!authStore.session) return
@@ -165,168 +166,111 @@ const handleRespond = async (invite: DesktopInvite, status: 'accepted' | 'reject
 </script>
 
 <template>
-  <div class="container py-3 py-md-5 fade-in-up">
-    <div class="row justify-content-center mb-5">
+  <div class="container py-0">
+    <div class="row justify-content-center">
       <div class="col-lg-10">
 
-        <!-- Header -->
-        <div class="d-flex justify-content-between align-items-center mb-4">
-          <h3 class="mb-0 d-flex align-items-center">
-            <span class="badge bg-secondary me-3 p-2">
-              <i class="bi bi-shield-lock"></i>
-            </span>
-            Access Management
-          </h3>
-        </div>
+        <template v-if="!selectedMachineId && !selectedOrgId">
 
-        <!-- Tabs -->
-        <ul class="nav nav-tabs mb-4" role="tablist">
-          <li class="nav-item">
-            <button
-              class="nav-link"
-              :class="{ active: activeTab === 'machines' }"
-              @click="setTab('machines')"
-            >
-              <i class="bi bi-pc-display me-2"></i>Machines
-              <span class="badge rounded-pill ms-2" :class="accessibleMachines.length ? 'bg-secondary' : 'bg-light text-muted'">
-                {{ accessibleMachines.length }}
-              </span>
-            </button>
-          </li>
-          <li class="nav-item">
-            <button
-              class="nav-link"
-              :class="{ active: activeTab === 'organizations' }"
-              @click="setTab('organizations')"
-            >
-              <i class="bi bi-building me-2"></i>Organizations
-              <span class="badge rounded-pill ms-2" :class="organizations.length ? 'bg-secondary' : 'bg-light text-muted'">
-                {{ organizations.length }}
-              </span>
-            </button>
-          </li>
-          <li class="nav-item">
-            <button
-              class="nav-link"
-              :class="{ active: activeTab === 'invitations' }"
-              @click="setTab('invitations')"
-            >
-              <i class="bi bi-envelope me-2"></i>Invitations
-              <span
-                class="badge rounded-pill ms-2"
-                :class="(invitations.length + orgInvitations.length) ? 'bg-primary' : 'bg-light text-muted'"
+        <!-- ── Machines group ── -->
+        <div>
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <i class="bi bi-pc-display text-muted"></i>
+            <h6 class="discord-group-heading mb-0">Machines</h6>
+          </div>
+          <p class="text-muted small mb-3">Manage who can access your machines</p>
+
+          <div v-if="machinesStore.isLoadingDesktops" class="text-center py-3">
+            <div class="spinner-border spinner-border-sm text-primary" role="status">
+              <span class="visually-hidden">Loading...</span>
+            </div>
+          </div>
+
+          <div v-else class="card border-0 shadow-sm">
+            <ul class="list-group list-group-flush rounded-3">
+              <li
+                v-for="m in accessibleMachines"
+                :key="m.id"
+                class="list-group-item border-0 px-3 py-2 access-row"
+                @click="openMachineAccess(m.id)"
               >
-                {{ invitations.length + orgInvitations.length }}
-              </span>
-            </button>
-          </li>
-        </ul>
-
-        <!-- ── Machines tab ── -->
-        <div v-if="activeTab === 'machines'">
-          <p class="text-muted small mb-4">Manage who can access your machines</p>
-
-          <div v-if="machinesStore.isLoadingDesktops" class="row g-4">
-            <div v-for="i in 3" :key="i" class="col-md-4">
-              <div class="card h-100 border-0 shadow-sm opacity-50">
-                <div class="card-body p-4 text-center">
-                  <div class="spinner-border text-primary" role="status">
-                    <span class="visually-hidden">Loading...</span>
+                <div class="d-flex align-items-center gap-3">
+                  <div class="avatar-circle avatar-machine">{{ m.icon }}</div>
+                  <div class="flex-grow-1 min-w-0">
+                    <div class="fw-semibold text-truncate">{{ m.name }}</div>
                   </div>
+                  <span
+                    class="badge bg-light border text-capitalize flex-shrink-0"
+                    :class="m.role === 'owner' ? 'text-success border-success-subtle' : 'text-primary border-primary-subtle'"
+                  >{{ m.role }}</span>
+                  <i class="bi bi-chevron-right text-muted flex-shrink-0"></i>
                 </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-else class="row g-4">
-            <div v-for="m in accessibleMachines" :key="m.id" class="col-md-4">
-              <div class="card h-100 border-0 shadow-sm card-hover-static">
-                <div class="card-body p-4 d-flex flex-column">
-                  <div class="d-flex align-items-center mb-3">
-                    <span class="fs-2 me-3">{{ m.icon }}</span>
-                    <div>
-                      <h5 class="card-title mb-0 text-dark">{{ m.name }}</h5>
-                      <small
-                        class="badge bg-light border text-capitalize"
-                        :class="m.role === 'owner' ? 'text-success border-success-subtle' : 'text-primary border-primary-subtle'"
-                      >{{ m.role }}</small>
-                    </div>
-                  </div>
-                  <div class="mt-auto">
-                    <button
-                      class="btn btn-outline-primary btn-sm rounded-pill w-100"
-                      @click="router.push(`/access-management/machines/${m.id}`)"
-                    >
-                      <i class="bi bi-people me-1"></i> Manage Access
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="accessibleMachines.length === 0" class="col-12">
-              <div class="card border-dashed p-5 text-center bg-transparent">
-                <p class="text-muted mb-0">You don't have access to any machines yet.</p>
-              </div>
-            </div>
+              </li>
+              <li v-if="accessibleMachines.length === 0" class="list-group-item border-0 text-center text-muted py-4 small">
+                You don't have access to any machines yet.
+              </li>
+            </ul>
           </div>
         </div>
 
-        <!-- ── Organizations tab ── -->
-        <div v-if="activeTab === 'organizations'">
-          <div class="d-flex justify-content-between align-items-center mb-4">
+        <hr class="access-section-divider" />
+
+        <!-- ── Organizations group ── -->
+        <div>
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <i class="bi bi-building text-muted"></i>
+            <h6 class="discord-group-heading mb-0">Organizations</h6>
+          </div>
+          <div class="d-flex justify-content-between align-items-center mb-3">
             <p class="text-muted small mb-0">Create and manage your organizations</p>
             <button
-              class="btn btn-primary btn-sm rounded-pill px-3 shadow-none no-underline-hover"
+              class="btn btn-primary btn-sm rounded-pill btn-compact shadow-none no-underline-hover"
               @click="showCreateOrgModal = true"
             >
               <i class="bi bi-plus-lg me-1"></i> Add New
             </button>
           </div>
 
-          <div v-if="isLoadingOrgs" class="row g-4">
-            <div v-for="i in 3" :key="i" class="col-md-4">
-              <div class="card h-100 border-0 shadow-sm opacity-50">
-                <div class="card-body p-4 text-center">
-                  <div class="spinner-border text-primary" role="status">
-                    <span class="visually-hidden">Loading...</span>
-                  </div>
-                </div>
-              </div>
+          <div v-if="isLoadingOrgs" class="text-center py-3">
+            <div class="spinner-border spinner-border-sm text-primary" role="status">
+              <span class="visually-hidden">Loading...</span>
             </div>
           </div>
 
-          <div v-else class="row g-4">
-            <div v-for="org in organizations" :key="org.id" class="col-md-4">
-              <router-link :to="`/organizations/${org.id}`" class="text-decoration-none">
-                <div class="card h-100 border-0 shadow-sm card-hover">
-                  <div class="card-body p-4">
-                    <div class="d-flex align-items-center mb-3">
-                      <span class="fs-2 me-3">🏢</span>
-                      <div>
-                        <h5 class="card-title mb-0 text-dark">{{ org.name }}</h5>
-                      </div>
-                    </div>
-                    <div class="mt-auto d-flex justify-content-between align-items-center">
-                      <span class="badge bg-light text-primary rounded-pill">View Details</span>
-                      <i class="bi bi-chevron-right text-muted"></i>
-                    </div>
+          <div v-else class="card border-0 shadow-sm">
+            <ul class="list-group list-group-flush rounded-3">
+              <li
+                v-for="org in organizations"
+                :key="org.id"
+                class="list-group-item border-0 px-3 py-2 access-row"
+                @click="openOrgDetail(org.id)"
+              >
+                <div class="d-flex align-items-center gap-3">
+                  <div class="avatar-circle avatar-org">
+                    <i class="bi bi-building"></i>
                   </div>
+                  <div class="flex-grow-1 min-w-0">
+                    <div class="fw-semibold text-truncate">{{ org.name }}</div>
+                  </div>
+                  <i class="bi bi-chevron-right text-muted flex-shrink-0"></i>
                 </div>
-              </router-link>
-            </div>
-
-            <div v-if="organizations.length === 0" class="col-12">
-              <div class="card border-dashed p-5 text-center bg-transparent">
-                <p class="text-muted mb-0">No organizations found. Create your first one!</p>
-              </div>
-            </div>
+              </li>
+              <li v-if="organizations.length === 0" class="list-group-item border-0 text-center text-muted py-4 small">
+                No organizations found. Create your first one!
+              </li>
+            </ul>
           </div>
         </div>
 
-        <!-- ── Invitations tab ── -->
-        <div v-if="activeTab === 'invitations'">
-          <p class="text-muted small mb-4">Pending invitations to machines and organizations</p>
+        <hr class="access-section-divider" />
+
+        <!-- ── Invitations group ── -->
+        <div>
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <i class="bi bi-envelope text-muted"></i>
+            <h6 class="discord-group-heading mb-0">Invitations</h6>
+          </div>
+          <p class="text-muted small mb-3">Pending invitations to machines and organizations</p>
 
           <!-- Machine invitations -->
           <h6 class="fw-semibold text-muted text-uppercase mb-2" style="font-size: 0.75rem; letter-spacing: 0.05em;">
@@ -341,16 +285,16 @@ const handleRespond = async (invite: DesktopInvite, status: 'accepted' | 'reject
             <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
           </div>
 
-          <div v-else-if="invitations.length === 0" class="card border-dashed p-4 text-center bg-transparent mb-4">
+          <div v-else-if="invitations.length === 0" class="card border-dashed p-3 text-center bg-transparent mb-3">
             <p class="text-muted small mb-0">No pending machine invitations.</p>
           </div>
 
-          <div v-else class="card border-0 shadow-sm mb-4">
+          <div v-else class="card border-0 shadow-sm mb-3">
             <div class="list-group list-group-flush rounded-3">
-              <div v-for="invite in invitations" :key="invite.id" class="list-group-item border-0 p-4">
+              <div v-for="invite in invitations" :key="invite.id" class="list-group-item border-0 px-3 py-2">
                 <div class="d-flex align-items-center justify-content-between gap-3 flex-wrap">
                   <div class="d-flex align-items-center gap-3 min-w-0">
-                    <div class="invite-icon">
+                    <div class="invite-icon invite-icon-sm">
                       <i class="bi bi-pc-display fs-5 text-primary"></i>
                     </div>
                     <div class="min-w-0">
@@ -397,16 +341,16 @@ const handleRespond = async (invite: DesktopInvite, status: 'accepted' | 'reject
             <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
           </div>
 
-          <div v-else-if="orgInvitations.length === 0" class="card border-dashed p-4 text-center bg-transparent mb-4">
+          <div v-else-if="orgInvitations.length === 0" class="card border-dashed p-3 text-center bg-transparent mb-3">
             <p class="text-muted small mb-0">No pending organization invitations.</p>
           </div>
 
-          <div v-else class="card border-0 shadow-sm mb-4">
+          <div v-else class="card border-0 shadow-sm mb-3">
             <div class="list-group list-group-flush rounded-3">
-              <div v-for="invite in orgInvitations" :key="invite.id" class="list-group-item border-0 p-4">
+              <div v-for="invite in orgInvitations" :key="invite.id" class="list-group-item border-0 px-3 py-2">
                 <div class="d-flex align-items-center justify-content-between gap-3 flex-wrap">
                   <div class="d-flex align-items-center gap-3 min-w-0">
-                    <div class="invite-icon">
+                    <div class="invite-icon invite-icon-sm">
                       <i class="bi bi-building fs-5 text-primary"></i>
                     </div>
                     <div class="min-w-0">
@@ -439,6 +383,23 @@ const handleRespond = async (invite: DesktopInvite, status: 'accepted' | 'reject
             </div>
           </div>
         </div>
+
+        </template>
+
+        <MachineAccessView
+          v-else-if="selectedMachineId"
+          :key="selectedMachineId"
+          :machine-id="selectedMachineId"
+          @back="selectedMachineId = null"
+          @open-org="(id) => { selectedMachineId = null; selectedOrgId = id }"
+        />
+
+        <OrganizationDetailView
+          v-else-if="selectedOrgId"
+          :key="selectedOrgId"
+          :org-id="selectedOrgId"
+          @back="selectedOrgId = null"
+        />
 
       </div>
     </div>
@@ -492,33 +453,6 @@ const handleRespond = async (invite: DesktopInvite, status: 'accepted' | 'reject
 </template>
 
 <style scoped>
-.nav-tabs .nav-link {
-  color: #64748b;
-  border: none;
-  border-bottom: 2px solid transparent;
-  padding: 0.6rem 1rem;
-  font-weight: 500;
-}
-
-.nav-tabs .nav-link.active {
-  color: var(--theme-primary, #0d6efd);
-  border-bottom-color: var(--theme-primary, #0d6efd);
-  background: none;
-}
-
-.nav-tabs {
-  border-bottom: 1px solid #e8ecf0;
-}
-
-.card-hover {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.card-hover:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1) !important;
-}
-
 .card-hover-static {
   transition: box-shadow 0.2s ease;
 }
@@ -543,6 +477,44 @@ const handleRespond = async (invite: DesktopInvite, status: 'accepted' | 'reject
   flex-shrink: 0;
 }
 
+.invite-icon-sm {
+  width: 32px;
+  height: 32px;
+}
+
+.invite-icon-sm i {
+  font-size: 0.85rem;
+}
+
+.avatar-circle {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+
+.avatar-machine {
+  background: #eef2f6;
+}
+
+.avatar-org {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.access-row {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.access-row:hover {
+  background: #f8fafc;
+}
+
 .no-underline-hover:hover {
   text-decoration: none !important;
   background-color: var(--theme-primary-hover) !important;
@@ -551,5 +523,10 @@ const handleRespond = async (invite: DesktopInvite, status: 'accepted' | 'reject
 
 .min-w-0 {
   min-width: 0;
+}
+
+.access-section-divider {
+  margin: 2rem 0;
+  border-color: #e8ecf0;
 }
 </style>

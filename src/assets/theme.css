@@ -216,3 +216,70 @@ a:hover {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Shared sizing for the AccountPanel popup (Account / General Settings /
+   Access Management and its drill-downs) — one definition so every section
+   renders text and controls at the same scale instead of drifting per file. */
+.btn-compact {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.72rem;
+}
+
+.access-subtext {
+  font-size: 0.76rem;
+}
+
+.avatar-circle-sm {
+  width: 30px;
+  height: 30px;
+  font-size: 0.78rem;
+}
+
+.role-select-sm {
+  min-width: 88px;
+  font-size: 0.75rem;
+  padding-top: 0.2rem;
+  padding-bottom: 0.2rem;
+}
+
+.back-link-sm {
+  font-size: 0.85rem;
+}
+
+/* Discord-style field rows for Account / General Settings — label stacked
+   above value, no per-row divider, action button vertically centered.
+   Dividers only sit between groups (see .discord-group-divider). */
+.discord-group-heading {
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 0.5rem;
+}
+
+.discord-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0;
+}
+
+.discord-row-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  margin-bottom: 0.2rem;
+}
+
+.discord-row-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.discord-group-divider {
+  margin: 0.25rem 0 1.25rem;
+  border-color: #e8ecf0;
+}

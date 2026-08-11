@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useMachinesStore } from '../stores/machines'
 import { authService } from '../services/authService'
 import type { DesktopUserAccess, DesktopOrganizationAccess, Organization, DesktopInvite } from '../types'
 import { ApplicationError } from 'xconn'
 
-const route = useRoute()
-const router = useRouter()
+// Only ever rendered as a drill-down inside AccountPanel's popup Machines
+// list — takes `machineId` as a prop and emits `back`/`open-org` instead of
+// routing to a separate page.
+const props = defineProps<{ machineId: string }>()
+const emit = defineEmits<{ back: []; 'open-org': [id: string] }>()
+
 const authStore = useAuthStore()
 const machinesStore = useMachinesStore()
 
-const machineId = route.params.id as string
+const machineId = props.machineId
 
 const machine = computed(() => machinesStore.desktops.find((d) => d.id === machineId))
 
@@ -288,39 +291,44 @@ const userSubtitle = (access: DesktopUserAccess) => {
 </script>
 
 <template>
-  <div class="container py-3 py-md-5 fade-in-up">
+  <div class="container py-0">
     <div v-if="inviteSuccessToast" class="alert alert-success d-flex align-items-center py-2 small position-fixed top-0 start-50 translate-middle-x mt-3 shadow" style="z-index:1100;min-width:260px" role="alert">
       <i class="bi bi-check-circle-fill me-2"></i> Invitation sent successfully!
     </div>
     <div class="row justify-content-center">
-      <div class="col-lg-9">
+      <div class="col-12">
 
-        <!-- Back + breadcrumb -->
-        <router-link
-          to="/access-management"
-          class="btn btn-link text-decoration-none text-muted p-0 d-flex align-items-center back-link mb-3"
+        <!-- Back -->
+        <button
+          type="button"
+          class="btn btn-link text-decoration-none text-muted p-0 d-flex align-items-center back-link back-link-sm mb-3"
+          @click="emit('back')"
         >
-          <i class="bi bi-arrow-left-short fs-2 me-1"></i>
-          <span class="fw-semibold">Back to Access Management</span>
-        </router-link>
+          <i class="bi bi-arrow-left-short fs-4 me-1"></i>
+          <span class="fw-semibold">Back to Machines</span>
+        </button>
 
         <!-- Header -->
-        <div class="d-flex align-items-center gap-3 mb-5">
+        <div class="d-flex align-items-center gap-3 mb-3">
           <span class="machine-hero-icon">🖥️</span>
           <div>
-            <h2 class="mb-0 fw-bold">{{ machine?.name ?? machineId }}</h2>
-            <p class="text-muted mb-0 small">Manage collaborators and team access</p>
+            <h2 class="mb-0 fw-bold fs-5">{{ machine?.name ?? machineId }}</h2>
+            <p class="text-muted mb-0 access-subtext">Manage collaborators and team access</p>
           </div>
         </div>
 
         <!-- ── Collaborators (People) ── -->
-        <section class="mb-5">
+        <section class="mb-4">
           <div class="d-flex justify-content-between align-items-center mb-3">
             <div>
-              <h5 class="mb-0 fw-bold">Collaborators</h5>
-              <p class="text-muted small mb-0">Users who have direct access to this machine</p>
+              <h5 class="discord-group-heading mb-0">Collaborators</h5>
+              <p class="text-muted mb-0 access-subtext">Users who have direct access to this machine</p>
             </div>
-            <button v-if="isAdminOrOwner" class="btn btn-sm btn-outline-primary rounded-pill px-3" @click="openInviteModal">
+            <button
+              v-if="isAdminOrOwner"
+              class="btn btn-sm btn-outline-primary rounded-pill btn-compact"
+              @click="openInviteModal"
+            >
               <i class="bi bi-person-plus me-1"></i> Invite collaborator
             </button>
           </div>
@@ -338,11 +346,11 @@ const userSubtitle = (access: DesktopUserAccess) => {
               <li
                 v-for="access in userAccesses"
                 :key="access.id"
-                class="list-group-item border-0 px-4 py-3 collaborator-row"
+                class="list-group-item border-0 collaborator-row px-3 py-2"
               >
                 <div class="d-flex align-items-center gap-3">
                   <!-- Avatar -->
-                  <div class="avatar-circle" :class="access.role === 'owner' ? 'avatar-owner' : 'avatar-member'">
+                  <div class="avatar-circle avatar-circle-sm" :class="access.role === 'owner' ? 'avatar-owner' : 'avatar-member'">
                     {{ avatarInitial(access.user) }}
                   </div>
 
@@ -357,12 +365,12 @@ const userSubtitle = (access: DesktopUserAccess) => {
                   <!-- Role + remove -->
                   <div class="d-flex align-items-center gap-2 flex-shrink-0">
                     <div v-if="updatingUserId === access.id || revokingUserId === access.id" class="spinner-border spinner-border-sm text-primary"></div>
-                    <span v-if="access.role === 'owner'" class="badge bg-dark rounded-pill px-3 py-2">
+                    <span v-if="access.role === 'owner'" class="badge bg-dark rounded-pill px-2 py-1">
                       Owner
                     </span>
                     <template v-else-if="isAdminOrOwner">
                       <select
-                        class="form-select form-select-sm role-select"
+                        class="form-select form-select-sm role-select role-select-sm"
                         :value="access.role"
                         :disabled="updatingUserId === access.id || revokingUserId === access.id"
                         @change="handleUserRoleChange(access, ($event.target as HTMLSelectElement).value)"
@@ -390,11 +398,11 @@ const userSubtitle = (access: DesktopUserAccess) => {
         </section>
 
         <!-- ── Pending Invitations ── -->
-        <section v-if="isAdminOrOwner" class="mb-5">
+        <section v-if="isAdminOrOwner" class="mb-4">
           <div class="d-flex justify-content-between align-items-center mb-3">
             <div>
-              <h5 class="mb-0 fw-bold">Pending Invitations</h5>
-              <p class="text-muted small mb-0">Invitations you have sent that are awaiting a response</p>
+              <h5 class="discord-group-heading mb-0">Pending Invitations</h5>
+              <p class="text-muted mb-0 access-subtext">Invitations you have sent that are awaiting a response</p>
             </div>
           </div>
 
@@ -411,10 +419,10 @@ const userSubtitle = (access: DesktopUserAccess) => {
               <li
                 v-for="invite in pendingInvites"
                 :key="invite.id"
-                class="list-group-item border-0 px-4 py-3"
+                class="list-group-item border-0 px-3 py-2"
               >
                 <div class="d-flex align-items-center gap-3">
-                  <div class="avatar-circle avatar-member">
+                  <div class="avatar-circle avatar-circle-sm avatar-member">
                     {{ invite.invitee_user?.name?.charAt(0)?.toUpperCase() ?? invite.invitee_user?.email?.charAt(0)?.toUpperCase() ?? '?' }}
                   </div>
                   <div class="flex-grow-1 min-w-0">
@@ -442,13 +450,17 @@ const userSubtitle = (access: DesktopUserAccess) => {
         </section>
 
         <!-- ── Teams (Organizations) ── -->
-        <section class="mb-5">
+        <section class="mb-4">
           <div class="d-flex justify-content-between align-items-center mb-3">
             <div>
-              <h5 class="mb-0 fw-bold">Teams</h5>
-              <p class="text-muted small mb-0">Organizations with access — all their members inherit access</p>
+              <h5 class="discord-group-heading mb-0">Teams</h5>
+              <p class="text-muted mb-0 access-subtext">Organizations with access — all their members inherit access</p>
             </div>
-            <button v-if="isAdminOrOwner" class="btn btn-sm btn-outline-primary rounded-pill px-3" @click="openOrgModal">
+            <button
+              v-if="isAdminOrOwner"
+              class="btn btn-sm btn-outline-primary rounded-pill btn-compact"
+              @click="openOrgModal"
+            >
               <i class="bi bi-building-add me-1"></i> Add a team
             </button>
           </div>
@@ -466,11 +478,11 @@ const userSubtitle = (access: DesktopUserAccess) => {
               <li
                 v-for="access in orgAccesses"
                 :key="access.id"
-                class="list-group-item border-0 px-4 py-3 collaborator-row org-row"
-                @click="router.push(`/access-management/machines/${machineId}/orgs/${access.id}`)"
+                class="list-group-item border-0 collaborator-row org-row px-3 py-2"
+                @click="emit('open-org', access.organization_id)"
               >
                 <div class="d-flex align-items-center gap-3">
-                  <div class="avatar-circle avatar-org">
+                  <div class="avatar-circle avatar-circle-sm avatar-org">
                     <i class="bi bi-building text-primary"></i>
                   </div>
                   <div class="flex-grow-1 min-w-0">
@@ -661,7 +673,7 @@ const userSubtitle = (access: DesktopUserAccess) => {
 }
 
 .machine-hero-icon {
-  font-size: 2.4rem;
+  font-size: 1.5rem;
   line-height: 1;
 }
 

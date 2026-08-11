@@ -6,8 +6,8 @@ import { useAuthStore } from './stores/auth'
 import { useMachinesStore } from './stores/machines'
 import { useDesktopSessionsStore } from './stores/desktopSessions'
 import { useSessionCacheStore } from './stores/sessionCache'
-import { useMachinesOverviewStore } from './stores/machinesOverview'
-import MachinesOverview from './components/MachinesOverview.vue'
+import { useAccountPanelStore } from './stores/accountPanel'
+import AccountPanel from './components/AccountPanel.vue'
 
 const DesktopSessionHost = defineAsyncComponent(() => import('./components/DesktopSessionHost.vue'))
 
@@ -17,7 +17,7 @@ const authStore = useAuthStore()
 const machinesStore = useMachinesStore()
 const desktopSessionsStore = useDesktopSessionsStore()
 const sessionCacheStore = useSessionCacheStore()
-const machinesOverviewStore = useMachinesOverviewStore()
+const accountPanelStore = useAccountPanelStore()
 
 const activeRealm = computed(() =>
   route.name === 'desktop-launcher' ? (route.params.realm as string) : null,
@@ -55,11 +55,6 @@ const toggleSidebar = () => {
 const handleLogout = () => {
   authStore.logout()
   router.push('/login')
-}
-
-const isActive = (path: string) => {
-  if (path === '/') return route.path === '/'
-  return route.path.startsWith(path)
 }
 
 const isMachinesRoute = () =>
@@ -172,27 +167,27 @@ onUnmounted(() => {
 
       <!-- Footer: settings link + profile link + logout -->
       <div class="sidebar-footer">
-        <router-link
-          to="/settings"
+        <button
           class="sidebar-item"
-          :class="{ active: isActive('/settings') }"
+          :class="{ active: accountPanelStore.isOpen }"
           :title="sidebarCollapsed ? 'Settings' : ''"
+          @click="accountPanelStore.open('general')"
         >
           <i class="bi bi-gear"></i>
           <span v-if="!sidebarCollapsed">Settings</span>
-        </router-link>
+        </button>
 
-        <router-link
-          to="/profile"
+        <button
           class="sidebar-item sidebar-user"
-          :class="{ active: isActive('/profile') }"
+          :class="{ active: accountPanelStore.isOpen }"
           :title="sidebarCollapsed ? 'Profile' : ''"
+          @click="accountPanelStore.open('account')"
         >
           <i class="bi bi-person-circle"></i>
           <span v-if="!sidebarCollapsed" class="sidebar-user-label">
             Hello, {{ authStore.user?.name || authStore.user?.email }}
           </span>
-        </router-link>
+        </button>
 
         <button
           class="sidebar-item sidebar-logout"
@@ -215,12 +210,12 @@ onUnmounted(() => {
         v-for="r in renderedRealms"
         :key="r"
         :realm="r"
-        :active="r === activeRealm && !machinesOverviewStore.isOpen"
+        :active="r === activeRealm"
         v-show="r === activeRealm"
       />
     </main>
 
-    <MachinesOverview v-if="authStore.isAuthenticated" />
+    <AccountPanel v-if="authStore.isAuthenticated" />
 
   </div>
 </template>

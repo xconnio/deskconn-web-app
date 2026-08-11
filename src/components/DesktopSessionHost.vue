@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick, markRaw, type Component } from 'vue'
-import { useRouter } from 'vue-router'
 import { type Session } from 'xconn'
+import { requestMachinesPicker } from '@/router/index'
 
 import { useMachinesStore } from '@/stores/machines'
 import { useSettingsStore } from '@/stores/settings'
@@ -25,14 +25,11 @@ import { downloadFile, type DownloadProgressState } from '@/utils/fileDownload'
 
 const props = defineProps<{ realm: string; active: boolean }>()
 
-const router = useRouter()
 const machinesStore = useMachinesStore()
 const settingsStore = useSettingsStore()
 const sessionCacheStore = useSessionCacheStore()
 const desktopSessionsStore = useDesktopSessionsStore()
 const machinesOverviewStore = useMachinesOverviewStore()
-
-const close = () => router.push('/')
 
 const desktopName = computed(() => machinesStore.desktops.find((d) => d.realm === props.realm)?.name ?? props.realm)
 
@@ -80,9 +77,7 @@ function captureContainerSize() {
   lastKnownSize.value = { width: el.clientWidth, height: el.clientHeight }
 }
 
-const previewTarget = computed(() =>
-  machinesOverviewStore.isOpen ? machinesOverviewStore.previewTargets[props.realm] : undefined,
-)
+const previewTarget = computed(() => machinesOverviewStore.previewTargets[props.realm])
 
 const previewScale = computed(() => {
   const { width, height } = lastKnownSize.value
@@ -647,7 +642,6 @@ onUnmounted(() => {
         @launch="handleLaunch"
         @activate="onActivateWindow"
         @close="onCloseWindow"
-        @exit="close"
       />
     </div>
     </Teleport>
@@ -662,7 +656,7 @@ onUnmounted(() => {
     <div v-if="isDisconnected" class="disconnected-overlay">
       <i class="bi bi-wifi-off"></i>
       <p>Can't connect to {{ desktopName }}.</p>
-      <button type="button" class="overlay-btn" @click="close">Dashboard</button>
+      <button type="button" class="overlay-btn" @click="requestMachinesPicker()">Switch Machine</button>
     </div>
   </div>
 </template>

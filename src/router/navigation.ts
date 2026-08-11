@@ -1,4 +1,5 @@
 import router from './index'
+import { useSettingsStore } from '../stores/settings'
 
 export function openFiles(realm: string, desktopName?: string, initialPath?: string) {
   router.push({
@@ -12,6 +13,7 @@ export function openFiles(realm: string, desktopName?: string, initialPath?: str
 }
 
 export function openLauncher(realm: string, desktopName?: string, notSupported?: string) {
+  useSettingsStore().setLastRealm(realm)
   router.push({
     name: 'desktop-launcher',
     params: { realm },
