@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, type ComponentPublicInstance } from 'vue'
 import type { AppWindow } from '@/composables/useWindowManager'
 import { requestMachinesPicker } from '@/router/index'
 import { useAccountPanelStore } from '@/stores/accountPanel'
+import { useWindowsOverviewStore } from '@/stores/windowsOverview'
 
 export interface DockAppDef {
   id: string
@@ -31,6 +32,7 @@ const emit = defineEmits<{
 }>()
 
 const accountPanelStore = useAccountPanelStore()
+const windowsOverviewStore = useWindowsOverviewStore()
 
 const dockRootRef = ref<HTMLElement | null>(null)
 const iconEls = new Map<string, HTMLElement>()
@@ -178,6 +180,48 @@ function activateInstance(id: string) {
   openPopoverAppId.value = null
 }
 
+// Ubuntu/GNOME-style "Activities" overview — every open window as its own
+// card in a full-screen grid, instead of a small per-app instance list.
+const showWindowsOverview = ref(false)
+
+function openWindowsOverview() {
+  hideTooltip()
+  showWindowsOverview.value = true
+}
+
+function closeWindowsOverview() {
+  showWindowsOverview.value = false
+}
+
+function activateFromOverview(id: string) {
+  emit('activate', id)
+  closeWindowsOverview()
+}
+
+function onOverviewKeydown(e: KeyboardEvent) {
+  if (!showWindowsOverview.value) return
+  if (e.key === 'Escape') closeWindowsOverview()
+}
+
+// Registers a card's slot for the owning DesktopSessionHost to teleport that
+// window's live content into — same pattern as MachinesOverview's per-realm
+// preview, keyed by window id instead of realm.
+function setWindowPreviewTarget(windowId: string, el: Element | null) {
+  if (el) windowsOverviewStore.registerPreviewTarget(windowId, el as HTMLElement)
+  else windowsOverviewStore.unregisterPreviewTarget(windowId)
+}
+
+type TemplateRefCallback = (el: Element | ComponentPublicInstance | null) => void
+const windowPreviewRefCallbacks = new Map<string, TemplateRefCallback>()
+function windowPreviewRef(windowId: string): TemplateRefCallback {
+  let fn = windowPreviewRefCallbacks.get(windowId)
+  if (!fn) {
+    fn = (el) => setWindowPreviewTarget(windowId, el as Element | null)
+    windowPreviewRefCallbacks.set(windowId, fn)
+  }
+  return fn
+}
+
 function launchNew(appId: string) {
   emit('launch', appId)
   openPopoverAppId.value = null
@@ -250,7 +294,8 @@ function onIconPointerMove(e: PointerEvent) {
   for (const [id, el] of iconEls) {
     if (id === dragState.appId) continue
     const rect = el.getBoundingClientRect()
-    const mid = props.position === 'bottom' ? rect.left + rect.width / 2 : rect.top + rect.height / 2
+    const mid =
+      props.position === 'bottom' ? rect.left + rect.width / 2 : rect.top + rect.height / 2
     const otherIdx = order.indexOf(id)
     if (otherIdx === -1) continue
 
@@ -299,8 +344,14 @@ function onWindowClick(e: MouseEvent) {
   openPopoverAppId.value = null
 }
 
-onMounted(() => window.addEventListener('click', onWindowClick, true))
-onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
+onMounted(() => {
+  window.addEventListener('click', onWindowClick, true)
+  window.addEventListener('keydown', onOverviewKeydown)
+})
+onUnmounted(() => {
+  window.removeEventListener('click', onWindowClick, true)
+  window.removeEventListener('keydown', onOverviewKeydown)
+})
 </script>
 
 <template>
@@ -311,8 +362,69 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
         title="Machines"
         @click="requestMachinesPicker()"
       >
-        <i class="bi bi-grid-3x3-gap-fill"></i>
+        <i class="bi bi-window-stack"></i>
       </button>
+
+      <div class="dock-icon-wrapper">
+        <button
+          class="dock-icon dock-icon-machines"
+          title="Show all windows"
+          @click="openWindowsOverview()"
+        >
+          <i class="bi bi-grid-3x3-gap-fill"></i>
+        </button>
+        <span v-if="windows.length > 0" class="dock-dots">
+          <span v-for="n in Math.min(windows.length, 4)" :key="n" class="dock-dot"></span>
+        </span>
+      </div>
+
+      <Teleport to="body">
+        <div
+          v-if="showWindowsOverview"
+          class="windows-overview"
+          @click.self="closeWindowsOverview()"
+          @contextmenu.prevent
+        >
+          <div class="windows-overview-header">
+            <h2 class="windows-overview-title">Open Windows</h2>
+            <button class="windows-overview-close" @click="closeWindowsOverview()">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+
+          <div class="windows-overview-grid">
+            <div
+              v-for="win in windows"
+              :key="win.id"
+              class="windows-overview-card"
+              :class="{ 'windows-overview-card-active': focusedId === win.id }"
+              @click="activateFromOverview(win.id)"
+            >
+              <span
+                class="windows-overview-close-card"
+                title="Close"
+                @click.stop="closeInstance(win.id, $event)"
+              >
+                <i class="bi bi-x"></i>
+              </span>
+              <div class="windows-overview-preview">
+                <!-- The owning DesktopSessionHost teleports this window's live app content in here. -->
+                <div class="windows-overview-preview-slot" :ref="windowPreviewRef(win.id)"></div>
+                <div
+                  class="windows-overview-icon-badge"
+                  :style="{ color: win.iconColor, background: win.iconBg }"
+                >
+                  <i class="bi" :class="win.icon"></i>
+                </div>
+              </div>
+              <div class="windows-overview-label">{{ win.title }}</div>
+              <span v-if="win.minimized" class="windows-overview-minimized">Minimized</span>
+            </div>
+
+            <div v-if="windows.length === 0" class="windows-overview-empty">No apps open</div>
+          </div>
+        </div>
+      </Teleport>
 
       <div class="dock-divider"></div>
 
@@ -339,63 +451,76 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
         </span>
 
         <Teleport to="body">
-        <div
-          v-if="hoveredAppId === app.id"
-          class="dock-tooltip"
-          :style="tooltipStyle"
-        >{{ offline ? `${app.label} (offline)` : app.label }}</div>
+          <div v-if="hoveredAppId === app.id" class="dock-tooltip" :style="tooltipStyle">
+            {{ offline ? `${app.label} (offline)` : app.label }}
+          </div>
         </Teleport>
 
         <Teleport to="body">
-        <div
-          v-if="openPopoverAppId === app.id"
-          :ref="(el) => (popoverRef = el as HTMLElement | null)"
-          class="dock-popover"
-          :style="popoverStyle"
-          @click.stop
-        >
-          <div class="dock-popover-title">{{ app.label }}</div>
-          <button
-            v-for="win in instancesByApp.get(app.id)"
-            :key="win.id"
-            class="dock-popover-row"
-            :class="{ 'dock-popover-row-active': focusedId === win.id }"
-            @click="activateInstance(win.id)"
+          <div
+            v-if="openPopoverAppId === app.id"
+            :ref="(el) => (popoverRef = el as HTMLElement | null)"
+            class="dock-popover"
+            :style="popoverStyle"
+            @click.stop
           >
-            <span class="dock-popover-icon" :style="{ color: win.iconColor, background: win.iconBg }">
-              <i class="bi" :class="win.icon"></i>
-            </span>
-            <span class="dock-popover-label">{{ win.title }}</span>
-            <span v-if="win.minimized" class="dock-popover-minimized">minimized</span>
-            <span class="dock-popover-close" title="Close" @click="closeInstance(win.id, $event)">
-              <i class="bi bi-x"></i>
-            </span>
-          </button>
-          <button v-if="app.launchable !== false" class="dock-popover-row dock-popover-new" @click="launchNew(app.id)">
-            <span class="dock-popover-icon dock-popover-icon-new">
-              <i class="bi bi-plus-lg"></i>
-            </span>
-            <span class="dock-popover-label">New Window</span>
-          </button>
-          <button
-            v-if="(instancesByApp.get(app.id)?.length ?? 0) > 0"
-            class="dock-popover-row dock-popover-quit"
-            @click="quitAll(app.id)"
-          >
-            <span class="dock-popover-icon dock-popover-icon-quit">
-              <i class="bi bi-power"></i>
-            </span>
-            <span class="dock-popover-label">
-              {{ instancesByApp.get(app.id)!.length === 1 ? 'Quit' : `Quit ${instancesByApp.get(app.id)!.length} Windows` }}
-            </span>
-          </button>
-        </div>
+            <div class="dock-popover-title">{{ app.label }}</div>
+            <button
+              v-for="win in instancesByApp.get(app.id)"
+              :key="win.id"
+              class="dock-popover-row"
+              :class="{ 'dock-popover-row-active': focusedId === win.id }"
+              @click="activateInstance(win.id)"
+            >
+              <span
+                class="dock-popover-icon"
+                :style="{ color: win.iconColor, background: win.iconBg }"
+              >
+                <i class="bi" :class="win.icon"></i>
+              </span>
+              <span class="dock-popover-label">{{ win.title }}</span>
+              <span v-if="win.minimized" class="dock-popover-minimized">minimized</span>
+              <span class="dock-popover-close" title="Close" @click="closeInstance(win.id, $event)">
+                <i class="bi bi-x"></i>
+              </span>
+            </button>
+            <button
+              v-if="app.launchable !== false"
+              class="dock-popover-row dock-popover-new"
+              @click="launchNew(app.id)"
+            >
+              <span class="dock-popover-icon dock-popover-icon-new">
+                <i class="bi bi-plus-lg"></i>
+              </span>
+              <span class="dock-popover-label">New Window</span>
+            </button>
+            <button
+              v-if="(instancesByApp.get(app.id)?.length ?? 0) > 0"
+              class="dock-popover-row dock-popover-quit"
+              @click="quitAll(app.id)"
+            >
+              <span class="dock-popover-icon dock-popover-icon-quit">
+                <i class="bi bi-power"></i>
+              </span>
+              <span class="dock-popover-label">
+                {{
+                  instancesByApp.get(app.id)!.length === 1
+                    ? 'Quit'
+                    : `Quit ${instancesByApp.get(app.id)!.length} Windows`
+                }}
+              </span>
+            </button>
+          </div>
         </Teleport>
       </div>
 
       <div class="dock-divider"></div>
 
-      <button class="dock-icon dock-icon-account" title="Profile" @click="accountPanelStore.open('account')">
+      <button
+        class="dock-icon dock-icon-account"
+        title="Profile"
+        @click="accountPanelStore.open('account')"
+      >
         <i class="bi bi-person-circle"></i>
       </button>
     </div>
@@ -507,7 +632,11 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
   font-size: 1.65rem;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.13s ease, transform 0.1s ease, filter 0.13s ease, box-shadow 0.13s ease;
+  transition:
+    background 0.13s ease,
+    transform 0.1s ease,
+    filter 0.13s ease,
+    box-shadow 0.13s ease;
 }
 
 .dock-icon:hover {
@@ -706,7 +835,9 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
   color: #94a3b8;
   font-size: 0.85rem;
   flex-shrink: 0;
-  transition: background 0.13s ease, color 0.13s ease;
+  transition:
+    background 0.13s ease,
+    color 0.13s ease;
 }
 
 .dock-popover-close:hover {
@@ -732,5 +863,172 @@ onUnmounted(() => window.removeEventListener('click', onWindowClick, true))
 .dock-popover-icon-quit {
   background: #fee2e2;
   color: #dc2626;
+}
+
+/* Ubuntu/GNOME-style "Activities" overview — every open window as its own
+   card in a full-screen grid, opened from the dock's window-stack button. */
+.windows-overview {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  padding: 2.5rem 3rem;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  overflow-y: auto;
+}
+
+.windows-overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.windows-overview-title {
+  color: #fff;
+  font-weight: 700;
+  margin: 0;
+}
+
+.windows-overview-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.windows-overview-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.windows-overview-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.75rem;
+  align-content: flex-start;
+}
+
+.windows-overview-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  width: 220px;
+  padding: 0.9rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.windows-overview-card:hover {
+  transform: translateY(-4px) scale(1.03);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.windows-overview-card-active {
+  border-color: #3b82f6;
+}
+
+/* Sized to WINDOW_PREVIEW_WIDTH/HEIGHT in stores/windowsOverview.ts — the
+   owning DesktopSessionHost scales that window's live content to exactly
+   fit this box. */
+.windows-overview-preview {
+  position: relative;
+  width: 200px;
+  height: 125px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0f172a;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.windows-overview-preview-slot {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.windows-overview-icon-badge {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.windows-overview-label {
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.windows-overview-minimized {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.windows-overview-close-card {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #1e293b;
+  color: #fff;
+  font-size: 0.85rem;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
+}
+
+.windows-overview-card:hover .windows-overview-close-card {
+  opacity: 1;
+}
+
+.windows-overview-close-card:hover {
+  background: #dc2626;
+}
+
+.windows-overview-empty {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
 }
 </style>
