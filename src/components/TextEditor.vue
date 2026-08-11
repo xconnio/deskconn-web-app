@@ -50,20 +50,84 @@ const savedFlash = ref(false)
 
 const dirty = computed(() => content.value !== originalContent.value)
 
-const lineCount = computed(() => content.value.split('\n').length)
-// One text node with all line numbers, rather than one DOM element per line —
-// cheap even for a file with tens of thousands of lines.
-const gutterText = computed(() => {
-  let s = ''
-  for (let i = 1; i <= lineCount.value; i++) s += i + '\n'
-  return s
-})
-
 const gutterEl = ref<HTMLElement | null>(null)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 
 function syncGutterScroll() {
   if (gutterEl.value && textareaEl.value) gutterEl.value.scrollTop = textareaEl.value.scrollTop
+}
+
+// Word wrap means a single logical line can span several visual rows, so the
+// gutter can no longer just be "one number per line" — it has to know how
+// many rows each line actually wrapped to (blank-padding the rest) or the
+// numbers drift out of sync with the text below the first wrapped line.
+// There's no DOM API for a textarea's wrap points, so this simulates the
+// same greedy word-wrap the browser does, measuring with a canvas context
+// using the textarea's own computed font (so widths match exactly).
+const availableWidth = ref(0)
+let measureCtx: CanvasRenderingContext2D | null = null
+
+function getMeasureCtx(): CanvasRenderingContext2D | null {
+  if (measureCtx || !textareaEl.value) return measureCtx
+  const canvas = document.createElement('canvas')
+  measureCtx = canvas.getContext('2d')
+  if (measureCtx) {
+    const style = window.getComputedStyle(textareaEl.value)
+    measureCtx.font = `${style.fontSize} ${style.fontFamily}`
+  }
+  return measureCtx
+}
+
+// Tabs are expanded to spaces (matching CSS tab-size: 4) since canvas
+// measureText doesn't know about tab-size and would otherwise measure them
+// as near-zero width, undercounting how much room a line actually takes.
+function wrappedRowCount(line: string, ctx: CanvasRenderingContext2D, maxWidth: number): number {
+  if (maxWidth <= 0) return 1
+  const expanded = line.replace(/\t/g, '    ')
+  if (expanded === '') return 1
+
+  let rows = 1
+  let rowWidth = 0
+  for (const token of expanded.split(/(\s+)/)) {
+    if (token === '') continue
+    const tokenWidth = ctx.measureText(token).width
+    if (rowWidth > 0 && rowWidth + tokenWidth > maxWidth) {
+      rows++
+      rowWidth = 0
+    }
+    if (tokenWidth > maxWidth) {
+      // Longer than a full row on its own (e.g. a long URL) — it wraps
+      // again on its own once overflow-wrap kicks in.
+      rows += Math.floor(tokenWidth / maxWidth)
+      rowWidth = tokenWidth % maxWidth
+    } else {
+      rowWidth += tokenWidth
+    }
+  }
+  return rows
+}
+
+// One text node with all line numbers, rather than one DOM element per line —
+// cheap even for a file with tens of thousands of lines.
+const gutterText = computed(() => {
+  const lines = content.value.split('\n')
+  const ctx = getMeasureCtx()
+  let s = ''
+  for (let i = 0; i < lines.length; i++) {
+    const rows = ctx ? wrappedRowCount(lines[i]!, ctx, availableWidth.value) : 1
+    s += (i + 1) + '\n'.repeat(rows)
+  }
+  return s
+})
+
+let resizeObserver: ResizeObserver | null = null
+
+function updateAvailableWidth() {
+  const textarea = textareaEl.value
+  if (!textarea) return
+  const style = window.getComputedStyle(textarea)
+  const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+  availableWidth.value = textarea.clientWidth - padding
 }
 
 // Tab/Shift+Tab indent or outdent instead of shifting focus off the textarea.
@@ -227,6 +291,18 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
+// The textarea unmounts/remounts across loading states (spinner ↔ editor),
+// so its width is tracked via a ref watcher rather than a one-time mount
+// hook — this reattaches the observer whenever a new textarea element shows up.
+watch(textareaEl, (el) => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (!el) return
+  updateAvailableWidth()
+  resizeObserver = new ResizeObserver(updateAvailableWidth)
+  resizeObserver.observe(el)
+})
+
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   loadFile()
@@ -237,6 +313,7 @@ onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
   loadController?.abort()
   if (savedFlashTimer) clearTimeout(savedFlashTimer)
+  resizeObserver?.disconnect()
 })
 </script>
 
@@ -290,7 +367,7 @@ onUnmounted(() => {
           spellcheck="false"
           autocapitalize="off"
           autocomplete="off"
-          wrap="off"
+          wrap="soft"
           @scroll="syncGutterScroll"
           @keydown="handleTextareaKeydown"
         ></textarea>
@@ -439,8 +516,10 @@ onUnmounted(() => {
   line-height: 1.6;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   tab-size: 4;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
   overflow: auto;
+  overflow-x: hidden;
 }
 
 .editor-saved-toast {
