@@ -18,6 +18,7 @@ export interface DockAppDef {
 
 const props = defineProps<{
   realm: string
+  desktopName: string
   apps: DockAppDef[]
   windows: AppWindow[]
   focusedId: string | null
@@ -33,6 +34,17 @@ const emit = defineEmits<{
 
 const accountPanelStore = useAccountPanelStore()
 const windowsOverviewStore = useWindowsOverviewStore()
+
+// Short badge for the machine-name icon — first letters of up to the first
+// two words (e.g. "Dev Box" -> "DB", "workstation" -> "W").
+const machineInitials = computed(() =>
+  props.desktopName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join(''),
+)
 
 const dockRootRef = ref<HTMLElement | null>(null)
 const iconEls = new Map<string, HTMLElement>()
@@ -523,6 +535,10 @@ onUnmounted(() => {
       >
         <i class="bi bi-person-circle"></i>
       </button>
+
+      <div class="dock-icon dock-icon-machine-badge" :title="desktopName">
+        {{ machineInitials }}
+      </div>
     </div>
   </div>
 </template>
@@ -663,6 +679,15 @@ onUnmounted(() => {
 
 .dock-icon-app.dock-icon-disabled {
   box-shadow: none;
+}
+
+.dock-icon-machine-badge {
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.1);
+  cursor: default;
 }
 
 .dock-icon-machines,

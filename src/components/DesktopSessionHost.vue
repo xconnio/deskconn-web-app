@@ -664,6 +664,7 @@ onUnmounted(() => {
 
       <AppDock
         :realm="realm"
+        :desktop-name="desktopName"
         :apps="dockApps"
         :windows="windows"
         :focused-id="focusedId"
