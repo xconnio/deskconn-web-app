@@ -7,7 +7,7 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "VITE_WAMP_URL=${VITE_WAMP_URL-ws://localhost:8080/ws} VITE_WAMP_WT_URL=${VITE_WAMP_WT_URL-https://localhost:8082/wamp} VITE_WAMP_WT_CERT_URL=${VITE_WAMP_WT_CERT_URL-http://localhost:8083/wt-cert-hash} VITE_WAMP_REALM=${VITE_WAMP_REALM-io.xconn.deskconn} VITE_REGISTRATION_AUTHID=${VITE_REGISTRATION_AUTHID-deskconn-web-app} vite",
     "build": "npm run type-check && vite build --base=/app/",
     "preview": "vite preview",
     "build-only": "vite build",
@@ -30,7 +30,7 @@
     "vue": "^3.5.25",
     "vue-router": "^4.6.3",
     "vue3-otp-input": "^0.5.40",
-    "xconn": "https://github.com/xconnio/xconn-js.git#1db3ea93e1f181537599ad8456fb3f70fe0fbbe5",
+    "xconn": "https://github.com/xconnio/xconn-js.git#f54fce376c787d13c3df2a31296aca6558b192fd",
     "xconn-webrtc-js": "https://github.com/xconnio/xconn-webrtc-js.git#c18817dcd767d4718055a0d65267018ed969c554"
   },
   "devDependencies": {

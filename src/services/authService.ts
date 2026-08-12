@@ -1,8 +1,8 @@
 import { ClientConfig } from 'xconn-webrtc-js'
-import { CBORSerializer, connectCryptosign, CryptoSignAuthenticator } from 'xconn'
+import { CBORSerializer, CryptoSignAuthenticator } from 'xconn'
 
 import { wampService, type WampSession } from './wamp'
-import { REGISTRATION_AUTHID, WAMP_URL } from '../config'
+import { REGISTRATION_AUTHID } from '../config'
 
 export const authService = {
   async register(form: { username: string; name: string; password: string }) {
@@ -222,7 +222,7 @@ export const authService = {
     const procedureWebRTCOffer = 'io.xconn.webrtc.offer'
     const topicAnswererOnCandidate = 'io.xconn.webrtc.answerer.on_candidate'
     const topicOffererOnCandidate = 'io.xconn.webrtc.offerer.on_candidate'
-    const session = await connectCryptosign(WAMP_URL, realm, authID, privateKey)
+    const session = await wampService.connectWithCryptosign(authID, privateKey)
 
     const iceServers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }]
 
