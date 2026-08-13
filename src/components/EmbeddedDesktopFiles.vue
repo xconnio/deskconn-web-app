@@ -8,6 +8,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
 import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 import type { FileBrowseResult, FileEntry } from '@/types'
+import { parseFileEntry, createFileBrowser } from '@/utils/fileBrowse'
 import {
   createX25519KeyPair,
   deriveSessionKeys,
@@ -20,7 +21,6 @@ import { downloadUrl } from '@/utils/download'
 import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
 import { formatDesktopError, isDesktopOfflineError, isNoSuchProcedureException } from '@/utils/desktopError'
 
-const procedureFileBrowse = 'io.xconn.deskconn.deskconnd.file.browse'
 const procedureFileRename = 'io.xconn.deskconn.deskconnd.file.rename'
 const procedureFileDelete = 'io.xconn.deskconn.deskconnd.file.delete'
 const procedureFileCopy = 'io.xconn.deskconn.deskconnd.file.copy'
@@ -245,79 +245,6 @@ function normalizePathValue(value: unknown) {
   return typeof value === 'string' ? value : ''
 }
 
-function getValue(source: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    if (key in source) {
-      return source[key]
-    }
-  }
-
-  return undefined
-}
-
-function getStringValue(source: Record<string, unknown>, ...keys: string[]) {
-  const value = getValue(source, ...keys)
-  return typeof value === 'string' ? value : ''
-}
-
-function getDateValue(source: Record<string, unknown>, ...keys: string[]) {
-  const value = getValue(source, ...keys)
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
-  return ''
-}
-
-function getBooleanValue(source: Record<string, unknown>, ...keys: string[]) {
-  const value = getValue(source, ...keys)
-  return typeof value === 'boolean' ? value : false
-}
-
-function getNumberValue(source: Record<string, unknown>, ...keys: string[]) {
-  const value = getValue(source, ...keys)
-  return typeof value === 'number' ? value : 0
-}
-
-function parseFileEntry(raw: unknown): FileEntry {
-  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-
-  return {
-    name: getStringValue(source, 'name', 'Name'),
-    path: getStringValue(source, 'path', 'Path'),
-    type: getStringValue(source, 'type', 'Type'),
-    mode: getStringValue(source, 'mode', 'Mode'),
-    size: getNumberValue(source, 'size', 'Size'),
-    hidden: getBooleanValue(source, 'hidden', 'Hidden'),
-    mod_time: getStringValue(source, 'mod_time', 'ModTime'),
-    is_dir: getBooleanValue(source, 'is_dir', 'IsDir'),
-    is_symlink: getBooleanValue(source, 'is_symlink', 'IsSymlink'),
-    link_target: getStringValue(source, 'link_target', 'LinkTarget'),
-    item_count: getValue(source, 'item_count', 'ItemCount') as number | undefined,
-    thumbnail: getStringValue(source, 'thumbnail', 'Thumbnail') || undefined,
-  }
-}
-
-function parseBrowseResult(raw: unknown): FileBrowseResult {
-  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-  const rawEntries = getValue(source, 'entries', 'Entries')
-  const entries = Array.isArray(rawEntries) ? rawEntries.map(parseFileEntry) : []
-
-  return {
-    path: getStringValue(source, 'path', 'Path'),
-    home_path: getStringValue(source, 'home_path', 'HomePath'),
-    parent_path: getStringValue(source, 'parent_path', 'ParentPath'),
-    type: getStringValue(source, 'type', 'Type'),
-    mode: getStringValue(source, 'mode', 'Mode'),
-    size: getNumberValue(source, 'size', 'Size'),
-    mod_time: getDateValue(source, 'mod_time'),
-    is_dir: getBooleanValue(source, 'is_dir', 'IsDir'),
-    is_symlink: getBooleanValue(source, 'is_symlink', 'IsSymlink'),
-    link_target: getStringValue(source, 'link_target', 'LinkTarget'),
-    entries,
-    next_cursor: getStringValue(source, 'next_cursor', 'NextCursor') || undefined,
-    has_more: getBooleanValue(source, 'has_more', 'HasMore'),
-  }
-}
-
 function formatError(error: unknown) {
   if (isDesktopOfflineError(error)) sessionCacheStore.reportUnreachable(props.realm)
 
@@ -423,8 +350,7 @@ function resetExplorerState() {
   nextCursor.value = undefined
   hasMore.value = false
   isLoadingMore.value = false
-  legacyBrowseProtocol = false
-  hasProbedBrowseProtocol = false
+  fileBrowser = null
   encryptionKeys.value = null
   navHistory.value = []
   navHistoryIndex.value = -1
@@ -508,67 +434,13 @@ async function detectFileOperationSupport() {
   }
 }
 
-// Pre-pagination deskconnd only understood a raw path string as the
-// file.browse payload. Once we confirm (or fall back to) that protocol for
-// the current connection, stick with it — reset per connection in
-// resetExplorerState.
-let legacyBrowseProtocol = false
-let hasProbedBrowseProtocol = false
-
-async function callFileBrowse(payloadText: string): Promise<FileBrowseResult> {
-  const keys = encryptionKeys.value
-  let browse: FileBrowseResult | undefined
-
-  if (keys) {
-    const payloadBytes = new TextEncoder().encode(payloadText)
-    const encryptedPayload = encryptPayload(payloadBytes, keys.encryptKey)
-    const result = await session.value!.call(procedureFileBrowse, [encryptedPayload])
-
-    const encryptedBytes = result.args?.[0] as Uint8Array
-    if (!encryptedBytes?.length) throw new Error('Empty response from remote file browser')
-
-    const decrypted = decryptPayload(encryptedBytes, keys.decryptKey)
-    browse = parseBrowseResult(JSON.parse(new TextDecoder().decode(decrypted)))
-  } else {
-    const result = await session.value!.call(procedureFileBrowse, [payloadText])
-    browse = result.args?.[0] ? parseBrowseResult(result.args[0]) : undefined
-  }
-
-  if (!browse || !browse.path) {
-    throw new Error('Empty response from remote file browser')
-  }
-  return browse
-}
+// Reassigned per connection in connectDesktopSession — file.browse's
+// pre-pagination-protocol fallback state (see fileBrowse.ts) must reset when
+// the session does.
+let fileBrowser: ReturnType<typeof createFileBrowser> | null = null
 
 async function browseFiles(path: string, cursor?: string): Promise<FileBrowseResult> {
-  if (legacyBrowseProtocol) return callFileBrowse(path)
-
-  const payload = JSON.stringify({ path, cursor, limit: PAGE_SIZE })
-  try {
-    const browse = await callFileBrowse(payload)
-    hasProbedBrowseProtocol = true
-    return browse
-  } catch (err) {
-    // Only the first browse of a connection doubles as a protocol probe —
-    // an old deskconnd chokes on the JSON payload (it tries to Lstat the
-    // literal JSON text as a path). Once we know which protocol works,
-    // later errors (bad path, permissions, etc.) are real and must surface
-    // normally rather than triggering another silent retry.
-    if (hasProbedBrowseProtocol) throw err
-    hasProbedBrowseProtocol = true
-
-    try {
-      const browse = await callFileBrowse(path)
-      legacyBrowseProtocol = true
-      hasMore.value = false
-      return browse
-    } catch {
-      // Both attempts failed — the JSON-payload error is more likely the
-      // genuine one (a real backend understood it and hit a real problem),
-      // so surface that instead of the raw-path retry's parse error.
-      throw err
-    }
-  }
+  return fileBrowser!.browseFiles(path, cursor, PAGE_SIZE)
 }
 
 async function loadPath(path = '', skipHistory = false) {
@@ -665,9 +537,11 @@ async function connectDesktopSession() {
 
   try {
     session.value = await sessionCacheStore.acquire(props.realm)
+    fileBrowser = session.value ? createFileBrowser(session.value, () => encryptionKeys.value) : null
   } catch (error) {
     errorMessage.value = formatError(error)
     session.value = null
+    fileBrowser = null
   } finally {
     isConnecting.value = false
   }

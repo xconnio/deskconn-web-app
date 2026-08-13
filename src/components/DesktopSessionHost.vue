@@ -317,6 +317,16 @@ const apps: AppDef[] = [
     iconColor: '#ffffff',
     iconBg: '#475569',
   },
+  {
+    id: 'text-editor',
+    label: 'Text Editor',
+    icon: 'bi-file-earmark-richtext',
+    iconColor: '#ffffff',
+    iconBg: '#0f766e',
+    width: 820,
+    height: 560,
+    minWidth: 420,
+  },
 ]
 
 // Not pinned in the dock's launcher strip — these only show up (via dockApps
@@ -339,20 +349,10 @@ const videoPlayerApp: AppDef = {
   launchable: false,
 }
 
-const textEditorApp: AppDef = {
-  id: 'text-editor',
-  label: 'Text Editor',
-  icon: 'bi-file-earmark-richtext',
-  iconColor: '#ffffff',
-  iconBg: '#0f766e',
-  launchable: false,
-}
-
 const dockApps = computed(() => {
   const list = [...apps]
   if (windows.value.some((w) => w.appId === 'image-viewer')) list.push(imageViewerApp)
   if (windows.value.some((w) => w.appId === 'video-player')) list.push(videoPlayerApp)
-  if (windows.value.some((w) => w.appId === 'text-editor')) list.push(textEditorApp)
   return list
 })
 
@@ -430,9 +430,9 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
       }
     case 'text-editor':
       return {
-        session: win.props.session as Session,
+        session: win.props.session as Session | undefined,
         realm: props.realm,
-        entry: win.props.entry as PreviewEntry,
+        entry: win.props.entry as PreviewEntry | undefined,
         focused,
       }
     default:
@@ -450,7 +450,7 @@ type PreviewEntry = { path: string; name: string; size: number }
 const PREVIEW_STYLE: Record<FilePreviewType, { icon: string; color: string; bg: string }> = {
   image: { icon: imageViewerApp.icon, color: imageViewerApp.iconColor, bg: imageViewerApp.iconBg },
   video: { icon: videoPlayerApp.icon, color: videoPlayerApp.iconColor, bg: videoPlayerApp.iconBg },
-  text: { icon: textEditorApp.icon, color: textEditorApp.iconColor, bg: textEditorApp.iconBg },
+  text: { icon: 'bi-file-earmark-richtext', color: '#ffffff', bg: '#0f766e' },
   audio: { icon: 'bi-file-earmark-music', color: '#ffffff', bg: '#e11d48' },
   pdf: { icon: 'bi-file-earmark-pdf', color: '#ffffff', bg: '#dc2626' },
   none: { icon: 'bi-file-earmark', color: '#ffffff', bg: '#475569' },
@@ -632,8 +632,8 @@ onUnmounted(() => {
           :maximized="win.maximized"
           :focused="focusedId === win.id"
           :mobile="isMobile"
-          :use-toolbar-titlebar="win.appId === 'files' || win.appId === 'terminal'"
-          :dark-titlebar="win.appId === 'terminal'"
+          :use-toolbar-titlebar="win.appId === 'files' || win.appId === 'terminal' || win.appId === 'text-editor'"
+          :dark-titlebar="win.appId === 'terminal' || win.appId === 'text-editor'"
           :inset-left="insetLeft"
           :inset-right="insetRight"
           :inset-bottom="insetBottom"
