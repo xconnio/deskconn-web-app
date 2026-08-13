@@ -1230,8 +1230,9 @@ onUnmounted(() => {
   flex-direction: column;
   text-align: center;
   padding: 2rem;
-  color: #617182;
+  color: #8a8a85;
   min-height: 220px;
+  background: #272822;
 }
 .editor-progress-text { font-size: 0.85rem; color: #94a3b8; margin: 0; }
 
