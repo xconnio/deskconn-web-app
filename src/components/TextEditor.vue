@@ -866,6 +866,7 @@ onUnmounted(() => {
             class="tab-item"
             :class="{ 'tab-active': tab.id === activeTabId, 'tab-preview': tab.isPreview }"
             @mousedown.left="switchTab(tab.id)"
+            @mousedown.middle.prevent="requestCloseTab(tab.id, $event)"
           >
             <span v-if="isDirty(tab)" class="tab-dot"></span>
             <span class="tab-label">{{ tabLabel(tab) }}</span>
