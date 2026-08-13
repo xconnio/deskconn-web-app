@@ -39,6 +39,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'preview-file': [session: Session, entry: FileEntry, entries: FileEntry[]]
+  'open-text-editor': [session: Session, entry: FileEntry]
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
@@ -673,7 +674,7 @@ function exitSearchMode() {
 function openActionSheet(entry: FileEntry, event: MouseEvent) {
   const btn = event.currentTarget as HTMLElement
   const rect = btn.getBoundingClientRect()
-  const dropdownHeight = 132 // approx height of 3 items
+  const dropdownHeight = 164 // approx height of 4 items
   const fitsBelow = rect.bottom + dropdownHeight + 8 < window.innerHeight
   dropdownPos.value = {
     top: fitsBelow ? rect.bottom + 6 : rect.top - dropdownHeight - 6,
@@ -1190,6 +1191,17 @@ async function downloadActionSheetEntry() {
   const entry = actionSheetEntry.value
   closeActionSheet()
   await downloadFileToClient(entry)
+}
+
+// Unlike openActionSheetEntry (which routes through file-type detection and
+// falls back to a raw download for non-previewable types), this always opens
+// in Text Editor as plain text — and works for a folder too, opening it as
+// the editor's sidebar project instead of a single file tab.
+function openActionSheetEntryInTextEditor() {
+  if (!actionSheetEntry.value || !session.value) return
+  const entry = actionSheetEntry.value
+  closeActionSheet()
+  emit('open-text-editor', session.value, entry)
 }
 
 function startRename() {
@@ -1810,7 +1822,6 @@ onUnmounted(() => {
       <button v-if="actionSheetEntry.is_dir || actionSheetEntry.is_symlink" class="dropdown-item" @click="openEntry(actionSheetEntry); closeActionSheet()">
         <i class="bi" :class="actionSheetEntry.is_dir ? 'bi-folder2-open' : 'bi-box-arrow-up-right'"></i>Open
       </button>
-      <div v-if="(actionSheetEntry.is_dir || actionSheetEntry.is_symlink) && (supportedFileProcedures.rename || supportedFileProcedures.delete || supportedFileProcedures.copy)" class="dropdown-divider"></div>
       <template v-if="!actionSheetEntry.is_dir && !actionSheetEntry.is_symlink">
         <button class="dropdown-item" @click="openActionSheetEntry">
           <i class="bi" :class="getFilePreviewType(actionSheetEntry.name) !== 'none' ? 'bi-eye' : 'bi-download'"></i>
@@ -1823,11 +1834,14 @@ onUnmounted(() => {
         >
           <i class="bi bi-download"></i>Download
         </button>
-        <div
-          v-if="supportedFileProcedures.rename || supportedFileProcedures.delete || supportedFileProcedures.copy"
-          class="dropdown-divider"
-        ></div>
       </template>
+      <button v-if="!actionSheetEntry.is_symlink" class="dropdown-item" @click="openActionSheetEntryInTextEditor">
+        <i class="bi bi-file-earmark-code"></i>Open with Text Editor
+      </button>
+      <div
+        v-if="supportedFileProcedures.rename || supportedFileProcedures.delete || supportedFileProcedures.copy"
+        class="dropdown-divider"
+      ></div>
       <button v-if="supportedFileProcedures.rename" class="dropdown-item" @click="startRename">
         <i class="bi bi-pencil"></i>Rename
       </button>

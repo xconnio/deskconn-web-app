@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch, nextTick, markRaw, type Component } from 'vue'
 import { type Session } from 'xconn'
+import type { FileEntry } from '@/types'
 import { requestMachinesPicker } from '@/router/index'
 import type { AppWindow } from '@/composables/useWindowManager'
 
@@ -433,6 +434,7 @@ function windowProps(win: { id: string; appId: string; props: Record<string, unk
         session: win.props.session as Session | undefined,
         realm: props.realm,
         entry: win.props.entry as PreviewEntry | undefined,
+        initialFolder: win.props.initialFolder as string | undefined,
         focused,
       }
     default:
@@ -477,6 +479,25 @@ function onPreviewFile(session: Session, entry: PreviewEntry, entries: PreviewEn
     width: 760,
     height: 560,
     props: { session: markRaw(session), entry, entries },
+  }, maximizedContainerSize())
+}
+
+// Unlike onPreviewFile, this always routes to Text Editor regardless of file
+// type, and handles a folder by opening it as the editor's sidebar project
+// instead of a single file tab.
+function onOpenTextEditor(session: Session, entry: FileEntry) {
+  const style = PREVIEW_STYLE.text
+  openWindow({
+    appId: 'text-editor',
+    title: entry.name,
+    icon: style.icon,
+    iconColor: style.color,
+    iconBg: style.bg,
+    width: 760,
+    height: 560,
+    props: entry.is_dir
+      ? { session: markRaw(session), initialFolder: entry.path }
+      : { session: markRaw(session), entry: { path: entry.path, name: entry.name, size: entry.size } },
   }, maximizedContainerSize())
 }
 
@@ -655,6 +676,7 @@ onUnmounted(() => {
                 @close="onCloseWindow(win.id)"
                 @open-files="onOpenFiles"
                 @preview-file="onPreviewFile"
+                @open-text-editor="onOpenTextEditor"
                 @update-title="updateTitle(win.id, $event)"
               />
             </div>

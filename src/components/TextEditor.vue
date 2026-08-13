@@ -60,6 +60,7 @@ const props = defineProps<{
   session?: Session
   realm: string
   entry?: TextEntry
+  initialFolder?: string
   focused?: boolean
 }>()
 
@@ -819,6 +820,7 @@ onMounted(async () => {
   } else {
     addBlankTab()
   }
+  if (props.initialFolder) openedFolderPath.value = props.initialFolder
 })
 
 onUnmounted(() => {
