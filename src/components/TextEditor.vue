@@ -1,86 +1,621 @@
 <script setup lang="ts">
 /**
- * Plain-text editor window. Streams content via file.cat (fileCat.ts) and saves
- * via file.edit as a diff-match-patch patch (see fileexplorer.go).
+ * Multi-tab text editor window. Each tab streams content via file.cat (fileCat.ts)
+ * and saves via file.edit as a diff-match-patch patch (see fileexplorer.go) once it
+ * has a destination path — a brand-new untitled tab gets its first path through
+ * file.upload instead (fileUpload.ts), since file.edit can only patch a file that
+ * already exists. Git status/diff data comes from git.status/git.original
+ * (filegit.go) — red/amber file tree entries mean "not committed yet"/"modified",
+ * and a green/blue bar beside the line numbers means "added"/"modified" relative
+ * to HEAD (lineDiff.ts).
  */
-import { ref, computed, inject, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, inject, watch, nextTick, onMounted, onUnmounted, shallowRef } from 'vue'
 import { type Session } from 'xconn'
-import { floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
+import { floatingWindowActionsKey, floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import EditorFileTree from '@/components/EditorFileTree.vue'
+import GitFolderPicker from '@/components/GitFolderPicker.vue'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSessionEncryptionStore } from '@/stores/sessionEncryption'
 import { streamFileCat } from '@/utils/fileCat'
 import { buildEditPatch } from '@/utils/textPatch'
 import { downloadBlob } from '@/utils/download'
-import { encryptPayload, decryptPayload } from '@/utils/encryption'
+import { encryptPayload, decryptPayload, type EncryptionKeys } from '@/utils/encryption'
 import { formatSize } from '@/utils/fileTypes'
 import { formatDesktopError, isDesktopOfflineError, isEditConflictError } from '@/utils/desktopError'
+import { createFileBrowser } from '@/utils/fileBrowse'
+import { fetchGitOriginal } from '@/utils/git'
+import { uploadFileToPath } from '@/utils/fileUpload'
+import { computeLineDiff, type LineDiffMap } from '@/utils/lineDiff'
 
 const procedureFileEdit = 'io.xconn.deskconn.deskconnd.file.edit'
 const MAX_EDIT_SIZE = 10 * 1024 * 1024
 
 type TextEntry = { path: string; name: string; size: number }
 
+interface TabState {
+  id: number
+  entry: TextEntry | null
+  content: string
+  originalContent: string
+  gitOriginalContent: string
+  gitIsRepo: boolean
+  gitUntracked: boolean
+  gitIgnored: boolean
+  gitBaselineLoaded: boolean
+  loading: boolean
+  loadedBytes: number
+  loadError: string
+  saving: boolean
+  saveError: string
+  saveConflict: boolean
+  /** Single-click-opened tabs are reusable "preview" slots (VS Code style) —
+   * the next single click replaces them instead of piling up a new tab, as
+   * long as they're still clean. Double-clicking or editing promotes a tab
+   * out of preview (see isReusablePreview). */
+  isPreview: boolean
+}
+
 const props = defineProps<{
-  session: Session
+  session?: Session
   realm: string
-  entry: TextEntry
+  entry?: TextEntry
+  initialFolder?: string
   focused?: boolean
 }>()
 
-const emit = defineEmits<{ 'update-title': [title: string] }>()
+const emit = defineEmits<{ 'update-title': [title: string]; close: [] }>()
 
-// Absent when there's no FloatingWindow ancestor — the Save button then
-// renders inline instead of teleporting into the window's titlebar.
 const actionsHostRef = inject(floatingWindowActionsKey)
 const actionsTarget = computed(() => actionsHostRef?.value ?? null)
+const toolbarHostRef = inject(floatingWindowToolbarKey)
+const toolbarTarget = computed(() => toolbarHostRef?.value ?? null)
 
 const sessionEncryptionStore = useSessionEncryptionStore()
 const sessionCacheStore = useSessionCacheStore()
 
-const content = ref('')
-const originalContent = ref('')
-const loading = ref(true)
-const loadedBytes = ref(0)
-const loadError = ref('')
-const saving = ref(false)
-const saveError = ref('')
-const saveConflict = ref(false)
-const savedFlash = ref(false)
+// ── Session bootstrap ──────────────────────────────────────────────────────
+// Launched from Files, TextEditor inherits an already-connected session; blank
+// dock launches get none, so it acquires its own — same as EmbeddedDesktopFiles.
+const ownSession = shallowRef<Session | null>(null)
+const activeSession = computed(() => props.session ?? ownSession.value)
+const initError = ref('')
+const encryptionKeys = ref<EncryptionKeys | null>(null)
+const fileBrowser = shallowRef<ReturnType<typeof createFileBrowser> | null>(null)
 
-const dirty = computed(() => content.value !== originalContent.value)
+async function bootstrapSession() {
+  if (!props.session) {
+    try {
+      ownSession.value = await sessionCacheStore.acquire(props.realm)
+    } catch (err) {
+      initError.value = formatDesktopError(err, 'Failed to connect to desktop')
+      return
+    }
+  }
+  const session = activeSession.value
+  if (!session) return
 
-const gutterEl = ref<HTMLElement | null>(null)
-const textareaEl = ref<HTMLTextAreaElement | null>(null)
-
-function syncGutterScroll() {
-  if (gutterEl.value && textareaEl.value) gutterEl.value.scrollTop = textareaEl.value.scrollTop
+  try {
+    encryptionKeys.value = await sessionEncryptionStore.getOrExchange(session, props.realm)
+  } catch (err) {
+    if (isDesktopOfflineError(err)) sessionCacheStore.reportUnreachable(props.realm)
+    initError.value = formatDesktopError(err, 'Failed to establish a secure session')
+    return
+  }
+  fileBrowser.value = createFileBrowser(session, () => encryptionKeys.value)
 }
 
-// Word wrap means a single logical line can span several visual rows, so the
-// gutter can no longer just be "one number per line" — it has to know how
-// many rows each line actually wrapped to (blank-padding the rest) or the
-// numbers drift out of sync with the text below the first wrapped line.
-// There's no DOM API for a textarea's wrap points, so this simulates the
-// same greedy word-wrap the browser does, measuring with a canvas context
-// using the textarea's own computed font (so widths match exactly).
+// ── Tabs ────────────────────────────────────────────────────────────────────
+const tabs = ref<TabState[]>([])
+const activeTabId = ref<number | null>(null)
+let nextTabId = 0
+const loadControllers = new Map<number, AbortController>()
+
+const activeTab = computed(() => tabs.value.find((t) => t.id === activeTabId.value) ?? null)
+
+function isDirty(tab: TabState): boolean {
+  return tab.content !== tab.originalContent
+}
+const activeDirty = computed(() => (activeTab.value ? isDirty(activeTab.value) : false))
+const anyDirty = computed(() => tabs.value.some(isDirty))
+
+function tabLabel(tab: TabState): string {
+  return tab.entry?.name ?? 'Untitled'
+}
+
+// reactive() here (not a plain object) so the reference held across the async
+// gap in loadTabContent/performSave/etc. IS the reactive proxy itself — a
+// plain object only becomes reactive when read back out of tabs.value, and
+// mutating the pre-push reference instead bypasses Vue's change tracking
+// entirely (the DOM only catches up on some later, unrelated re-render).
+function createTab(entry: TextEntry | null, isPreview: boolean): TabState {
+  return reactive({
+    id: nextTabId++,
+    entry,
+    content: '',
+    originalContent: '',
+    gitOriginalContent: '',
+    gitIsRepo: false,
+    gitUntracked: false,
+    gitIgnored: false,
+    gitBaselineLoaded: !entry, // untitled tabs have no baseline to wait for
+    loading: !!entry,
+    loadedBytes: 0,
+    loadError: '',
+    saving: false,
+    saveError: '',
+    saveConflict: false,
+    isPreview,
+  })
+}
+
+function switchTab(id: number) {
+  activeTabId.value = id
+  nextTick(() => {
+    updateAvailableWidth()
+    updateLineHeight()
+    activeTextareaEl.value?.focus()
+    tabButtonElMap.get(id)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  })
+}
+
+function addBlankTab() {
+  const tab = createTab(null, false)
+  tabs.value.push(tab)
+  switchTab(tab.id)
+}
+
+async function loadGitBaseline(tab: TabState) {
+  const session = activeSession.value
+  if (!tab.entry || !session || !encryptionKeys.value) {
+    tab.gitBaselineLoaded = true
+    return
+  }
+  try {
+    const result = await fetchGitOriginal(session, encryptionKeys.value, tab.entry.path)
+    tab.gitOriginalContent = result.is_new ? '' : result.content
+    tab.gitIsRepo = result.is_repo
+    tab.gitUntracked = result.untracked
+    tab.gitIgnored = result.ignored
+  } catch {
+    tab.gitOriginalContent = ''
+    tab.gitIsRepo = false
+    tab.gitUntracked = false
+    tab.gitIgnored = false
+  } finally {
+    tab.gitBaselineLoaded = true
+  }
+}
+
+async function loadTabContent(tab: TabState) {
+  const session = activeSession.value
+  if (!tab.entry || !session) return
+
+  tab.loading = true
+  tab.loadError = ''
+  tab.loadedBytes = 0
+  tab.content = ''
+  tab.gitBaselineLoaded = false
+
+  // Entries opened by path (the Open File picker) don't know their size up
+  // front — refresh it via a stat-only browse before the size gate below.
+  let size = tab.entry.size
+  if (size <= 0 && fileBrowser.value) {
+    try {
+      const browse = await fileBrowser.value.browseFiles(tab.entry.path)
+      size = browse.size
+      tab.entry = { ...tab.entry, size }
+    } catch (err) {
+      tab.loadError = err instanceof Error ? err.message : 'Failed to open file'
+      tab.loading = false
+      return
+    }
+  }
+
+  if (size > MAX_EDIT_SIZE) {
+    tab.loadError = `File is too large to edit (max ${formatSize(MAX_EDIT_SIZE)}).`
+    tab.loading = false
+    return
+  }
+
+  const controller = new AbortController()
+  loadControllers.set(tab.id, controller)
+  const decoder = new TextDecoder('utf-8', { fatal: false })
+
+  try {
+    await streamFileCat(session, tab.entry.path, (chunk) => {
+      tab.loadedBytes += chunk.length
+      tab.content += decoder.decode(chunk, { stream: true })
+    }, controller.signal)
+    tab.content += decoder.decode()
+    tab.originalContent = tab.content
+  } catch (err) {
+    tab.loadError = err instanceof Error ? err.message : 'Failed to load file'
+  } finally {
+    tab.loading = false
+  }
+
+  void loadGitBaseline(tab)
+}
+
+function findTabByPath(path: string): TabState | undefined {
+  return tabs.value.find((t) => t.entry?.path === path)
+}
+
+/** pinned=false is a single click (preview, reused/replaced by the next one);
+ * pinned=true is a double click or the Open File picker (always a real tab). */
+// An untouched "Untitled" tab (the default blank tab a fresh window opens
+// with, or one added via "New" and never typed in) isn't worth keeping
+// around once a real file is opened — it gets replaced in place rather than
+// left dangling next to a newly added tab.
+function isReplaceableBlankTab(tab: TabState): boolean {
+  return !tab.entry && !isDirty(tab)
+}
+
+function openFileInTab(target: TextEntry, pinned: boolean) {
+  const existing = findTabByPath(target.path)
+  if (existing) {
+    if (pinned) existing.isPreview = false
+    switchTab(existing.id)
+    return
+  }
+
+  const active = activeTab.value
+  const reusePreview = !pinned && active && active.isPreview && !isDirty(active)
+  const reuseBlank = active && isReplaceableBlankTab(active)
+  if (reusePreview || reuseBlank) {
+    loadControllers.get(active.id)?.abort()
+    active.entry = target
+    active.isPreview = !pinned
+    void loadTabContent(active)
+    switchTab(active.id)
+    return
+  }
+
+  const tab = createTab(target, !pinned)
+  tabs.value.push(tab)
+  switchTab(tab.id)
+  void loadTabContent(tab)
+}
+
+// ── Closing tabs / the window ──────────────────────────────────────────────
+type PendingClose = { kind: 'tab'; tab: TabState } | { kind: 'window'; resolve: (ok: boolean) => void }
+const pendingClose = ref<PendingClose | null>(null)
+
+const closeConfirmTitle = computed(() => {
+  const p = pendingClose.value
+  if (!p) return ''
+  return p.kind === 'tab' ? `Close "${tabLabel(p.tab)}"?` : 'Unsaved changes'
+})
+const closeConfirmMessage = computed(() => {
+  const p = pendingClose.value
+  if (!p) return ''
+  if (p.kind === 'tab') return `${tabLabel(p.tab)} has unsaved changes. Close this tab anyway?`
+  const n = tabs.value.filter(isDirty).length
+  return `${n} file${n === 1 ? '' : 's'} have unsaved changes. Close this window anyway?`
+})
+
+function closeTabImmediate(id: number) {
+  loadControllers.get(id)?.abort()
+  loadControllers.delete(id)
+  const idx = tabs.value.findIndex((t) => t.id === id)
+  if (idx === -1) return
+  tabs.value.splice(idx, 1)
+  if (activeTabId.value === id) {
+    const next = tabs.value[idx] ?? tabs.value[idx - 1]
+    activeTabId.value = next ? next.id : null
+    if (next) nextTick(updateAvailableWidth)
+  }
+}
+
+function requestCloseTab(id: number, e?: Event) {
+  e?.stopPropagation()
+  const tab = tabs.value.find((t) => t.id === id)
+  if (!tab) return
+  if (isDirty(tab)) {
+    pendingClose.value = { kind: 'tab', tab }
+    return
+  }
+  closeTabImmediate(id)
+}
+
+// Called by DesktopSessionHost before it unmounts this window.
+async function requestClose(): Promise<boolean> {
+  if (!anyDirty.value) return true
+  return new Promise<boolean>((resolve) => {
+    pendingClose.value = { kind: 'window', resolve }
+  })
+}
+defineExpose({ requestClose })
+
+function confirmPendingClose() {
+  const p = pendingClose.value
+  pendingClose.value = null
+  if (!p) return
+  if (p.kind === 'tab') closeTabImmediate(p.tab.id)
+  else p.resolve(true)
+}
+function cancelPendingClose() {
+  const p = pendingClose.value
+  pendingClose.value = null
+  if (p?.kind === 'window') p.resolve(false)
+}
+
+// ── Files menu (New / Open File / Open Folder / Save / Save As) ───────────
+const filesMenuOpen = ref(false)
+const filesMenuBtnRef = ref<HTMLElement | null>(null)
+const filesMenuPos = ref<{ top: string; left: string }>({ top: '0px', left: '0px' })
+
+function toggleFilesMenu() {
+  if (filesMenuOpen.value) {
+    filesMenuOpen.value = false
+    return
+  }
+  const el = filesMenuBtnRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  const menuWidth = 200
+  filesMenuPos.value = {
+    top: `${rect.bottom + 6}px`,
+    left: `${Math.min(rect.left, window.innerWidth - menuWidth - 8)}px`,
+  }
+  filesMenuOpen.value = true
+}
+function closeFilesMenu() {
+  filesMenuOpen.value = false
+}
+
+const openedFolderPath = ref('')
+const openedFolderName = computed(() => openedFolderPath.value.split('/').filter(Boolean).pop() || openedFolderPath.value)
+
+const SIDEBAR_MIN_WIDTH = 160
+const SIDEBAR_MAX_WIDTH = 480
+const sidebarWidth = ref(240)
+
+function startSidebarResize(e: PointerEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startWidth = sidebarWidth.value
+
+  function onMove(ev: PointerEvent) {
+    const next = startWidth + (ev.clientX - startX)
+    sidebarWidth.value = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, next))
+  }
+  function onUp() {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+}
+
+type PickerState = { mode: 'open-file' | 'open-folder' | 'save-as'; targetTab?: TabState; initialPath?: string }
+const picker = ref<PickerState | null>(null)
+
+function dirOf(path: string): string {
+  const idx = path.lastIndexOf('/')
+  return idx > 0 ? path.slice(0, idx) : '/'
+}
+
+function openSaveAsPicker(tab: TabState) {
+  const initialPath = tab.entry ? dirOf(tab.entry.path) : openedFolderPath.value || undefined
+  picker.value = { mode: 'save-as', targetTab: tab, initialPath }
+}
+
+function menuNew() {
+  closeFilesMenu()
+  addBlankTab()
+}
+function menuOpenFile() {
+  closeFilesMenu()
+  picker.value = { mode: 'open-file', initialPath: openedFolderPath.value || undefined }
+}
+function menuOpenFolder() {
+  closeFilesMenu()
+  picker.value = { mode: 'open-folder', initialPath: openedFolderPath.value || undefined }
+}
+function menuSave() {
+  closeFilesMenu()
+  if (activeTab.value) void saveTab(activeTab.value)
+}
+function menuSaveAs() {
+  closeFilesMenu()
+  if (activeTab.value) openSaveAsPicker(activeTab.value)
+}
+// Detaches the sidebar's folder tree only — open tabs and the window itself
+// are untouched, unlike Exit below.
+function menuCloseProject() {
+  closeFilesMenu()
+  openedFolderPath.value = ''
+}
+function menuExit() {
+  closeFilesMenu()
+  emit('close')
+}
+
+function onPickerCancel() {
+  picker.value = null
+}
+function onPickerConfirm(path: string) {
+  const p = picker.value
+  picker.value = null
+  if (!p) return
+
+  if (p.mode === 'open-folder') {
+    openedFolderPath.value = path
+  } else if (p.mode === 'open-file') {
+    const name = path.split('/').pop() || path
+    openFileInTab({ path, name, size: 0 }, true)
+  } else if (p.mode === 'save-as' && p.targetTab) {
+    void createNewFile(p.targetTab, path)
+  }
+}
+
+function onTreeOpenFile(entry: { path: string; name: string; size: number }) {
+  openFileInTab(entry, false)
+}
+function onTreeOpenFilePinned(entry: { path: string; name: string; size: number }) {
+  openFileInTab(entry, true)
+}
+
+// ── Saving ──────────────────────────────────────────────────────────────────
+const savedFlash = ref(false)
+let savedFlashTimer: ReturnType<typeof setTimeout> | null = null
+function flashSaved() {
+  savedFlash.value = true
+  if (savedFlashTimer) clearTimeout(savedFlashTimer)
+  savedFlashTimer = setTimeout(() => { savedFlash.value = false }, 1800)
+}
+
+async function saveTab(tab: TabState) {
+  if (!isDirty(tab) || tab.saving) return
+  if (!tab.entry) {
+    openSaveAsPicker(tab)
+    return
+  }
+  await performSave(tab)
+}
+
+async function performSave(tab: TabState) {
+  const session = activeSession.value
+  if (!session || !tab.entry) return
+  tab.saving = true
+  tab.saveError = ''
+  tab.saveConflict = false
+
+  try {
+    const patch = buildEditPatch(tab.originalContent, tab.content)
+    const keys = await sessionEncryptionStore.getOrExchange(session, props.realm)
+    const payloadBytes = new TextEncoder().encode(JSON.stringify({ path: tab.entry.path, patch }))
+    const encrypted = encryptPayload(payloadBytes, keys.encryptKey)
+
+    const result = await session.call(procedureFileEdit, [encrypted])
+    const encryptedResult = result.args?.[0]
+    if (encryptedResult) decryptPayload(encryptedResult as Uint8Array, keys.decryptKey)
+
+    tab.originalContent = tab.content
+    flashSaved()
+  } catch (err) {
+    tab.saveConflict = isEditConflictError(err)
+    if (isDesktopOfflineError(err)) sessionCacheStore.reportUnreachable(props.realm)
+    tab.saveError = formatDesktopError(err, 'Failed to save file')
+  } finally {
+    tab.saving = false
+  }
+}
+
+// file.edit only patches a file that already exists — a brand-new destination
+// (first save of an untitled tab, or "Save As" to a new path) goes through
+// file.upload instead, which creates-or-overwrites unconditionally.
+async function createNewFile(tab: TabState, fullPath: string) {
+  const session = activeSession.value
+  if (!session) return
+  const lastSlash = fullPath.lastIndexOf('/')
+  const dir = lastSlash > 0 ? fullPath.slice(0, lastSlash) : '/'
+  const name = fullPath.slice(lastSlash + 1)
+
+  tab.saving = true
+  tab.saveError = ''
+  tab.saveConflict = false
+  try {
+    const blob = new Blob([tab.content], { type: 'text/plain' })
+    await uploadFileToPath(session, props.realm, dir, name, blob)
+    tab.entry = { path: fullPath, name, size: blob.size }
+    tab.originalContent = tab.content
+    void loadGitBaseline(tab)
+    flashSaved()
+  } catch (err) {
+    tab.saveError = formatDesktopError(err, 'Failed to save file')
+  } finally {
+    tab.saving = false
+  }
+}
+
+function downloadTab(tab: TabState) {
+  downloadBlob(new Blob([tab.content], { type: 'text/plain' }), tabLabel(tab) === 'Untitled' ? 'untitled.txt' : tabLabel(tab))
+}
+
+async function reloadActiveTab() {
+  const tab = activeTab.value
+  if (!tab || !tab.entry) return
+  if (isDirty(tab) && !window.confirm('Reload will discard your unsaved changes. Continue?')) return
+  loadControllers.get(tab.id)?.abort()
+  tab.saveError = ''
+  tab.saveConflict = false
+  await loadTabContent(tab)
+}
+
+// ── Gutter / wrap (unchanged algorithm from the single-file editor, just
+// retargeted to whichever tab is currently active — only one tab is ever
+// visible/interactive at a time, so one shared measurement is enough). ──────
+// reactive() (not a plain Map) — activeTextareaEl below is read inside a
+// watch(), which evaluates it eagerly on the "pre" flush, before the newly
+// active tab's element has actually mounted. With a plain Map, that early
+// read caches `null` and — since the computed's only tracked dependency is
+// activeTabId, which doesn't change again while staying on the tab — it
+// silently stays null forever (breaking scroll sync, word-wrap width, the
+// Tab-key indent handler, and autofocus). A reactive Map makes `.set()`
+// itself a trigger, so the computed invalidates correctly once the ref
+// callback actually populates it.
+const textareaElMap = reactive(new Map<number, HTMLTextAreaElement>())
+const gutterElMap = reactive(new Map<number, HTMLElement>())
+function setTextareaEl(id: number, el: Element | null) {
+  if (el) textareaElMap.set(id, el as HTMLTextAreaElement)
+  else textareaElMap.delete(id)
+}
+function setGutterEl(id: number, el: Element | null) {
+  if (el) gutterElMap.set(id, el as HTMLElement)
+  else gutterElMap.delete(id)
+}
+
+// Plain (non-reactive) map — only ever read inside event handlers below, never
+// from a computed, so there's no staleness concern that would need reactive().
+const tabButtonElMap = new Map<number, HTMLElement>()
+function setTabButtonEl(id: number, el: Element | null) {
+  if (el) tabButtonElMap.set(id, el as HTMLElement)
+  else tabButtonElMap.delete(id)
+}
+function onTabBarWheel(event: WheelEvent) {
+  // Tab bar only scrolls horizontally, but a normal mouse wheel emits
+  // vertical delta — remap it so tabs scroll without needing shift held.
+  if (event.deltaY === 0) return
+  ;(event.currentTarget as HTMLElement).scrollBy({ left: event.deltaY })
+  event.preventDefault()
+}
+const activeTextareaEl = computed(() => (activeTabId.value !== null ? textareaElMap.get(activeTabId.value) ?? null : null))
+const activeGutterEl = computed(() => (activeTabId.value !== null ? gutterElMap.get(activeTabId.value) ?? null : null))
+
+// Bound to more than just @scroll (see the textarea in the template: also
+// @input/@mousedown/@click/@keyup/@focus) — the browser scrolls a focused
+// textarea to keep the caret in view on its own (arrow keys, Home/End,
+// typing past the bottom edge, refocusing a tab) without reliably firing a
+// 'scroll' event for it. If the gutter ever lags behind the textarea's real
+// scrollTop even briefly, a click resolves against the textarea's actual
+// (unsynced) scroll position rather than the line the user sees in the
+// gutter — which reads as "typing lands on the wrong line". @mousedown
+// matters most here since it fires before the browser turns the click into
+// a caret position, so re-syncing there (not just after, on @click)
+// corrects the gutter before that mapping happens, not just for the next
+// interaction. Re-syncing on every interaction that could plausibly move
+// the caret closes the window instead of chasing the exact browser trigger.
+function syncGutterScroll() {
+  if (activeGutterEl.value) activeGutterEl.value.scrollTop = activeTextareaEl.value?.scrollTop ?? 0
+}
+
 const availableWidth = ref(0)
 let measureCtx: CanvasRenderingContext2D | null = null
 
 function getMeasureCtx(): CanvasRenderingContext2D | null {
-  if (measureCtx || !textareaEl.value) return measureCtx
+  if (measureCtx || !activeTextareaEl.value) return measureCtx
   const canvas = document.createElement('canvas')
   measureCtx = canvas.getContext('2d')
   if (measureCtx) {
-    const style = window.getComputedStyle(textareaEl.value)
+    const style = window.getComputedStyle(activeTextareaEl.value)
     measureCtx.font = `${style.fontSize} ${style.fontFamily}`
   }
   return measureCtx
 }
 
-// Tabs are expanded to spaces (matching CSS tab-size: 4) since canvas
-// measureText doesn't know about tab-size and would otherwise measure them
-// as near-zero width, undercounting how much room a line actually takes.
 function wrappedRowCount(line: string, ctx: CanvasRenderingContext2D, maxWidth: number): number {
   if (maxWidth <= 0) return 1
   const expanded = line.replace(/\t/g, '    ')
@@ -96,8 +631,6 @@ function wrappedRowCount(line: string, ctx: CanvasRenderingContext2D, maxWidth: 
       rowWidth = 0
     }
     if (tokenWidth > maxWidth) {
-      // Longer than a full row on its own (e.g. a long URL) — it wraps
-      // again on its own once overflow-wrap kicks in.
       rows += Math.floor(tokenWidth / maxWidth)
       rowWidth = tokenWidth % maxWidth
     } else {
@@ -107,42 +640,72 @@ function wrappedRowCount(line: string, ctx: CanvasRenderingContext2D, maxWidth: 
   return rows
 }
 
-// One text node with all line numbers, rather than one DOM element per line —
-// cheap even for a file with tens of thousands of lines.
-const gutterText = computed(() => {
-  const lines = content.value.split('\n')
+// lineTop[i]/lineRows[i] (0-based line index) are also what positions the
+// change-bar markers in the gutter (see diffMarkers below) — computed here
+// alongside the line-number text since both need the same per-line wrapped
+// row count in the same single pass over the content.
+interface GutterLayout {
+  text: string
+  lineTop: number[]
+  lineRows: number[]
+}
+
+const gutterLayout = computed<GutterLayout>(() => {
+  const tab = activeTab.value
+  if (!tab) return { text: '', lineTop: [], lineRows: [] }
+  const lines = tab.content.split('\n')
   const ctx = getMeasureCtx()
-  let s = ''
+  let text = ''
+  const lineTop: number[] = []
+  const lineRows: number[] = []
+  let rowsSoFar = 0
   for (let i = 0; i < lines.length; i++) {
     const rows = ctx ? wrappedRowCount(lines[i]!, ctx, availableWidth.value) : 1
-    s += (i + 1) + '\n'.repeat(rows)
+    lineTop.push(rowsSoFar)
+    lineRows.push(rows)
+    text += (i + 1) + '\n'.repeat(rows)
+    rowsSoFar += rows
   }
-  return s
+  return { text, lineTop, lineRows }
 })
+
+const gutterText = computed(() => gutterLayout.value.text)
 
 let resizeObserver: ResizeObserver | null = null
 
 function updateAvailableWidth() {
-  const textarea = textareaEl.value
+  const textarea = activeTextareaEl.value
   if (!textarea) return
   const style = window.getComputedStyle(textarea)
   const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
   availableWidth.value = textarea.clientWidth - padding
 }
 
-// Tab/Shift+Tab indent or outdent instead of shifting focus off the textarea.
+// Measured (not hardcoded from the 0.85rem/1.6 CSS values) so it stays correct
+// regardless of the root font-size the line-height rem/multiplier resolves
+// against — used to place diffMarkers' pixel offsets.
+const lineHeightPx = ref(20)
+
+function updateLineHeight() {
+  const textarea = activeTextareaEl.value
+  if (!textarea) return
+  const lh = parseFloat(window.getComputedStyle(textarea).lineHeight)
+  if (Number.isFinite(lh) && lh > 0) lineHeightPx.value = lh
+}
+
 function handleTextareaKeydown(e: KeyboardEvent) {
   if (e.key !== 'Tab') return
-  const textarea = textareaEl.value
-  if (!textarea) return
+  const tab = activeTab.value
+  const textarea = activeTextareaEl.value
+  if (!tab || !textarea) return
   e.preventDefault()
 
-  const value = content.value
+  const value = tab.content
   const start = textarea.selectionStart
   const end = textarea.selectionEnd
 
   if (!e.shiftKey && start === end) {
-    content.value = value.slice(0, start) + '\t' + value.slice(end)
+    tab.content = value.slice(0, start) + '\t' + value.slice(end)
     nextTick(() => { textarea.selectionStart = textarea.selectionEnd = start + 1 })
     return
   }
@@ -154,7 +717,7 @@ function handleTextareaKeydown(e: KeyboardEvent) {
 
   if (!e.shiftKey) {
     const indented = selectedLines.map((line) => '\t' + line).join('\n')
-    content.value = value.slice(0, lineStart) + indented + value.slice(lineEnd)
+    tab.content = value.slice(0, lineStart) + indented + value.slice(lineEnd)
     nextTick(() => {
       textarea.selectionStart = start + 1
       textarea.selectionEnd = end + indented.length - (lineEnd - lineStart)
@@ -173,145 +736,96 @@ function handleTextareaKeydown(e: KeyboardEvent) {
     return line.slice(removed)
   }).join('\n')
 
-  content.value = value.slice(0, lineStart) + outdented + value.slice(lineEnd)
+  tab.content = value.slice(0, lineStart) + outdented + value.slice(lineEnd)
   nextTick(() => {
     textarea.selectionStart = Math.max(lineStart, start - firstLineRemoved)
     textarea.selectionEnd = Math.max(textarea.selectionStart, end - totalRemoved)
   })
 }
 
-let loadController: AbortController | null = null
-let mounted = true
-let savedFlashTimer: ReturnType<typeof setTimeout> | null = null
-
-watch(dirty, (isDirty) => {
-  emit('update-title', isDirty ? `${props.entry.name} •` : props.entry.name)
+watch(activeTextareaEl, (el) => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+  if (!el) return
+  updateAvailableWidth()
+  updateLineHeight()
+  resizeObserver = new ResizeObserver(() => {
+    updateAvailableWidth()
+    updateLineHeight()
+  })
+  resizeObserver.observe(el)
 })
 
-async function loadFile() {
-  loading.value = true
-  loadError.value = ''
-  loadedBytes.value = 0
-  content.value = ''
+// ── Git change markers (added = green, modified = blue) for the active tab —
+// rendered as a VS Code/IntelliJ-style bar beside the line numbers rather
+// than coloring the text itself (colored spans, needed for individually-
+// styled text, only ever work when the editor renders as HTML; the bar only
+// needs a colored rectangle per changed line, so it can be plain Vue-templated
+// divs — no v-html, no risk of the scoped-CSS-vs-v-html mismatch that broke
+// text coloring, and no need for the transparent-textarea-plus-overlay trick
+// that was doing all that work just to make colored text visible). ─────────
+const lineDiffMap = computed<LineDiffMap>(() => {
+  const tab = activeTab.value
+  if (!tab || !tab.gitBaselineLoaded || !tab.gitIsRepo || tab.gitUntracked || tab.gitIgnored) return new Map()
+  return computeLineDiff(tab.gitOriginalContent, tab.content)
+})
 
-  if (props.entry.size > MAX_EDIT_SIZE) {
-    loadError.value = `File is too large to edit (max ${formatSize(MAX_EDIT_SIZE)}).`
-    loading.value = false
-    return
+interface DiffMarker {
+  top: number
+  height: number
+  kind: 'added' | 'modified'
+}
+
+const diffMarkers = computed<DiffMarker[]>(() => {
+  const map = lineDiffMap.value
+  if (map.size === 0) return []
+  const { lineTop, lineRows } = gutterLayout.value
+  const markers: DiffMarker[] = []
+  for (const [lineNum, kind] of map) {
+    const idx = lineNum - 1
+    markers.push({
+      top: (lineTop[idx] ?? 0) * lineHeightPx.value,
+      height: (lineRows[idx] ?? 1) * lineHeightPx.value,
+      kind,
+    })
   }
+  return markers
+})
 
-  loadController = new AbortController()
-  const decoder = new TextDecoder('utf-8', { fatal: false })
-
-  try {
-    await streamFileCat(props.session, props.entry.path, (chunk) => {
-      loadedBytes.value += chunk.length
-      content.value += decoder.decode(chunk, { stream: true })
-    }, loadController.signal)
-    content.value += decoder.decode()
-    if (!mounted) return
-    originalContent.value = content.value
-  } catch (err) {
-    if (mounted) loadError.value = err instanceof Error ? err.message : 'Failed to load file'
-  } finally {
-    if (mounted) loading.value = false
-  }
-}
-
-function downloadFile() {
-  downloadBlob(new Blob([content.value], { type: 'text/plain' }), props.entry.name)
-}
-
-async function saveFile() {
-  if (!dirty.value || saving.value) return
-  saving.value = true
-  saveError.value = ''
-  saveConflict.value = false
-
-  try {
-    const patch = buildEditPatch(originalContent.value, content.value)
-    const keys = await sessionEncryptionStore.getOrExchange(props.session, props.realm)
-    const payloadBytes = new TextEncoder().encode(JSON.stringify({ path: props.entry.path, patch }))
-    const encrypted = encryptPayload(payloadBytes, keys.encryptKey)
-
-    const result = await props.session.call(procedureFileEdit, [encrypted])
-    const encryptedResult = result.args?.[0]
-    if (encryptedResult) decryptPayload(encryptedResult as Uint8Array, keys.decryptKey)
-
-    originalContent.value = content.value
-    savedFlash.value = true
-    if (savedFlashTimer) clearTimeout(savedFlashTimer)
-    savedFlashTimer = setTimeout(() => { savedFlash.value = false }, 1800)
-  } catch (err) {
-    saveConflict.value = isEditConflictError(err)
-    if (isDesktopOfflineError(err)) sessionCacheStore.reportUnreachable(props.realm)
-    saveError.value = formatDesktopError(err, 'Failed to save file')
-  } finally {
-    saving.value = false
-  }
-}
-
-// Called by DesktopSessionHost before it unmounts this window (see
-// TerminalPanel's requestClose for the same pattern) — takes over from the
-// browser's native confirm() dialog so the app gets its own themed one.
-const pendingCloseResolve = ref<((ok: boolean) => void) | null>(null)
-
-function requestClose(): Promise<boolean> {
-  if (!dirty.value) return Promise.resolve(true)
-  return new Promise<boolean>((resolve) => {
-    pendingCloseResolve.value = resolve
-  })
-}
-
-defineExpose({ requestClose })
-
-function confirmClose() {
-  pendingCloseResolve.value?.(true)
-  pendingCloseResolve.value = null
-}
-
-function cancelClose() {
-  pendingCloseResolve.value?.(false)
-  pendingCloseResolve.value = null
-}
-
-async function reloadFromDevice() {
-  if (dirty.value && !window.confirm('Reload will discard your unsaved changes. Continue?')) return
-  loadController?.abort()
-  saveError.value = ''
-  saveConflict.value = false
-  await loadFile()
-}
+// ── Title / keyboard ─────────────────────────────────────────────────────
+watch([activeTab, activeDirty], () => {
+  const tab = activeTab.value
+  if (!tab) { emit('update-title', 'Text Editor'); return }
+  emit('update-title', isDirty(tab) ? `${tabLabel(tab)} •` : tabLabel(tab))
+})
 
 function handleKeydown(e: KeyboardEvent) {
   if (!props.focused) return
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     e.preventDefault()
-    saveFile()
+    if (activeTab.value) void saveTab(activeTab.value)
   }
 }
 
-// The textarea unmounts/remounts across loading states (spinner ↔ editor),
-// so its width is tracked via a ref watcher rather than a one-time mount
-// hook — this reattaches the observer whenever a new textarea element shows up.
-watch(textareaEl, (el) => {
-  resizeObserver?.disconnect()
-  resizeObserver = null
-  if (!el) return
-  updateAvailableWidth()
-  resizeObserver = new ResizeObserver(updateAvailableWidth)
-  resizeObserver.observe(el)
-})
-
-onMounted(() => {
+onMounted(async () => {
   document.addEventListener('keydown', handleKeydown)
-  loadFile()
+  await bootstrapSession()
+  if (initError.value) return
+
+  if (props.entry) {
+    const tab = createTab(props.entry, false)
+    tabs.value.push(tab)
+    activeTabId.value = tab.id
+    void loadTabContent(tab)
+  } else {
+    addBlankTab()
+  }
+  if (props.initialFolder) openedFolderPath.value = props.initialFolder
 })
 
 onUnmounted(() => {
-  mounted = false
   document.removeEventListener('keydown', handleKeydown)
-  loadController?.abort()
+  for (const controller of loadControllers.values()) controller.abort()
   if (savedFlashTimer) clearTimeout(savedFlashTimer)
   resizeObserver?.disconnect()
 })
@@ -320,67 +834,170 @@ onUnmounted(() => {
 <template>
   <div class="editor-window">
     <Teleport :to="actionsTarget ?? 'body'" :disabled="!actionsTarget">
-      <span v-if="dirty && !loading" class="editor-dirty-dot" title="Unsaved changes"></span>
+      <span v-if="activeDirty" class="editor-dirty-dot" title="Unsaved changes"></span>
       <button
         class="editor-action-btn"
-        @click="saveFile"
-        :disabled="!dirty || saving || loading"
+        @click="activeTab && saveTab(activeTab)"
+        :disabled="!activeTab || !activeDirty || activeTab.saving"
         title="Save (Ctrl+S)"
       >
-        <i class="bi" :class="saving ? 'bi-hourglass-split' : 'bi-save'"></i>
+        <i class="bi" :class="activeTab?.saving ? 'bi-hourglass-split' : 'bi-save'"></i>
       </button>
       <button
         class="editor-action-btn"
-        @click="downloadFile"
-        :disabled="loading || !!loadError"
+        @click="activeTab && downloadTab(activeTab)"
+        :disabled="!activeTab || activeTab.loading || !!activeTab.loadError"
         title="Download"
       >
         <i class="bi bi-download"></i>
       </button>
     </Teleport>
 
-    <div v-if="loading" class="editor-state">
-      <div class="spinner-border mb-3" role="status"><span class="visually-hidden">Loading…</span></div>
-      <p class="editor-progress-text">{{ formatSize(loadedBytes) }} / {{ formatSize(entry.size) }}</p>
-    </div>
-
-    <div v-else-if="loadError" class="editor-state">
-      <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
-      <p class="mb-0">{{ loadError }}</p>
-    </div>
-
-    <template v-else>
-      <div v-if="saveError" class="editor-error-banner">
-        <i class="bi bi-exclamation-triangle-fill"></i>
-        <span class="editor-error-text">{{ saveError }}</span>
-        <button v-if="saveConflict" class="editor-error-action" @click="reloadFromDevice">Reload from device</button>
-        <button class="editor-error-dismiss" @click="saveError = ''" title="Dismiss">
-          <i class="bi bi-x-lg"></i>
+    <Teleport :to="toolbarTarget ?? 'body'" :disabled="!toolbarTarget">
+      <div class="editor-toolbar">
+        <button ref="filesMenuBtnRef" class="files-menu-btn" @click="toggleFilesMenu">
+          <i class="bi bi-folder2"></i><span>Files</span>
         </button>
+        <div class="tab-bar" @wheel="onTabBarWheel">
+          <button
+            v-for="tab in tabs"
+            :key="tab.id"
+            :ref="(el) => setTabButtonEl(tab.id, el as Element | null)"
+            class="tab-item"
+            :class="{ 'tab-active': tab.id === activeTabId, 'tab-preview': tab.isPreview }"
+            @mousedown.left="switchTab(tab.id)"
+            @mousedown.middle.prevent="requestCloseTab(tab.id, $event)"
+          >
+            <span v-if="isDirty(tab)" class="tab-dot"></span>
+            <span class="tab-label">{{ tabLabel(tab) }}</span>
+            <span class="tab-close" role="button" :title="`Close ${tabLabel(tab)}`" @click="requestCloseTab(tab.id, $event)">&times;</span>
+          </button>
+          <button class="tab-add" title="New file" @click="addBlankTab">+</button>
+        </div>
       </div>
-      <div class="editor-body">
-        <div ref="gutterEl" class="editor-gutter"><div class="editor-gutter-inner">{{ gutterText }}</div></div>
-        <textarea
-          ref="textareaEl"
-          v-model="content"
-          class="editor-textarea"
-          spellcheck="false"
-          autocapitalize="off"
-          autocomplete="off"
-          wrap="soft"
-          @scroll="syncGutterScroll"
-          @keydown="handleTextareaKeydown"
-        ></textarea>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="filesMenuOpen" class="files-menu-backdrop" @click="closeFilesMenu">
+        <div class="files-menu-dropdown" :style="filesMenuPos" @click.stop>
+          <button class="files-menu-item" @click="menuNew"><i class="bi bi-file-earmark-plus"></i>New</button>
+          <button class="files-menu-item" @click="menuOpenFile"><i class="bi bi-file-earmark-arrow-up"></i>Open File…</button>
+          <button class="files-menu-item" @click="menuOpenFolder"><i class="bi bi-folder2-open"></i>Open Folder…</button>
+          <div class="files-menu-divider"></div>
+          <button class="files-menu-item" :disabled="!activeTab || !activeDirty" @click="menuSave"><i class="bi bi-save"></i>Save</button>
+          <button class="files-menu-item" :disabled="!activeTab" @click="menuSaveAs"><i class="bi bi-save2"></i>Save As…</button>
+          <div class="files-menu-divider"></div>
+          <button class="files-menu-item" :disabled="!openedFolderPath" @click="menuCloseProject"><i class="bi bi-folder-x"></i>Close Project</button>
+          <button class="files-menu-item" @click="menuExit"><i class="bi bi-box-arrow-right"></i>Exit</button>
+        </div>
       </div>
-    </template>
+    </Teleport>
+
+    <div v-if="initError" class="editor-state">
+      <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
+      <p class="mb-0">{{ initError }}</p>
+    </div>
+
+    <div v-else class="editor-layout">
+      <template v-if="openedFolderPath && activeSession && encryptionKeys">
+        <div class="editor-sidebar" :style="{ width: sidebarWidth + 'px' }">
+          <EditorFileTree
+            :session="activeSession"
+            :keys="encryptionKeys"
+            :root-path="openedFolderPath"
+            :root-name="openedFolderName"
+            @open-file="onTreeOpenFile"
+            @open-file-pinned="onTreeOpenFilePinned"
+          />
+        </div>
+        <div
+          class="editor-sidebar-resize"
+          @pointerdown="startSidebarResize"
+        ></div>
+      </template>
+
+      <div class="editor-tabs-area">
+        <template v-for="tab in tabs" :key="tab.id">
+          <div v-show="tab.id === activeTabId" class="editor-window-body">
+            <div v-if="tab.saveError" class="editor-error-banner">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              <span class="editor-error-text">{{ tab.saveError }}</span>
+              <button v-if="tab.saveConflict" class="editor-error-action" @click="reloadActiveTab">Reload from device</button>
+              <button class="editor-error-dismiss" @click="tab.saveError = ''" title="Dismiss">
+                <i class="bi bi-x-lg"></i>
+              </button>
+            </div>
+
+            <div v-if="tab.loading" class="editor-state">
+              <div class="spinner-border mb-3" role="status"><span class="visually-hidden">Loading…</span></div>
+              <p class="editor-progress-text">{{ formatSize(tab.loadedBytes) }} / {{ formatSize(tab.entry?.size ?? 0) }}</p>
+            </div>
+
+            <div v-else-if="tab.loadError" class="editor-state">
+              <i class="bi bi-exclamation-octagon display-6 mb-3"></i>
+              <p class="mb-0">{{ tab.loadError }}</p>
+            </div>
+
+            <div v-else class="editor-body">
+              <div :ref="(el) => setGutterEl(tab.id, el as Element | null)" class="editor-gutter">
+                <div class="editor-gutter-inner">
+                  {{ tab.id === activeTabId ? gutterText : '' }}
+                  <div v-if="tab.id === activeTabId" class="editor-diff-markers">
+                    <div
+                      v-for="(marker, idx) in diffMarkers"
+                      :key="idx"
+                      class="diff-marker"
+                      :class="marker.kind === 'added' ? 'diff-marker-added' : 'diff-marker-modified'"
+                      :style="{ top: `${marker.top}px`, height: `${marker.height}px` }"
+                    ></div>
+                  </div>
+                </div>
+              </div>
+              <textarea
+                :ref="(el) => setTextareaEl(tab.id, el as Element | null)"
+                v-model="tab.content"
+                class="editor-textarea"
+                spellcheck="false"
+                autocapitalize="off"
+                autocomplete="off"
+                wrap="soft"
+                @scroll="syncGutterScroll"
+                @input="syncGutterScroll"
+                @mousedown="syncGutterScroll"
+                @click="syncGutterScroll"
+                @keyup="syncGutterScroll"
+                @focus="syncGutterScroll"
+                @keydown="handleTextareaKeydown"
+              ></textarea>
+            </div>
+          </div>
+        </template>
+
+        <div v-if="tabs.length === 0" class="editor-state">
+          <i class="bi bi-file-earmark-text display-6 mb-3"></i>
+          <p class="mb-0">No files open</p>
+        </div>
+      </div>
+    </div>
+
+    <GitFolderPicker
+      v-if="picker && activeSession && encryptionKeys"
+      :session="activeSession"
+      :keys="encryptionKeys"
+      :mode="picker.mode"
+      :initial-path="picker.initialPath"
+      :initial-file-name="picker.targetTab ? tabLabel(picker.targetTab) : undefined"
+      @confirm="onPickerConfirm"
+      @cancel="onPickerCancel"
+    />
 
     <ConfirmDialog
-      :open="!!pendingCloseResolve"
-      title="Unsaved changes"
-      :message="`${entry.name} has unsaved changes. Close this window anyway?`"
+      :open="!!pendingClose"
+      :title="closeConfirmTitle"
+      :message="closeConfirmMessage"
       confirm-label="Close"
-      @confirm="confirmClose"
-      @cancel="cancelClose"
+      @confirm="confirmPendingClose"
+      @cancel="cancelPendingClose"
     />
   </div>
 
@@ -403,7 +1020,6 @@ onUnmounted(() => {
   background: #fff;
 }
 
-/* Teleported into the FloatingWindow's titlebar, beside minimize/maximize/close. */
 .editor-dirty-dot {
   width: 7px;
   height: 7px;
@@ -416,19 +1032,195 @@ onUnmounted(() => {
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 1px solid #d9dee4;
+  border: 1px solid #3a3a3a;
   border-radius: 50%;
-  background: #f1f5f9;
-  color: #64748b;
+  background: linear-gradient(#565656, #454545);
+  color: #fff;
   font-size: 0.6rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 1px rgba(0, 0, 0, 0.3);
 }
-.editor-action-btn:hover:not(:disabled) { background: #e2e8f0; color: #111827; }
+.editor-action-btn:hover:not(:disabled) { background: linear-gradient(#686868, #565656); }
 .editor-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Toolbar: Files menu button + tab strip ── */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.files-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: #e2e2df;
+  border-radius: 4px;
+  padding: 0.28rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.files-menu-btn:hover { background: rgba(255, 255, 255, 0.1); }
+
+.files-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3100;
+}
+.files-menu-dropdown {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 0.35rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.2);
+}
+.files-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.82rem;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+.files-menu-item:hover:not(:disabled) { background: #eef2f6; }
+.files-menu-item:disabled { opacity: 0.45; cursor: not-allowed; }
+.files-menu-item i { width: 16px; color: #64748b; }
+.files-menu-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 0.3rem 0.2rem;
+}
+
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  overflow-x: auto;
+  min-width: 0;
+  flex: 1;
+  scrollbar-width: none;
+}
+.tab-bar::-webkit-scrollbar { display: none; }
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  max-width: 160px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #b8b8b3;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.tab-item:hover { background: rgba(255, 255, 255, 0.08); }
+.tab-active {
+  background: #454545;
+  color: #ffffff;
+  border-color: #565656;
+}
+.tab-preview .tab-label { font-style: italic; }
+
+.tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+}
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  line-height: 1;
+  color: #9a9a94;
+}
+.tab-close:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+
+.tab-add {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #b8b8b3;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.tab-add:hover { background: rgba(255, 255, 255, 0.1); }
+
+/* ── Layout ── */
+.editor-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.editor-sidebar {
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.editor-sidebar-resize {
+  flex-shrink: 0;
+  width: 5px;
+  cursor: ew-resize;
+  background: #3e3d32;
+}
+.editor-sidebar-resize:hover,
+.editor-sidebar-resize:active {
+  background: #4e4d40;
+}
+
+.editor-tabs-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.editor-window-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
 .editor-state {
   flex: 1;
@@ -438,8 +1230,9 @@ onUnmounted(() => {
   flex-direction: column;
   text-align: center;
   padding: 2rem;
-  color: #617182;
+  color: #8a8a85;
   min-height: 220px;
+  background: #272822;
 }
 .editor-progress-text { font-size: 0.85rem; color: #94a3b8; margin: 0; }
 
@@ -484,7 +1277,6 @@ onUnmounted(() => {
   background: #272822;
 }
 
-/* Font/line-height/padding-top must match .editor-textarea for line numbers to align. */
 .editor-gutter {
   flex-shrink: 0;
   overflow: hidden;
@@ -495,12 +1287,31 @@ onUnmounted(() => {
   border-right: 1px solid #3e3d32;
 }
 .editor-gutter-inner {
+  position: relative;
   white-space: pre;
   font-size: 0.85rem;
   line-height: 1.6;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   color: #75715e;
 }
+
+/* VS Code/IntelliJ-style change bar, one per changed line, sitting right on
+   the gutter/code boundary — rather than coloring the code text itself (see
+   diffMarkers in the script: plain Vue-templated divs positioned by pixel
+   offset, not v-html, so scoped CSS applies to them normally). */
+.editor-diff-markers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.diff-marker {
+  position: absolute;
+  right: -0.75rem;
+  width: 3px;
+  border-radius: 1px;
+}
+.diff-marker-added { background: #7ec699; }
+.diff-marker-modified { background: #7fb4e0; }
 
 .editor-textarea {
   flex: 1;
