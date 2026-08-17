@@ -9,9 +9,40 @@ import { connectWAMP, ClientConfig, type WebRTCSession } from 'xconn-webrtc-js'
 
 import { WAMP_WT_URL, WAMP_WT_CERT_URL, WAMP_REALM } from '../config'
 
+// ponytail: cert hash cache is time-based, not rotation-aware; if rotation cadence
+// tightens below this TTL, switch to invalidating on WebTransport connect failure instead.
+const CERT_HASH_CACHE_TTL_MS = 5 * 60 * 1000
+
+let certHashesPromise: Promise<WebTransportCertHash[] | undefined> | null = null
+let certHashesCachedAt = 0
+
 async function fetchCertHashes(): Promise<WebTransportCertHash[] | undefined> {
+  if (typeof WebTransport === 'undefined') {
+    throw new Error('This browser does not support WebTransport, which is required to connect. Please use a recent version of Chrome, Edge, or Firefox.')
+  }
   if (!WAMP_WT_CERT_URL) return undefined
-  const resp = await fetch(WAMP_WT_CERT_URL, { cache: 'no-store' })
+  if (!certHashesPromise || Date.now() - certHashesCachedAt > CERT_HASH_CACHE_TTL_MS) {
+    certHashesCachedAt = Date.now()
+    certHashesPromise = loadCertHashes().catch((err: unknown) => {
+      certHashesPromise = null
+      throw err
+    })
+  }
+  return certHashesPromise
+}
+
+// WAMP_WT_CERT_URL is fetched cross-origin from the app's own origin (e.g. dev server on
+// a different port than the router), so it must respond with Access-Control-Allow-Origin
+// for that origin or the browser rejects the request before any response is visible here.
+async function loadCertHashes(): Promise<WebTransportCertHash[]> {
+  let resp: Response
+  try {
+    resp = await fetch(WAMP_WT_CERT_URL, { cache: 'no-store' })
+  } catch (err) {
+    throw new Error(
+      `failed to reach WebTransport cert hash endpoint ${WAMP_WT_CERT_URL} (network error or missing CORS headers for this origin): ${err}`,
+    )
+  }
   if (!resp.ok) {
     throw new Error(`failed to load WebTransport cert hash from ${WAMP_WT_CERT_URL}: ${resp.status} ${resp.statusText}`)
   }
@@ -20,7 +51,8 @@ async function fetchCertHashes(): Promise<WebTransportCertHash[] | undefined> {
     throw new Error(`invalid WebTransport cert hash payload from ${WAMP_WT_CERT_URL}`)
   }
   const { hash } = payload as { hash: string }
-  const hashBytes = Uint8Array.from(atob(hash), (c) => c.charCodeAt(0))
+  const base64 = hash.replace(/-/g, '+').replace(/_/g, '/')
+  const hashBytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
   return [{ algorithm: 'sha-256', value: hashBytes }]
 }
 
@@ -34,15 +66,11 @@ export const wampService = {
     return connectWebTransportCRA(WAMP_WT_URL, WAMP_REALM, authId, secret, await fetchCertHashes())
   },
 
-  async connectWithCryptosign(authId: string, privateKey: string): Promise<WampSession> {
-    return connectWebTransportCryptosign(WAMP_WT_URL, WAMP_REALM, authId, privateKey, await fetchCertHashes())
-  },
-
   async connectWithAnonymous(authId: string): Promise<WampSession> {
     return connectWebTransportAnonymous(WAMP_WT_URL, WAMP_REALM, authId, await fetchCertHashes())
   },
 
-  async shellWithCryptosign(authId: string, privateKey: string, realm: string): Promise<WampSession> {
+  async connectWithCryptosign(authId: string, privateKey: string, realm: string): Promise<WampSession> {
     return connectWebTransportCryptosign(WAMP_WT_URL, realm, authId, privateKey, await fetchCertHashes())
   },
 

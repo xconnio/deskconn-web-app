@@ -2,7 +2,7 @@ import { ClientConfig } from 'xconn-webrtc-js'
 import { CBORSerializer, CryptoSignAuthenticator } from 'xconn'
 
 import { wampService, type WampSession } from './wamp'
-import { REGISTRATION_AUTHID } from '../config'
+import { REGISTRATION_AUTHID, WAMP_REALM } from '../config'
 
 export const authService = {
   async register(form: { username: string; name: string; password: string }) {
@@ -94,7 +94,7 @@ export const authService = {
   },
 
   async autoLogin(authId: string, privateKey: string) {
-    const s = await wampService.connectWithCryptosign(authId, privateKey)
+    const s = await wampService.connectWithCryptosign(authId, privateKey, WAMP_REALM)
     const result = await s.call('io.xconn.deskconn.account.get')
     return { session: s, result }
   },
@@ -215,14 +215,14 @@ export const authService = {
   },
 
   async shellDesktop(authId: string, privateKey: string, realm: string) {
-     return await wampService.shellWithCryptosign(authId, privateKey, realm)
+     return await wampService.connectWithCryptosign(authId, privateKey, realm)
   },
 
   async shellWebRTCDesktop(authID: string, privateKey: string, realm: string) {
     const procedureWebRTCOffer = 'io.xconn.webrtc.offer'
     const topicAnswererOnCandidate = 'io.xconn.webrtc.answerer.on_candidate'
     const topicOffererOnCandidate = 'io.xconn.webrtc.offerer.on_candidate'
-    const session = await wampService.connectWithCryptosign(authID, privateKey)
+    const session = await wampService.connectWithCryptosign(authID, privateKey, realm)
 
     const iceServers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }]
 
