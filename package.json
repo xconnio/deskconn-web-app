@@ -30,7 +30,7 @@
     "vue": "^3.5.25",
     "vue-router": "^4.6.3",
     "vue3-otp-input": "^0.5.40",
-    "xconn": "https://github.com/xconnio/xconn-js.git#943ac26af705a288307fee37ecb03932c9895645",
+    "xconn": "https://github.com/xconnio/xconn-js.git#64ef42cab3ec1a334c899db072a30a26d7fafee9",
     "xconn-webrtc-js": "https://github.com/xconnio/xconn-webrtc-js.git#c18817dcd767d4718055a0d65267018ed969c554"
   },
   "devDependencies": {
