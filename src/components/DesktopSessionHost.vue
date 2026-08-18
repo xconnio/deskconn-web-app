@@ -52,6 +52,7 @@ const {
   updateBounds,
   updateTitle,
   syncMaximizedBounds,
+  fitWindowsToContainer,
 } = desktopSessionsStore.getOrCreate(props.realm)
 
 const sessionTitle = computed(() => {
@@ -621,9 +622,15 @@ onMounted(() => {
 
   if (launcherBodyRef.value && typeof ResizeObserver !== 'undefined') {
     launcherBodyResizeObserver = new ResizeObserver(() => {
+      // A backgrounded instance goes display:none (0 size) — skip rather than
+      // scaling every window down to nothing, and leave lastContainer alone
+      // so the real resize this masks still computes off the last good size.
+      if (!launcherBodyRef.value?.clientWidth) return
       captureContainerSize()
       measureDockThickness()
-      syncMaximizedBounds(maximizedContainerSize())
+      const container = maximizedContainerSize()
+      syncMaximizedBounds(container)
+      fitWindowsToContainer(container)
     })
     launcherBodyResizeObserver.observe(launcherBodyRef.value)
   }
