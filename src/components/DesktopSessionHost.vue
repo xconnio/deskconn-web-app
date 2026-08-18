@@ -7,6 +7,7 @@ import type { AppWindow } from '@/composables/useWindowManager'
 
 import { useMachinesStore } from '@/stores/machines'
 import { useSettingsStore } from '@/stores/settings'
+import { useAuthStore } from '@/stores/auth'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useDesktopSessionsStore } from '@/stores/desktopSessions'
 import { useMachinesOverviewStore, PREVIEW_WIDTH, PREVIEW_HEIGHT } from '@/stores/machinesOverview'
@@ -30,6 +31,7 @@ const props = defineProps<{ realm: string; active: boolean }>()
 
 const machinesStore = useMachinesStore()
 const settingsStore = useSettingsStore()
+const authStore = useAuthStore()
 const sessionCacheStore = useSessionCacheStore()
 const desktopSessionsStore = useDesktopSessionsStore()
 const machinesOverviewStore = useMachinesOverviewStore()
@@ -144,8 +146,13 @@ async function fetchWallpaper() {
   const cached = await loadCachedWallpaper(props.realm)
   applyWallpaperUrl(cached?.url ?? null)
 
+  // Own throwaway session, deliberately not the shared/cached one: wallpaper.get can
+  // return a multi-MB image that exceeds the transport's single-frame size limit, which
+  // kills the whole stream it was sent on. Isolating it here means that failure can only
+  // cost the wallpaper, not the desktop session everything else (terminal, files, ping) relies on.
+  let session: Session | false | null = null
   try {
-    const session = await sessionCacheStore.acquire(props.realm)
+    session = await authStore.shellWamp(props.realm)
     if (!session) return
 
     // Cheap md5 check — only download the full image when it has changed
@@ -162,6 +169,8 @@ async function fetchWallpaper() {
     applyWallpaperUrl(newUrl)
   } catch {
     // silently ignore — wallpaper is optional
+  } finally {
+    if (session) session.leave().catch(() => {})
   }
 }
 

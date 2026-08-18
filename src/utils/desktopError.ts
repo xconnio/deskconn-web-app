@@ -50,5 +50,7 @@ export function formatDesktopError(error: unknown, fallback = DESKTOP_OFFLINE_ME
   if (isDesktopOfflineError(error)) {
     return DESKTOP_OFFLINE_MESSAGE
   }
-  return errorText(error) || fallback
+  const text = errorText(error)
+  if (!text) console.error('formatDesktopError: falling back to default message for unrecognized error:', error)
+  return text || fallback
 }
