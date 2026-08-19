@@ -1,5 +1,4 @@
 import {
-  connectWebTransportAnonymous,
   connectWebTransportCRA,
   connectWebTransportCryptosign,
   type WebTransportCertHash,
@@ -64,10 +63,6 @@ export type WampSession = any
 export const wampService = {
   async connectWithCRA(authId: string, secret: string): Promise<WampSession> {
     return connectWebTransportCRA(WAMP_WT_URL, WAMP_REALM, authId, secret, await fetchCertHashes())
-  },
-
-  async connectWithAnonymous(authId: string): Promise<WampSession> {
-    return connectWebTransportAnonymous(WAMP_WT_URL, WAMP_REALM, authId, await fetchCertHashes())
   },
 
   async connectWithCryptosign(authId: string, privateKey: string, realm: string): Promise<WampSession> {

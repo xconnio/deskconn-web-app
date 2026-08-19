@@ -32,7 +32,7 @@ clean:
 	rm -rf dist/ node_modules/
 
 build-docker:
-	docker build -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
+	docker build --build-arg VITE_REGISTRATION_PRIVATE_KEY=$(VITE_REGISTRATION_PRIVATE_KEY) -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
 
 run-docker:
 	docker compose up web
