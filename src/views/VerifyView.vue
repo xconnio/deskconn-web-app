@@ -21,6 +21,9 @@ const canResend = computed(() => {
   return timeLeft.value <= 30
 })
 
+const isLoginFlow = computed(() => !authStore.pendingUsername && !!authStore.pendingLoginUsername)
+const displayUsername = computed(() => authStore.pendingUsername || authStore.pendingLoginUsername)
+
 const startTimer = () => {
   // Clear existing if any
   if (timerInterval.value) clearInterval(timerInterval.value)
@@ -53,9 +56,9 @@ const startTimer = () => {
 }
 
 onMounted(() => {
-  if (!authStore.pendingUsername) {
-    // No pending user to verify, redirect to register
-    router.push('/register')
+  if (!authStore.pendingUsername && !authStore.pendingLoginUsername) {
+    // No pending verification, redirect to login
+    router.push('/login')
     return
   }
   startTimer()
@@ -94,8 +97,13 @@ const handleOnComplete = async (value: string) => {
   error.value = ''
   isLoading.value = true
   try {
-    await authStore.verifyAccount(value)
-    router.push('/login')
+    if (isLoginFlow.value) {
+      await authStore.verifyLoginOtp(value)
+      router.push('/')
+    } else {
+      await authStore.verifyAccount(value)
+      router.push('/login')
+    }
   } catch (e: unknown) {
     console.error(e)
     const errorMsg = e instanceof Error ? e.message : String(e)
@@ -120,7 +128,7 @@ const handleOnChange = () => {
           <h3 class="card-title fw-bold mb-3">Verify Your Account</h3>
           <p class="text-muted mb-4">
             Enter the 6-digit code sent to your email/device for user
-            <strong class="text-dark">{{ authStore.pendingUsername }}</strong>
+            <strong class="text-dark">{{ displayUsername }}</strong>
           </p>
 
           <div
@@ -150,7 +158,7 @@ const handleOnChange = () => {
           </div>
 
           <div class="mt-3">
-            <small class="text-muted d-block mb-2">
+            <small v-if="!isLoginFlow" class="text-muted d-block mb-2">
               Didn't receive the code?
               <a
                 href="#"
@@ -166,10 +174,16 @@ const handleOnChange = () => {
             </small>
 
             <small class="text-muted">
-              Wrong username?
-              <a href="#" @click.prevent="router.push('/register')" class="fw-bold"
-                >Register again</a
-              >
+              <template v-if="isLoginFlow">
+                Wrong account?
+                <a href="#" @click.prevent="router.push('/login')" class="fw-bold">Back to login</a>
+              </template>
+              <template v-else>
+                Wrong username?
+                <a href="#" @click.prevent="router.push('/register')" class="fw-bold"
+                  >Register again</a
+                >
+              </template>
             </small>
           </div>
         </div>

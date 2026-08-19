@@ -51,13 +51,10 @@ const handleLogin = async () => {
       return
     }
 
-    // Call store action
+    // Call store action - sends the OTP, actual login completes on the verify page
     await authStore.login(form.value.email, form.value.password)
 
-    // Show modal or redirect? Project says "if login succeed don't show any alert and redirect to root path"
-    // So I will just redirect. The modal was from previous iteration but might be removable now.
-    // I'll keep the redirect simple.
-    router.push('/')
+    router.push('/verify')
   } catch (e: unknown) {
     console.error(e)
     const errorMsg = e instanceof Error ? e.message : String(e)

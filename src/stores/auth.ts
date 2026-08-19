@@ -15,6 +15,8 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(JSON.parse(localStorage.getItem('currentUser') || 'null'))
   const session = ref<WampSession | null>(null)
   const pendingUsername = ref<string | null>(localStorage.getItem('pending_verification_user'))
+  const pendingLoginUsername = ref<string | null>(null)
+  const pendingLoginPassword = ref<string | null>(null)
 
   // Getters
   const isAuthenticated = computed(() => !!user.value)
@@ -39,6 +41,10 @@ export const useAuthStore = defineStore('auth', () => {
       session.value = s
       pendingUsername.value = form.username
       localStorage.setItem('pending_verification_user', form.username)
+
+      // A stale login-OTP flow must not shadow this new pending verification
+      pendingLoginUsername.value = null
+      pendingLoginPassword.value = null
 
       return result
     } catch (err) {
@@ -142,7 +148,29 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function login(username: string, password: string) {
-    // 1. Connect via CRA & Get Account
+    // Password checked server-side; on success an OTP is emailed and login
+    // completes in verifyLoginOtp once the code is confirmed.
+    const { session: s } = await authService.requestLoginOtp(username, password)
+    await s.leave().catch(console.error)
+
+    pendingLoginUsername.value = username
+    pendingLoginPassword.value = password
+
+    // A stale registration-verify flow must not shadow this new pending login
+    pendingUsername.value = null
+    localStorage.removeItem('pending_verification_user')
+  }
+
+  async function verifyLoginOtp(code: string) {
+    const username = pendingLoginUsername.value
+    const password = pendingLoginPassword.value
+    if (!username || !password) {
+      throw new Error('No pending login found.')
+    }
+
+    await authService.verifyLoginOtp(null, username, code)
+
+    // OTP confirmed - complete the real login via CRA & Get Account
     const { session: s, result } = await authService.login(username, password)
     session.value = s
 
@@ -154,7 +182,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     console.dir(userDetails)
 
-    // 2. Device Check & Registration
+    // Device Check & Registration
     const userId = userDetails.id
     const storageKey = `device_credentials_${userId}`
     const storedCredsStr = await SecureStorage.getItem(storageKey)
@@ -170,9 +198,12 @@ export const useAuthStore = defineStore('auth', () => {
       await SecureStorage.setItem(storageKey, JSON.stringify(creds))
     }
 
-    // 3. Update State
+    // Update State
     localStorage.setItem('last_active_user', userId)
     setUser(userDetails)
+
+    pendingLoginUsername.value = null
+    pendingLoginPassword.value = null
   }
 
   async function getLoggedInUserCreds() {
@@ -288,8 +319,10 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     isAuthenticated,
     pendingUsername,
+    pendingLoginUsername,
     session,
     login,
+    verifyLoginOtp,
     register,
     verifyAccount,
     resendOtp,
