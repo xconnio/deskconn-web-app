@@ -62,6 +62,25 @@ export const authService = {
     return { session: s, result }
   },
 
+  async requestLoginOtp(email: string, password: string) {
+    const s = await this.getRegistrarSession()
+    try {
+      const result = await s.call('io.xconn.deskconn.account.login', [email, password])
+      return { result, session: s }
+    } catch (err) {
+      await s.leave().catch(console.error)
+      throw err
+    }
+  },
+
+  async verifyLoginOtp(session: WampSession | null, email: string, code: string) {
+    let s = session
+    if (!s) {
+      s = await this.getRegistrarSession()
+    }
+    return s.call('io.xconn.deskconn.account.login.verify', [email, code])
+  },
+
   async forgotPassword(email: string) {
     const s = await this.getRegistrarSession()
     try {
