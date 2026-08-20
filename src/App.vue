@@ -99,6 +99,12 @@ onMounted(async () => {
       ) {
         router.push('/')
       }
+    } else if (router.currentRoute.value.meta.requiresAuth) {
+      // No stored principal, or it was expired/deleted (autoLogin already
+      // cleared it) — a route that requires auth was only reachable because
+      // `user` was optimistically loaded from stale localStorage at store
+      // creation, before this real check ran.
+      router.push('/login')
     }
   } catch (err) {
     console.error('Auto-login failed', err)

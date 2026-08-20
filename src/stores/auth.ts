@@ -168,7 +168,12 @@ export const useAuthStore = defineStore('auth', () => {
       throw new Error('No pending login found.')
     }
 
-    await authService.verifyLoginOtp(null, username, password, code)
+    // Principal keypair — the account-level identity used to re-establish the
+    // session on reload (autoLogin). Short-lived (server-side expiry) and
+    // removed again on logout, unlike the permanent per-device keypair below.
+    const { privateKey: principalPrivateKey, publicKey: principalPublicKey } = await generateKeys()
+
+    await authService.verifyLoginOtp(null, username, password, code, principalPublicKey)
 
     // OTP confirmed - complete the real login via CRA & Get Account
     const { session: s, result } = await authService.login(username, password)
@@ -182,8 +187,14 @@ export const useAuthStore = defineStore('auth', () => {
 
     console.dir(userDetails)
 
-    // Device Check & Registration
     const userId = userDetails.id
+
+    await SecureStorage.setItem(
+      `principal_credentials_${userId}`,
+      JSON.stringify({ privateKey: principalPrivateKey, publicKey: principalPublicKey }),
+    )
+
+    // Device Check & Registration
     const storageKey = `device_credentials_${userId}`
     const storedCredsStr = await SecureStorage.getItem(storageKey)
 
@@ -206,35 +217,45 @@ export const useAuthStore = defineStore('auth', () => {
     pendingLoginPassword.value = null
   }
 
-  async function getLoggedInUserCreds() {
+  async function getStoredCreds(storagePrefix: string) {
     const lastUserId = localStorage.getItem('last_active_user')
     const storedUserStr = localStorage.getItem('currentUser')
 
     if (!lastUserId || !storedUserStr) return false
 
-    const storageKey = `device_credentials_${lastUserId}`
     // Direct SecureStorage access (No migration)
-    const storedCredsStr = await SecureStorage.getItem(storageKey)
+    const storedCredsStr = await SecureStorage.getItem(`${storagePrefix}_${lastUserId}`)
 
     const storedUser = JSON.parse(storedUserStr)
     const authId = storedUser.email
 
     if (!storedCredsStr || !authId) return false
 
-    const { privateKey } = JSON.parse(storedCredsStr)
+    const { privateKey, publicKey } = JSON.parse(storedCredsStr)
 
-    return { authId, privateKey }
+    return { authId, privateKey, publicKey }
+  }
+
+  // The permanent per-device keypair (shell/desktop access) — unaffected by
+  // login-session expiry, kept until the device itself is removed.
+  async function getDeviceCreds() {
+    return getStoredCreds('device_credentials')
+  }
+
+  // The short-lived principal keypair created at login (autoLogin only).
+  async function getPrincipalCreds() {
+    return getStoredCreds('principal_credentials')
   }
 
   async function shellWamp(realm: string) {
-    const creds = await getLoggedInUserCreds()
+    const creds = await getDeviceCreds()
     if (!creds) return false
 
     return await authService.shellDesktop(creds.authId, creds.privateKey, realm)
   }
 
   async function shellWebRTC(realm: string) {
-    const creds = await getLoggedInUserCreds()
+    const creds = await getDeviceCreds()
     if (!creds) return false
 
     const [webrtcSession, webrtc] = await authService.shellWebRTCDesktop(
@@ -269,8 +290,18 @@ export const useAuthStore = defineStore('auth', () => {
     return await shellWamp(realm)
   }
 
+  // Drops a principal key that's no longer good (expired/deleted/rejected)
+  // instead of retrying it forever on every load, and clears the stale
+  // "logged in" state so the router sends the user back to /login.
+  async function clearStalePrincipal() {
+    const staleUserId = localStorage.getItem('last_active_user')
+    if (staleUserId) await SecureStorage.removeItem(`principal_credentials_${staleUserId}`)
+    localStorage.removeItem('last_active_user')
+    setUser(null)
+  }
+
   async function autoLogin() {
-    const creds = await getLoggedInUserCreds()
+    const creds = await getPrincipalCreds()
     if (!creds) return false
 
     try {
@@ -281,6 +312,7 @@ export const useAuthStore = defineStore('auth', () => {
       const userDetails = result.args[0]
       if (!userDetails || !userDetails.id) {
         await s.leave()
+        await clearStalePrincipal()
         return false
       }
 
@@ -290,12 +322,28 @@ export const useAuthStore = defineStore('auth', () => {
 
       return true
     } catch (e) {
+      // Router either denied the reconnect (expired/deleted principal) or the
+      // machine is unreachable.
       console.error('Auto-login failed', e)
+      await clearStalePrincipal()
       return false
     }
   }
 
-  function logout() {
+  async function logout() {
+    const s = session.value
+    const lastUserId = localStorage.getItem('last_active_user')
+
+    if (s && lastUserId) {
+      const storedCredsStr = await SecureStorage.getItem(`principal_credentials_${lastUserId}`)
+      if (storedCredsStr) {
+        const { publicKey } = JSON.parse(storedCredsStr)
+        await authService.deletePrincipal(s, publicKey).catch(console.error)
+      }
+    }
+
+    if (lastUserId) await SecureStorage.removeItem(`principal_credentials_${lastUserId}`)
+
     useSessionCacheStore().invalidateAll()
     session.value?.leave().catch(console.error)
     session.value = null
