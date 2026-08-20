@@ -168,7 +168,7 @@ export const useAuthStore = defineStore('auth', () => {
       throw new Error('No pending login found.')
     }
 
-    await authService.verifyLoginOtp(null, username, code)
+    await authService.verifyLoginOtp(null, username, password, code)
 
     // OTP confirmed - complete the real login via CRA & Get Account
     const { session: s, result } = await authService.login(username, password)
