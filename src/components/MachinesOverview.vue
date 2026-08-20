@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, type ComponentPublicInstance } from 'vue'
+import { ref, computed, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { useMachinesStore } from '@/stores/machines'
 import { useDesktopSessionsStore } from '@/stores/desktopSessions'
 import { useMachinesOverviewStore } from '@/stores/machinesOverview'
 import { openLauncher } from '@/router/navigation'
+import { machinesOverviewReturnRealm } from '@/router/index'
 import { loadCachedWallpaper } from '@/composables/useWallpaperCache'
 
 const machinesStore = useMachinesStore()
@@ -66,12 +67,33 @@ function previewRef(realm: string): TemplateRefCallback {
 function selectMachine(realm: string, name: string) {
   openLauncher(realm, name)
 }
+
+// Only shown when this overview was reached from a desktop (e.g. the dock's
+// Machines button) — nothing to close back to when it's the initial landing page.
+function closeOverview() {
+  if (machinesOverviewReturnRealm.value) openLauncher(machinesOverviewReturnRealm.value)
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') closeOverview()
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
   <div class="machines-overview">
     <div class="machines-overview-header">
       <h2 class="machines-overview-title">Machines</h2>
+      <button
+        v-if="machinesOverviewReturnRealm"
+        class="machines-overview-close"
+        title="Close"
+        @click="closeOverview"
+      >
+        <i class="bi bi-x-lg"></i>
+      </button>
     </div>
 
     <div v-if="!machinesStore.hasLoadedDesktops" class="machines-loading">
@@ -85,6 +107,7 @@ function selectMachine(realm: string, name: string) {
         v-for="desktop in displayDesktops"
         :key="desktop.realm"
         class="machines-card"
+        :class="{ 'machines-card-active': desktop.realm === machinesOverviewReturnRealm }"
         @click="selectMachine(desktop.realm, desktop.name)"
       >
         <div class="machines-card-preview">
@@ -135,6 +158,25 @@ function selectMachine(realm: string, name: string) {
   margin: 0;
 }
 
+.machines-overview-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.machines-overview-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
 .machines-loading {
   display: flex;
   align-items: center;
@@ -175,6 +217,10 @@ function selectMachine(realm: string, name: string) {
 .machines-card:hover .machines-card-preview {
   border-color: rgba(255, 255, 255, 0.6);
   transform: translateY(-3px);
+}
+
+.machines-card-active .machines-card-preview {
+  border-color: #3b82f6;
 }
 
 .machines-card-image {

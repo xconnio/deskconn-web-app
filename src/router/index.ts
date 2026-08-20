@@ -1,3 +1,4 @@
+import { ref } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
@@ -76,8 +77,16 @@ export function requestMachinesPicker() {
 // back into whatever machine is currently the last-used one.
 let hasResolvedHome = false
 
+// The desktop MachinesOverview was navigated away from, if any — lets it show
+// a close/back-to-desktop control instead of always being a dead-end page.
+export const machinesOverviewReturnRealm = ref<string | null>(null)
+
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
+
+  if (to.path === '/') {
+    machinesOverviewReturnRealm.value = from.name === 'desktop-launcher' ? (from.params.realm as string) : null
+  }
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     next('/login')
