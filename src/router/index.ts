@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import VerifyView from '../views/VerifyView.vue'
+import MachinesOverview from '../components/MachinesOverview.vue'
 import { useAuthStore } from '../stores/auth'
 import { useSettingsStore } from '../stores/settings'
 
@@ -11,7 +12,7 @@ const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: () => import('../components/MachinesOverview.vue'),
+      component: MachinesOverview,
       meta: { requiresAuth: true },
     },
     {

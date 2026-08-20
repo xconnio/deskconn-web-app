@@ -40,6 +40,7 @@ const sidebarCollapsed = ref(false)
 const mobileOpen = ref(false)
 
 const isDesktopView = computed(() => route.name === 'desktop-launcher')
+const hasDarkBackground = computed(() => isDesktopView.value || route.name === 'home')
 const showSidebar = computed(
   () => !route.meta.hideNavbar && authStore.isAuthenticated && !isDesktopView.value,
 )
@@ -203,7 +204,7 @@ onUnmounted(() => {
     <!-- Main content -->
     <main
       class="main-content"
-      :class="{ 'has-topbar': showSidebar }"
+      :class="{ 'has-topbar': showSidebar, 'is-desktop': hasDarkBackground }"
     >
       <RouterView />
       <DesktopSessionHost
@@ -221,11 +222,6 @@ onUnmounted(() => {
 </template>
 
 <style>
-body {
-  background: #ffffff;
-  min-height: 100vh;
-}
-
 .app-wrapper {
   display: flex;
   min-height: 100vh;
@@ -428,6 +424,10 @@ body {
   background: #ffffff;
   display: flex;
   flex-direction: column;
+}
+
+.main-content.is-desktop {
+  background: #000000;
 }
 
 /* ── Mobile breakpoint ── */
