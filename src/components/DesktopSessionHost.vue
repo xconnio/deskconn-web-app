@@ -186,6 +186,12 @@ const isConnecting = ref(true)
 // same full-screen treatment.
 const isDisconnected = ref(false)
 
+// From io.xconn.deskconn.deskconnd.device.is_desktop — false on a headless
+// machine, which never registers display-only RPCs (screenshot, brightness,
+// wallpaper) on the deskconnd side. Defaults true so the icon isn't hidden
+// then flashed back in on every ordinary desktop.
+const isDesktop = ref(true)
+
 // Apps stay open (blurred) behind the overlay while disconnected — only
 // cleared once the user actually navigates away (see the active-prop watch
 // below), so returning to a still-active view doesn't lose anything.
@@ -201,6 +207,17 @@ async function connectSession(): Promise<boolean> {
     const session = await sessionCacheStore.acquire(props.realm)
     if (!session) return false
     await session.call('io.xconn.deskconn.deskconnd.ping')
+
+    // Older deskconnd builds don't register this RPC at all — NoSuchProcedure
+    // there isn't "not a desktop", it's "unknown", so assume desktop rather
+    // than hiding screenshot.
+    try {
+      const isDesktopResult = await session.call('io.xconn.deskconn.deskconnd.device.is_desktop')
+      isDesktop.value = !!isDesktopResult.args?.[0]
+    } catch {
+      isDesktop.value = true
+    }
+
     session.onDisconnect(async () => {
       markDisconnected()
     })
@@ -708,6 +725,7 @@ onUnmounted(() => {
         :focused-id="focusedId"
         :position="dockPosition"
         :offline="isDisconnected"
+        :is-desktop="isDesktop"
         @launch="handleLaunch"
         @activate="onActivateWindow"
         @close="onCloseWindow"

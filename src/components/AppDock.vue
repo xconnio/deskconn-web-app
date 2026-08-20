@@ -24,7 +24,16 @@ const props = defineProps<{
   focusedId: string | null
   position: 'bottom' | 'left' | 'right'
   offline?: boolean
+  /** From io.xconn.deskconn.deskconnd.device.is_desktop — false on a headless
+   * machine, which never registers the screenshot RPC on the deskconnd side. */
+  isDesktop?: boolean
 }>()
+
+// Screenshot only exists on desktop machines — deskconnd doesn't even
+// register that RPC on a headless one, so calling it there would just error.
+const visibleApps = computed(() =>
+  props.isDesktop === false ? props.apps.filter((a) => a.id !== 'screenshot') : props.apps,
+)
 
 const emit = defineEmits<{
   launch: [appId: string]
@@ -72,7 +81,7 @@ const pinnedOrder = ref<string[]>(loadPinnedOrder())
 // Reconcile stored order against the current app list: keep known ids in their
 // stored order, append any new ones, drop ids that no longer exist.
 watch(
-  () => props.apps.map((a) => a.id),
+  () => visibleApps.value.map((a) => a.id),
   (ids) => {
     const idSet = new Set(ids)
     const kept = pinnedOrder.value.filter((id) => idSet.has(id))
@@ -92,7 +101,7 @@ function persistPinnedOrder() {
 
 const orderedApps = computed(() =>
   pinnedOrder.value
-    .map((id) => props.apps.find((a) => a.id === id))
+    .map((id) => visibleApps.value.find((a) => a.id === id))
     .filter((a): a is DockAppDef => !!a),
 )
 
@@ -253,7 +262,7 @@ function quitAll(appId: string) {
 function handleIconClick(appId: string) {
   const instances = instancesByApp.value.get(appId) ?? []
   if (instances.length === 0) {
-    const app = props.apps.find((a) => a.id === appId)
+    const app = visibleApps.value.find((a) => a.id === appId)
     if (!props.offline && app?.launchable !== false) emit('launch', appId)
   } else if (instances.length === 1) {
     activateInstance(instances[0]!.id)
