@@ -73,12 +73,22 @@ export const authService = {
     }
   },
 
-  async verifyLoginOtp(session: WampSession | null, email: string, password: string, code: string) {
+  async verifyLoginOtp(
+    session: WampSession | null,
+    email: string,
+    password: string,
+    code: string,
+    publicKey: string,
+  ) {
     let s = session
     if (!s) {
       s = await wampService.connectWithCRA(email, password)
     }
-    return s.call('io.xconn.deskconn.account.login.verify', [email, code])
+    return s.call('io.xconn.deskconn.account.login.verify', [email, code, publicKey])
+  },
+
+  async deletePrincipal(session: WampSession, publicKey: string) {
+    return session.call('io.xconn.deskconn.account.principal.delete', [publicKey])
   },
 
   async forgotPassword(email: string) {
