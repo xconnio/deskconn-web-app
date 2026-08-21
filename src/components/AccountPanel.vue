@@ -32,9 +32,9 @@ watch(
   },
 )
 
-function handleLogout() {
+async function handleLogout() {
   accountPanelStore.close()
-  authStore.logout()
+  await authStore.logout()
   router.push('/login')
 }
 
