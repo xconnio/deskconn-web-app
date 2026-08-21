@@ -173,7 +173,8 @@ export const useAuthStore = defineStore('auth', () => {
     // removed again on logout, unlike the permanent per-device keypair below.
     const { privateKey: principalPrivateKey, publicKey: principalPublicKey } = await generateKeys()
 
-    await authService.verifyLoginOtp(null, username, password, code, principalPublicKey)
+    const verifyResult = await authService.verifyLoginOtp(null, username, password, code, principalPublicKey)
+    const principalExpiresAt = verifyResult?.args?.[0]?.expires_at
 
     // OTP confirmed - complete the real login via CRA & Get Account
     const { session: s, result } = await authService.login(username, password)
@@ -191,7 +192,11 @@ export const useAuthStore = defineStore('auth', () => {
 
     await SecureStorage.setItem(
       `principal_credentials_${userId}`,
-      JSON.stringify({ privateKey: principalPrivateKey, publicKey: principalPublicKey }),
+      JSON.stringify({
+        privateKey: principalPrivateKey,
+        publicKey: principalPublicKey,
+        expiresAt: principalExpiresAt,
+      }),
     )
 
     // Device Check & Registration
@@ -231,9 +236,9 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (!storedCredsStr || !authId) return false
 
-    const { privateKey, publicKey } = JSON.parse(storedCredsStr)
+    const { privateKey, publicKey, expiresAt } = JSON.parse(storedCredsStr)
 
-    return { authId, privateKey, publicKey }
+    return { authId, privateKey, publicKey, expiresAt }
   }
 
   // The permanent per-device keypair (shell/desktop access) — unaffected by
@@ -306,6 +311,13 @@ export const useAuthStore = defineStore('auth', () => {
       // No principal creds — either a fresh browser, or a session left over
       // from before principal creds existed. Either way `user` must not stay
       // stale-authenticated, or the router bounces /login back to / forever.
+      await clearStalePrincipal()
+      return false
+    }
+
+    // Expired principal — the server will reject it anyway, so skip the
+    // round-trip and go straight to a fresh login.
+    if (creds.expiresAt && new Date(creds.expiresAt) <= new Date()) {
       await clearStalePrincipal()
       return false
     }
