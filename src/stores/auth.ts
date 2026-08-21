@@ -302,7 +302,13 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function autoLogin() {
     const creds = await getPrincipalCreds()
-    if (!creds) return false
+    if (!creds) {
+      // No principal creds — either a fresh browser, or a session left over
+      // from before principal creds existed. Either way `user` must not stay
+      // stale-authenticated, or the router bounces /login back to / forever.
+      await clearStalePrincipal()
+      return false
+    }
 
     try {
       // Connect with stored credentials
