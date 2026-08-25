@@ -102,7 +102,7 @@ const handleOnComplete = async (value: string) => {
       router.push('/')
     } else {
       await authStore.verifyAccount(value)
-      router.push('/login')
+      router.push('/')
     }
   } catch (e: unknown) {
     console.error(e)

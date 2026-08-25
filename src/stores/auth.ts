@@ -60,11 +60,6 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     let s = session.value
-
-    // If no session, the service helper inside won't work exactly as the store did
-    // because the store logic was "if !s, connect, then call, then close".
-    // We will handle the connection logic here by checking session.value.
-
     let createdNewSession = false
     if (!s) {
       console.log('Restoring registrar session for verification...')
@@ -72,26 +67,46 @@ export const useAuthStore = defineStore('auth', () => {
       createdNewSession = true
     }
 
+    // Principal keypair — same account-level identity used at login (see
+    // verifyLoginOtp), so verification can log the user straight in.
+    const { privateKey: principalPrivateKey, publicKey: principalPublicKey } = await generateKeys()
+
+    let verifyResult
     try {
-      // Direct call using the session
-      const result = await s.call('io.xconn.deskconn.account.verify', [username, code])
-      console.dir(result)
-
-      // Verification successful
-      pendingUsername.value = null
-      localStorage.removeItem('pending_verification_user')
-
-      return result
+      verifyResult = await authService.verifyAccount(s, username, code, principalPublicKey)
+      console.dir(verifyResult)
     } finally {
-      if (s) {
-        // If we created a temporary session, or if we want to clean up anyway:
-        // The original logic closed it.
-        await s.leave().catch(console.error)
-      }
+      await s.leave().catch(console.error)
       if (session.value === s || createdNewSession) {
         session.value = null
       }
     }
+
+    pendingUsername.value = null
+    localStorage.removeItem('pending_verification_user')
+
+    const principalExpiresAt = verifyResult?.args?.[0]?.expires_at
+
+    // Verified — the freshly-registered principal key logs the user in
+    // immediately, no separate login step required.
+    const { session: authSession, result } = await authService.autoLogin(username, principalPrivateKey)
+    session.value = authSession
+
+    const userDetails = result.args[0]
+    if (!userDetails || !userDetails.id) {
+      await authSession.leave()
+      throw new Error('Invalid user details received')
+    }
+
+    await completeAuthSession(
+      authSession,
+      userDetails,
+      principalPrivateKey,
+      principalPublicKey,
+      principalExpiresAt,
+    )
+
+    return verifyResult
   }
 
   async function resendOtp() {
@@ -161,6 +176,46 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('pending_verification_user')
   }
 
+  // Persists the principal keypair, registers a device credential if this
+  // browser doesn't have one yet, and marks the user as logged in. Shared by
+  // login and registration verification, since both end the same way: a
+  // freshly-verified principal key and an authenticated session.
+  async function completeAuthSession(
+    s: WampSession,
+    userDetails: User,
+    principalPrivateKey: string,
+    principalPublicKey: string,
+    principalExpiresAt: string | undefined,
+  ) {
+    const userId = userDetails.id
+
+    await SecureStorage.setItem(
+      `principal_credentials_${userId}`,
+      JSON.stringify({
+        privateKey: principalPrivateKey,
+        publicKey: principalPublicKey,
+        expiresAt: principalExpiresAt,
+      }),
+    )
+
+    const storageKey = `device_credentials_${userId}`
+    const storedCredsStr = await SecureStorage.getItem(storageKey)
+
+    if (!storedCredsStr) {
+      console.log('Registering new device for user', userId)
+      const deviceID = generateDeviceID()
+      const { privateKey, publicKey } = await generateKeys()
+
+      await authService.registerDevice(s, deviceID, publicKey)
+
+      const creds = { deviceID, privateKey }
+      await SecureStorage.setItem(storageKey, JSON.stringify(creds))
+    }
+
+    localStorage.setItem('last_active_user', String(userId))
+    setUser(userDetails)
+  }
+
   async function verifyLoginOtp(code: string) {
     const username = pendingLoginUsername.value
     const password = pendingLoginPassword.value
@@ -188,35 +243,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     console.dir(userDetails)
 
-    const userId = userDetails.id
-
-    await SecureStorage.setItem(
-      `principal_credentials_${userId}`,
-      JSON.stringify({
-        privateKey: principalPrivateKey,
-        publicKey: principalPublicKey,
-        expiresAt: principalExpiresAt,
-      }),
-    )
-
-    // Device Check & Registration
-    const storageKey = `device_credentials_${userId}`
-    const storedCredsStr = await SecureStorage.getItem(storageKey)
-
-    if (!storedCredsStr) {
-      console.log('Registering new device for user', userId)
-      const deviceID = generateDeviceID()
-      const { privateKey, publicKey } = await generateKeys()
-
-      await authService.registerDevice(s, deviceID, publicKey)
-
-      const creds = { deviceID, privateKey }
-      await SecureStorage.setItem(storageKey, JSON.stringify(creds))
-    }
-
-    // Update State
-    localStorage.setItem('last_active_user', userId)
-    setUser(userDetails)
+    await completeAuthSession(s, userDetails, principalPrivateKey, principalPublicKey, principalExpiresAt)
 
     pendingLoginUsername.value = null
     pendingLoginPassword.value = null
