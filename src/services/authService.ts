@@ -25,7 +25,7 @@ export const authService = {
     }
   },
 
-  async verifyAccount(session: WampSession | null, username: string, code: string) {
+  async verifyAccount(session: WampSession | null, username: string, code: string, publicKey: string) {
     let s = session
 
     // Ensure we have a valid registrar session
@@ -35,7 +35,7 @@ export const authService = {
     }
 
     try {
-      const result = await s.call('io.xconn.deskconn.account.verify', [username, code])
+      const result = await s.call('io.xconn.deskconn.account.verify', [username, code, publicKey])
       return result
     } catch (err) {
       throw err
