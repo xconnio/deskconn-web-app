@@ -134,9 +134,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 <style scoped>
 .machines-overview {
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
