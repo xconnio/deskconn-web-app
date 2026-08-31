@@ -5,6 +5,7 @@ import type { FileEntry } from '@/types'
 import type { EncryptionKeys } from '@/utils/encryption'
 import { createFileBrowser } from '@/utils/fileBrowse'
 import { formatDesktopError } from '@/utils/desktopError'
+import { detectPathSeparator, joinPath, normalizeComparablePath, relativeSegments } from '@/utils/filePath'
 
 const props = defineProps<{
   session: Session
@@ -47,11 +48,6 @@ const canConfirm = computed(() => {
   return true
 })
 
-function normalizeComparablePath(path: string): string {
-  const normalized = path.replace(/\/+/g, '/').replace(/\/$/, '')
-  return normalized || '/'
-}
-
 // The picker never lets the user browse above their home directory — the Up
 // button and breadcrumbs both stop there.
 const canGoUp = computed(() => {
@@ -65,13 +61,14 @@ const breadcrumbs = computed(() => {
   if (!home) return []
   if (current === home) return [{ label: 'Home', path: home }]
 
-  const relative = current.startsWith(home + '/') ? current.slice(home.length + 1) : ''
-  if (!relative) return [{ label: home, path: current }]
+  const parts = relativeSegments(current, home)
+  if (parts.length === 0) return [{ label: home, path: current }]
 
+  const sep = detectPathSeparator(home)
   const segments = [{ label: 'Home', path: home }]
   let running = home
-  for (const part of relative.split('/').filter(Boolean)) {
-    running = `${running}/${part}`
+  for (const part of parts) {
+    running = `${running}${sep}${part}`
     segments.push({ label: part, path: running })
   }
   return segments
@@ -132,7 +129,7 @@ function confirm() {
     emit('confirm', selectedEntry.value!.path)
   } else if (props.mode === 'save-as') {
     const name = fileName.value.trim()
-    emit('confirm', currentPath.value.replace(/\/+$/, '') + '/' + name)
+    emit('confirm', joinPath(currentPath.value, name))
   } else {
     // open-folder: an explicitly selected subfolder wins, otherwise confirm
     // whichever folder is currently being browsed.
