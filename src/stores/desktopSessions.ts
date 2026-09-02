@@ -34,5 +34,13 @@ export const useDesktopSessionsStore = defineStore('desktopSessions', () => {
     return false
   }
 
-  return { knownRealms, getOrCreate, hasOpenWindows, anyOpenWindowsAnywhere }
+  // Drops every realm this browser session has ever opened a window for —
+  // otherwise a previously-used realm outlives logout and reappears as a
+  // ghost card on the next user's MachinesOverview.
+  function reset() {
+    managers.clear()
+    knownRealms.value = []
+  }
+
+  return { knownRealms, getOrCreate, hasOpenWindows, anyOpenWindowsAnywhere, reset }
 })
