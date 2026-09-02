@@ -15,6 +15,7 @@ import { canStreamRanges, requestRange } from '@/services/fileStream'
 import { uploadFileToPath, type UploadProgress } from '@/utils/fileUpload'
 import { downloadUrl, downloadBlob } from '@/utils/download'
 import { streamFileData, downloadFile, ensureDownloadServiceWorker, type DownloadProgressState } from '@/utils/fileDownload'
+import { dirName, joinPath } from '@/utils/filePath'
 import {
   type FilePreviewType,
   formatSize,
@@ -599,9 +600,8 @@ async function confirmSave() {
   const targetName = saveAsNew.value ? saveFileName.value.trim() : currentEntry.value.name
   if (!targetName) { editError.value = 'Enter a file name'; return }
 
-  const slash = currentEntry.value.path.lastIndexOf('/')
-  const destDir = slash > 0 ? currentEntry.value.path.substring(0, slash) : '/'
-  const destPath = destDir === '/' ? `/${targetName}` : `${destDir}/${targetName}`
+  const destDir = dirName(currentEntry.value.path)
+  const destPath = joinPath(destDir, targetName)
 
   editError.value = ''
   savingEdit.value = true

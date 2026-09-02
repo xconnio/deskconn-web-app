@@ -20,6 +20,14 @@ import { uploadFileToPath } from '@/utils/fileUpload'
 import { downloadUrl } from '@/utils/download'
 import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
 import { formatDesktopError, isDesktopOfflineError, isNoSuchProcedureException } from '@/utils/desktopError'
+import {
+  detectPathSeparator,
+  dirName,
+  isAbsolutePath,
+  isPathWithinHome,
+  joinPath,
+  relativeSegments,
+} from '@/utils/filePath'
 
 const procedureFileRename = 'io.xconn.deskconn.deskconnd.file.rename'
 const procedureFileDelete = 'io.xconn.deskconn.deskconnd.file.delete'
@@ -157,20 +165,18 @@ const breadcrumbSegments = computed(() => {
     return [{ label: 'Home', path: homePath }]
   }
 
-  const relativePath = currentPath.startsWith(homePath + '/')
-    ? currentPath.slice(homePath.length + 1)
-    : ''
+  const parts = relativeSegments(currentPath, homePath)
 
-  if (!relativePath) {
+  if (parts.length === 0) {
     return [{ label: homePath, path: currentPath }]
   }
 
-  const parts = relativePath.split('/').filter(Boolean)
+  const sep = detectPathSeparator(homePath)
   const segments = [{ label: 'Home', path: homePath }]
   let runningPath = homePath
 
   for (const part of parts) {
-    runningPath = `${runningPath}/${part}`
+    runningPath = `${runningPath}${sep}${part}`
     segments.push({ label: part, path: runningPath })
   }
 
@@ -326,18 +332,6 @@ function iconStyleForEntry(entry: FileEntry): { color: string; background: strin
   return { color: '#94a3b8', background: '#f8fafc' }
 }
 
-function normalizeComparablePath(path: string) {
-  const normalized = path.replace(/\/+/g, '/').replace(/\/$/, '')
-  return normalized || '/'
-}
-
-function isPathWithinHome(path: string, homePath: string) {
-  const normalizedPath = normalizeComparablePath(path)
-  const normalizedHome = normalizeComparablePath(homePath)
-
-  return normalizedPath === normalizedHome || normalizedPath.startsWith(`${normalizedHome}/`)
-}
-
 function disconnectDesktopSession() {
   session.value = null
 }
@@ -456,7 +450,7 @@ async function loadPath(path = '', skipHistory = false) {
   const homePath = normalizePathValue(currentBrowse.value?.home_path)
   if (
     requestedPath &&
-    requestedPath.startsWith('/') &&
+    isAbsolutePath(requestedPath) &&
     homePath &&
     !isPathWithinHome(requestedPath, homePath)
   ) {
@@ -604,16 +598,19 @@ function selectEntry(entry: FileEntry) {
 function resolveSymlinkTarget(entry: FileEntry): string | null {
   const target = entry.link_target
   if (!target) return null
-  if (target.startsWith('/')) return target
-  const lastSlash = entry.path.lastIndexOf('/')
-  const parentDir = lastSlash > 0 ? entry.path.slice(0, lastSlash) : '/'
-  const parts = `${parentDir}/${target}`.split('/')
+  if (isAbsolutePath(target)) return target
+
+  const sep = detectPathSeparator(entry.path)
+  const parentDir = dirName(entry.path)
+  const parts = `${parentDir}${sep}${target}`.split(sep)
   const resolved: string[] = []
   for (const part of parts) {
     if (part === '..' && resolved.length > 0) resolved.pop()
     else if (part !== '.' && part !== '') resolved.push(part)
   }
-  return '/' + resolved.join('/')
+  return sep === '\\' && /^[a-zA-Z]:$/.test(resolved[0] ?? '')
+    ? resolved.join(sep)
+    : sep + resolved.join(sep)
 }
 
 async function openEntry(entry: FileEntry) {
@@ -1162,9 +1159,10 @@ async function executeSearch(query: string) {
 
 function searchResultParent(entry: FileEntry): string {
   const root = currentBrowse.value?.path || ''
-  const parent = entry.path.slice(0, entry.path.lastIndexOf('/')) || '/'
+  const sep = detectPathSeparator(entry.path)
+  const parent = dirName(entry.path)
   if (parent === root) return '.'
-  if (parent.startsWith(root + '/')) return parent.slice(root.length + 1)
+  if (parent.startsWith(`${root}${sep}`)) return parent.slice(root.length + 1)
   return parent
 }
 
@@ -1174,7 +1172,7 @@ async function openSearchResult(entry: FileEntry) {
     await loadPath(entry.path)
     return
   }
-  const parentDir = entry.path.slice(0, entry.path.lastIndexOf('/')) || '/'
+  const parentDir = dirName(entry.path)
   await loadPath(parentDir)
   openPreview(entry)
 }
@@ -1261,11 +1259,7 @@ async function confirmRename() {
     return
   }
 
-  const parentDir = actionSheetEntry.value.path.slice(
-    0,
-    actionSheetEntry.value.path.lastIndexOf('/'),
-  )
-  const newPath = `${parentDir}/${newName}`
+  const newPath = joinPath(dirName(actionSheetEntry.value.path), newName)
 
   isOperating.value = true
   operationError.value = ''
@@ -1320,16 +1314,15 @@ async function pasteClipboard() {
 
   const srcPath = clipboard.value.path
   const dstDir = currentBrowse.value.path
-  let dstPath = `${dstDir}/${clipboard.value.name}`
+  let dstPath = joinPath(dstDir, clipboard.value.name)
 
   if (dstPath === srcPath) {
     const name = clipboard.value.name
     const dotIndex = clipboard.value.is_dir ? -1 : name.lastIndexOf('.')
-    if (dotIndex > 0) {
-      dstPath = `${dstDir}/${name.slice(0, dotIndex)}_copy${name.slice(dotIndex)}`
-    } else {
-      dstPath = `${dstDir}/${name}_copy`
-    }
+    dstPath =
+      dotIndex > 0
+        ? joinPath(dstDir, `${name.slice(0, dotIndex)}_copy${name.slice(dotIndex)}`)
+        : joinPath(dstDir, `${name}_copy`)
   }
 
   isOperating.value = true
