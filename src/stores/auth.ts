@@ -332,6 +332,34 @@ export const useAuthStore = defineStore('auth', () => {
     setUser(null)
   }
 
+  // Rotates the principal key once it's close enough to expiry that it might
+  // lapse before the user's next visit — otherwise they'd get silently logged
+  // out mid-expiry with no chance to renew.
+  const PRINCIPAL_ROTATE_THRESHOLD_MS = 5 * 24 * 60 * 60 * 1000
+
+  async function rotatePrincipalIfExpiringSoon(
+    s: WampSession,
+    userId: string,
+    creds: { publicKey: string; expiresAt?: string },
+  ) {
+    if (!creds.expiresAt) return
+    if (new Date(creds.expiresAt).getTime() - Date.now() > PRINCIPAL_ROTATE_THRESHOLD_MS) return
+
+    try {
+      const { privateKey: newPrivateKey, publicKey: newPublicKey } = await generateKeys()
+      const result = await authService.rotatePrincipal(s, creds.publicKey, newPublicKey)
+      const newExpiresAt = result?.args?.[0]?.expires_at
+
+      await SecureStorage.setItem(
+        `principal_credentials_${userId}`,
+        JSON.stringify({ privateKey: newPrivateKey, publicKey: newPublicKey, expiresAt: newExpiresAt }),
+      )
+    } catch (e) {
+      // Non-fatal: the old key is still valid until it actually expires, retry on next load.
+      console.error('Principal rotation failed', e)
+    }
+  }
+
   async function autoLogin() {
     const creds = await getPrincipalCreds()
     if (!creds) {
@@ -364,6 +392,8 @@ export const useAuthStore = defineStore('auth', () => {
       console.dir(userDetails)
       // Update local user state in case details changed on server
       setUser(userDetails)
+
+      await rotatePrincipalIfExpiringSoon(s, String(userDetails.id), creds)
 
       return true
     } catch (e) {
