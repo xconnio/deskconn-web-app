@@ -63,6 +63,7 @@ watch(
     }
 
     machinesStore.clearMachines()
+    desktopSessionsStore.reset()
   },
   { immediate: true },
 )
