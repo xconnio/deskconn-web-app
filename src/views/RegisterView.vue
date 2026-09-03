@@ -58,7 +58,8 @@ const handleRegister = async () => {
     })
 
     // Redirecting to verify as per new flow
-    router.push('/verify')
+    // replace (not push): drop the register entry so back never resurfaces the OTP step
+    router.replace('/verify')
   } catch (err: unknown) {
     console.error('Registration failed', err)
     // Safe error message extraction

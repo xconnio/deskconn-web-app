@@ -54,7 +54,8 @@ const handleLogin = async () => {
     // Call store action - sends the OTP, actual login completes on the verify page
     await authStore.login(form.value.email, form.value.password)
 
-    router.push('/verify')
+    // replace (not push): drop the login entry so back never resurfaces the OTP step
+    router.replace('/verify')
   } catch (e: unknown) {
     console.error(e)
     const errorMsg = e instanceof Error ? e.message : String(e)
