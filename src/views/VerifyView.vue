@@ -58,7 +58,7 @@ const startTimer = () => {
 onMounted(() => {
   if (!authStore.pendingUsername && !authStore.pendingLoginUsername) {
     // No pending verification, redirect to login
-    router.push('/login')
+    router.replace('/login')
     return
   }
   startTimer()
@@ -176,11 +176,11 @@ const handleOnChange = () => {
             <small class="text-muted">
               <template v-if="isLoginFlow">
                 Wrong account?
-                <a href="#" @click.prevent="router.push('/login')" class="fw-bold">Back to login</a>
+                <a href="#" @click.prevent="router.replace('/login')" class="fw-bold">Back to login</a>
               </template>
               <template v-else>
                 Wrong username?
-                <a href="#" @click.prevent="router.push('/register')" class="fw-bold"
+                <a href="#" @click.prevent="router.replace('/register')" class="fw-bold"
                   >Register again</a
                 >
               </template>
