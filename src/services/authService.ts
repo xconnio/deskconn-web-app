@@ -91,6 +91,10 @@ export const authService = {
     return session.call('io.xconn.deskconn.account.principal.delete', [publicKey])
   },
 
+  async rotatePrincipal(session: WampSession, oldPublicKey: string, newPublicKey: string) {
+    return session.call('io.xconn.deskconn.account.principal.rotate', [oldPublicKey, newPublicKey])
+  },
+
   async forgotPassword(email: string) {
     const s = await this.getRegistrarSession()
     try {
