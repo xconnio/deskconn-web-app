@@ -174,6 +174,22 @@ const hoveredAppId = ref<string | null>(null)
 const tooltipStyle = ref<Record<string, string>>({})
 const TOOLTIP_GAP = 8
 
+const STATIC_TOOLTIP_LABELS: Record<string, string> = {
+  machines: 'Machines',
+  'windows-overview': 'Show all windows',
+  profile: 'Profile',
+}
+
+const tooltipText = computed(() => {
+  const id = hoveredAppId.value
+  if (!id) return ''
+  if (id === 'machine-badge') return props.desktopName
+  if (id in STATIC_TOOLTIP_LABELS) return STATIC_TOOLTIP_LABELS[id]!
+  const app = visibleApps.value.find((a) => a.id === id)
+  if (!app) return ''
+  return props.offline ? `${app.label} (offline)` : app.label
+})
+
 function showTooltip(appId: string) {
   if (dragState || openPopoverAppId.value) return
   const style = anchoredStyleFor(appId, TOOLTIP_GAP)
@@ -378,19 +394,28 @@ onUnmounted(() => {
 <template>
   <div ref="dockRootRef" class="dock" :class="`dock-${position}`">
     <div class="dock-inner">
-      <button
-        class="dock-icon dock-icon-machines"
-        title="Machines"
-        @click="requestMachinesPicker()"
-      >
-        <i class="bi bi-window-stack"></i>
-      </button>
-
-      <div class="dock-icon-wrapper">
+      <div class="dock-icon-wrapper" :ref="(el) => setIconRef('machines', el as Element | null)">
         <button
           class="dock-icon dock-icon-machines"
-          title="Show all windows"
+          aria-label="Machines"
+          @click="requestMachinesPicker()"
+          @mouseenter="showTooltip('machines')"
+          @mouseleave="hideTooltip"
+        >
+          <i class="bi bi-window-stack"></i>
+        </button>
+      </div>
+
+      <div
+        class="dock-icon-wrapper"
+        :ref="(el) => setIconRef('windows-overview', el as Element | null)"
+      >
+        <button
+          class="dock-icon dock-icon-machines"
+          aria-label="Show all windows"
           @click="openWindowsOverview()"
+          @mouseenter="showTooltip('windows-overview')"
+          @mouseleave="hideTooltip"
         >
           <i class="bi bi-grid-3x3-gap-fill"></i>
         </button>
@@ -472,12 +497,6 @@ onUnmounted(() => {
         </span>
 
         <Teleport to="body">
-          <div v-if="hoveredAppId === app.id" class="dock-tooltip" :style="tooltipStyle">
-            {{ offline ? `${app.label} (offline)` : app.label }}
-          </div>
-        </Teleport>
-
-        <Teleport to="body">
           <div
             v-if="openPopoverAppId === app.id"
             :ref="(el) => (popoverRef = el as HTMLElement | null)"
@@ -537,18 +556,37 @@ onUnmounted(() => {
 
       <div class="dock-divider"></div>
 
-      <button
-        class="dock-icon dock-icon-account"
-        title="Profile"
-        @click="accountPanelStore.open('account')"
-      >
-        <i class="bi bi-person-circle"></i>
-      </button>
+      <div class="dock-icon-wrapper" :ref="(el) => setIconRef('profile', el as Element | null)">
+        <button
+          class="dock-icon dock-icon-account"
+          aria-label="Profile"
+          @click="accountPanelStore.open('account')"
+          @mouseenter="showTooltip('profile')"
+          @mouseleave="hideTooltip"
+        >
+          <i class="bi bi-person-circle"></i>
+        </button>
+      </div>
 
-      <div class="dock-icon dock-icon-machine-badge" :title="desktopName">
-        {{ machineInitials }}
+      <div
+        class="dock-icon-wrapper"
+        :ref="(el) => setIconRef('machine-badge', el as Element | null)"
+      >
+        <div
+          class="dock-icon dock-icon-machine-badge"
+          @mouseenter="showTooltip('machine-badge')"
+          @mouseleave="hideTooltip"
+        >
+          {{ machineInitials }}
+        </div>
       </div>
     </div>
+
+    <Teleport to="body">
+      <div v-if="hoveredAppId" class="dock-tooltip" :style="tooltipStyle">
+        {{ tooltipText }}
+      </div>
+    </Teleport>
   </div>
 </template>
 
