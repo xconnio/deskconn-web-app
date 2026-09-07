@@ -6,7 +6,6 @@ import { registerWebRTCSession } from '../services/rtcRegistry'
 import { SecureStorage } from '../services/storageService'
 import { generateDeviceID, generateKeys } from '../utils/crypto'
 import { type User } from '../types'
-import { useSettingsStore } from './settings'
 import { useSessionCacheStore } from './sessionCache'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -300,13 +299,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function shell(realm: string) {
-    const settings = useSettingsStore()
-
-    if (!settings.useWebRTC) {
-      return await shellWamp(realm)
-    }
-
-    // Try WebRTC with a 10-second timeout, fall back to regular shell on failure or timeout
+    // Try WebRTC with a 10-second timeout, fall back to regular (WebTransport) shell on failure or timeout
     try {
       const webrtcResult = await Promise.race([
         shellWebRTC(realm),
