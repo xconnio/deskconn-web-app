@@ -11,23 +11,6 @@ const settingsStore = useSettingsStore()
         <h6 class="discord-group-heading">Preferences</h6>
 
         <div class="discord-row">
-          <div class="discord-row-value">Use WebRTC</div>
-          <div class="form-check form-switch mb-0">
-            <input
-              class="form-check-input settings-toggle"
-              type="checkbox"
-              role="switch"
-              id="webrtcToggle"
-              :checked="settingsStore.useWebRTC"
-              @change="settingsStore.setUseWebRTC(($event.target as HTMLInputElement).checked)"
-            />
-            <label class="form-check-label visually-hidden" for="webrtcToggle">
-              Use WebRTC
-            </label>
-          </div>
-        </div>
-
-        <div class="discord-row">
           <div class="discord-row-value">Single click to open</div>
           <div class="form-check form-switch mb-0">
             <input

@@ -16,7 +16,6 @@ function readResourceMonitorInterval(realm: string): number {
 
 export const useSettingsStore = defineStore('settings', () => {
   const lastRealm = ref(localStorage.getItem('setting_last_realm'))
-  const useWebRTC = ref(localStorage.getItem('setting_use_webrtc') === 'true')
   const singleClickOpen = ref(localStorage.getItem('setting_single_click_open') === 'true')
   const useRemoteWallpaper = ref(localStorage.getItem('setting_use_remote_wallpaper') !== 'false')
   const showLogicalCpus = ref(localStorage.getItem('setting_show_logical_cpus') === 'true')
@@ -51,11 +50,6 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem(`setting_resource_monitor_interval_${realm}`, String(value))
   }
 
-  function setUseWebRTC(value: boolean) {
-    useWebRTC.value = value
-    localStorage.setItem('setting_use_webrtc', String(value))
-  }
-
   function setSingleClickOpen(value: boolean) {
     singleClickOpen.value = value
     localStorage.setItem('setting_single_click_open', String(value))
@@ -87,7 +81,6 @@ export const useSettingsStore = defineStore('settings', () => {
 
   return {
     lastRealm, setLastRealm, clearLastRealm,
-    useWebRTC, setUseWebRTC,
     singleClickOpen, setSingleClickOpen,
     useRemoteWallpaper, setUseRemoteWallpaper,
     showLogicalCpus, setShowLogicalCpus,
