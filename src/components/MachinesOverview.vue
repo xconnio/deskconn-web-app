@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { useMachinesStore } from '@/stores/machines'
 import { useDesktopSessionsStore } from '@/stores/desktopSessions'
 import { useMachinesOverviewStore } from '@/stores/machinesOverview'
 import { openLauncher } from '@/router/navigation'
 import { machinesOverviewReturnRealm } from '@/router/index'
 import { loadCachedWallpaper } from '@/composables/useWallpaperCache'
+import { useEntryNavigation } from '@/composables/useEntryNavigation'
+
+interface DesktopCard { id: string; realm: string; name: string; icon: string }
 
 const machinesStore = useMachinesStore()
 const desktopSessionsStore = useDesktopSessionsStore()
@@ -74,12 +77,41 @@ function closeOverview() {
   if (machinesOverviewReturnRealm.value) openLauncher(machinesOverviewReturnRealm.value)
 }
 
+const machinesGridRef = ref<HTMLElement | null>(null)
+const selectedDesktop = ref<DesktopCard | null>(null)
+
+// Keyboard nav starts from the machine already open (if any) rather than
+// jumping to the first card — set once, as soon as the list carries it, and
+// left alone after that so it doesn't fight the user's own navigation.
+watch(
+  displayDesktops,
+  (list) => {
+    if (selectedDesktop.value) return
+    const active = list.find((d) => d.realm === machinesOverviewReturnRealm.value)
+    if (active) selectedDesktop.value = active
+  },
+  { immediate: true },
+)
+
+const { handleNavKey } = useEntryNavigation({
+  entries: () => displayDesktops.value,
+  getKey: (d) => d.realm,
+  selected: selectedDesktop,
+  listRef: machinesGridRef,
+  isGrid: () => true,
+  onOpen: (d) => selectMachine(d.realm, d.name),
+  activeSelector: '.machines-card.kbd-focused',
+})
+
+// Capture phase + stopPropagation so this consumes the key before it also
+// reaches the focused app's own document-level keydown listener underneath.
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') closeOverview()
+  if (e.key === 'Escape') { e.stopPropagation(); closeOverview(); return }
+  if (handleNavKey(e)) e.stopPropagation()
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+onMounted(() => window.addEventListener('keydown', onKeydown, true))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown, true))
 </script>
 
 <template>
@@ -102,12 +134,16 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       </div>
     </div>
 
-    <div v-else class="machines-grid">
+    <div v-else ref="machinesGridRef" class="machines-grid">
       <div
         v-for="desktop in displayDesktops"
         :key="desktop.realm"
         class="machines-card"
-        :class="{ 'machines-card-active': desktop.realm === machinesOverviewReturnRealm }"
+        :class="{
+          'machines-card-active': desktop.realm === machinesOverviewReturnRealm,
+          'kbd-focused': desktop.realm === selectedDesktop?.realm,
+        }"
+        tabindex="-1"
         @click="selectMachine(desktop.realm, desktop.name)"
       >
         <div class="machines-card-preview">
@@ -188,8 +224,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 }
 
 .machines-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 240px);
   gap: 1.75rem;
   align-content: flex-start;
 }
@@ -200,6 +236,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   gap: 0.6rem;
   cursor: pointer;
   width: 240px;
+}
+
+.machines-card:focus {
+  outline: none;
+}
+
+.machines-card.kbd-focused .machines-card-preview {
+  outline: 2px solid #60a5fa;
+  outline-offset: 3px;
 }
 
 .machines-card-preview {
