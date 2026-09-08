@@ -415,11 +415,12 @@ onUnmounted(() => {
 <template>
   <div ref="dockRootRef" class="dock" :class="`dock-${position}`">
     <div class="dock-inner">
+      <!-- Navigating away skips mouseleave, so clear the tooltip on click too. -->
       <div class="dock-icon-wrapper" :ref="(el) => setIconRef('machines', el as Element | null)">
         <button
           class="dock-icon dock-icon-machines"
           aria-label="Machines"
-          @click="requestMachinesPicker()"
+          @click="hideTooltip(); requestMachinesPicker()"
           @mouseenter="showTooltip('machines')"
           @mouseleave="hideTooltip"
         >
