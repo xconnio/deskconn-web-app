@@ -1,22 +1,23 @@
 import { type Ref, nextTick } from 'vue'
 
-interface HasPath { path: string }
-
 /**
  * Reusable keyboard navigation for any entry list or grid.
  *
- * Handles ArrowUp / ArrowDown / ArrowLeft / ArrowRight / Enter.
- * Expects the container element to use `.entry-row` for items and
- * `.entry-row.active` for the currently selected row (for scroll-into-view).
+ * Handles ArrowUp / ArrowDown / ArrowLeft / ArrowRight / Enter. `activeSelector`
+ * (default `.entry-row.active`) is used to scroll the selected item into view
+ * and focus it — point it at whatever selector marks the selected item in the
+ * container.
  */
-export function useEntryNavigation<T extends HasPath>(config: {
+export function useEntryNavigation<T>(config: {
   entries: () => T[]
+  getKey: (entry: T) => string
   selected: Ref<T | null>
   listRef: Ref<HTMLElement | null>
   isGrid: () => boolean
   onOpen: (entry: T) => void
+  activeSelector?: string
 }) {
-  const { entries, selected, listRef, isGrid, onOpen } = config
+  const { entries, getKey, selected, listRef, isGrid, onOpen, activeSelector = '.entry-row.active' } = config
 
   function columnCount(): number {
     if (!listRef.value) return 1
@@ -25,7 +26,7 @@ export function useEntryNavigation<T extends HasPath>(config: {
 
   function scrollActive(): void {
     nextTick(() => {
-      const el = listRef.value?.querySelector<HTMLElement>('.entry-row.active')
+      const el = listRef.value?.querySelector<HTMLElement>(activeSelector)
       el?.scrollIntoView({ block: 'nearest' })
       // Otherwise the previously-clicked row keeps its native focus outline.
       el?.focus({ preventScroll: true })
@@ -46,7 +47,7 @@ export function useEntryNavigation<T extends HasPath>(config: {
     if (!list.length) return false
 
     const idx = selected.value
-      ? list.findIndex(x => x.path === selected.value!.path)
+      ? list.findIndex(x => getKey(x) === getKey(selected.value!))
       : -1
     const cols = isGrid() ? columnCount() : 1
 

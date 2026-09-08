@@ -1411,6 +1411,7 @@ function handleEntryPrimaryAction(entry: FileEntry) {
 
 const { handleNavKey } = useEntryNavigation({
   entries: () => visibleEntries.value,
+  getKey: (e) => e.path,
   selected: selectedEntry,
   listRef: entryListRef,
   isGrid: () => isGridView.value,

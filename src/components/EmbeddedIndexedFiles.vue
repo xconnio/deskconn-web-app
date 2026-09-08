@@ -140,6 +140,7 @@ function openEntry(entry: IndexEntry) {
 
 const { handleNavKey } = useEntryNavigation({
   entries: () => displayEntries.value,
+  getKey: (e) => e.path,
   selected: selectedEntry,
   listRef: entryListRef,
   isGrid: () => isGridView.value,

@@ -4,6 +4,7 @@ import type { AppWindow } from '@/composables/useWindowManager'
 import { requestMachinesPicker } from '@/router/index'
 import { useAccountPanelStore } from '@/stores/accountPanel'
 import { useWindowsOverviewStore } from '@/stores/windowsOverview'
+import { useEntryNavigation } from '@/composables/useEntryNavigation'
 
 export interface DockAppDef {
   id: string
@@ -220,9 +221,13 @@ function activateInstance(id: string) {
 // Ubuntu/GNOME-style "Activities" overview — every open window as its own
 // card in a full-screen grid, instead of a small per-app instance list.
 const showWindowsOverview = ref(false)
+const windowsOverviewGridRef = ref<HTMLElement | null>(null)
+const selectedOverviewWindow = ref<AppWindow | null>(null)
 
 function openWindowsOverview() {
   hideTooltip()
+  // Keyboard nav starts from the currently focused window's card, not the first one.
+  selectedOverviewWindow.value = props.windows.find((w) => w.id === props.focusedId) ?? null
   showWindowsOverview.value = true
 }
 
@@ -231,13 +236,29 @@ function closeWindowsOverview() {
 }
 
 function activateFromOverview(id: string) {
-  emit('activate', id)
+  // Unlike the dock icon, selecting a window here always means "switch to
+  // it" — never toggle-minimize it just because it was already focused.
+  const win = props.windows.find((w) => w.id === id)
+  if (win?.minimized || props.focusedId !== id) emit('activate', id)
   closeWindowsOverview()
 }
 
+const { handleNavKey: handleOverviewNavKey } = useEntryNavigation({
+  entries: () => props.windows,
+  getKey: (w) => w.id,
+  selected: selectedOverviewWindow,
+  listRef: windowsOverviewGridRef,
+  isGrid: () => true,
+  onOpen: (w) => activateFromOverview(w.id),
+  activeSelector: '.windows-overview-card.kbd-focused',
+})
+
+// Capture phase + stopPropagation so this consumes the key before it also
+// reaches the focused app's own document-level keydown listener underneath.
 function onOverviewKeydown(e: KeyboardEvent) {
   if (!showWindowsOverview.value) return
-  if (e.key === 'Escape') closeWindowsOverview()
+  if (e.key === 'Escape') { e.stopPropagation(); closeWindowsOverview(); return }
+  if (handleOverviewNavKey(e)) e.stopPropagation()
 }
 
 // Registers a card's slot for the owning DesktopSessionHost to teleport that
@@ -383,11 +404,11 @@ function onWindowClick(e: MouseEvent) {
 
 onMounted(() => {
   window.addEventListener('click', onWindowClick, true)
-  window.addEventListener('keydown', onOverviewKeydown)
+  window.addEventListener('keydown', onOverviewKeydown, true)
 })
 onUnmounted(() => {
   window.removeEventListener('click', onWindowClick, true)
-  window.removeEventListener('keydown', onOverviewKeydown)
+  window.removeEventListener('keydown', onOverviewKeydown, true)
 })
 </script>
 
@@ -438,12 +459,16 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <div class="windows-overview-grid">
+          <div ref="windowsOverviewGridRef" class="windows-overview-grid">
             <div
               v-for="win in windows"
               :key="win.id"
               class="windows-overview-card"
-              :class="{ 'windows-overview-card-active': focusedId === win.id }"
+              :class="{
+                'windows-overview-card-active': focusedId === win.id,
+                'kbd-focused': selectedOverviewWindow?.id === win.id,
+              }"
+              tabindex="-1"
               @click="activateFromOverview(win.id)"
             >
               <span
@@ -986,8 +1011,8 @@ onUnmounted(() => {
 }
 
 .windows-overview-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 220px);
   gap: 1.75rem;
   align-content: flex-start;
 }
@@ -1008,6 +1033,15 @@ onUnmounted(() => {
     transform 0.15s ease,
     border-color 0.15s ease,
     background 0.15s ease;
+}
+
+.windows-overview-card:focus {
+  outline: none;
+}
+
+.windows-overview-card.kbd-focused {
+  outline: 2px solid #60a5fa;
+  outline-offset: 3px;
 }
 
 .windows-overview-card:hover {
