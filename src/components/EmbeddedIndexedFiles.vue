@@ -504,6 +504,10 @@ onUnmounted(() => {
 .entry-list { display: flex; flex-direction: column; gap: 0.75rem; overflow-y: auto; padding: 0.75rem 1rem; flex: 1; }
 .entry-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; width: 100%; text-align: left; border: 1px solid rgba(113,130,149,0.14); border-radius: 18px; background: #fff; padding: 0.95rem 1rem; cursor: pointer; font-family: inherit; transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease; }
 .entry-row:hover, .entry-row.active { border-color: rgba(0,0,0,0.2); box-shadow: 0 10px 24px rgba(71,85,105,0.08); }
+/* .active already shows selection — suppress the native focus ring, which
+   differs wildly by browser (red in Firefox, black in Chrome). */
+.entry-row::-moz-focus-inner { border: 0; }
+.entry-row:focus { outline: none; }
 .entry-main { display: flex; align-items: center; gap: 0.9rem; flex: 1; min-width: 0; }
 .entry-side { display: flex; align-items: center; flex-shrink: 0; }
 .entry-icon { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border-radius: 14px; font-size: 1.15rem; flex: 0 0 auto; position: relative; }

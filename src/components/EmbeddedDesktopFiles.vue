@@ -2396,6 +2396,16 @@ onUnmounted(() => {
   box-shadow: 0 10px 24px rgba(71, 85, 105, 0.08);
 }
 
+/* .active already shows selection — suppress the native focus ring, which
+   differs wildly by browser (red in Firefox, black in Chrome). */
+.entry-row::-moz-focus-inner {
+  border: 0;
+}
+
+.entry-row:focus {
+  outline: none;
+}
+
 .entry-main,
 .entry-side {
   display: flex;
