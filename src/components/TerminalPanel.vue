@@ -135,7 +135,7 @@ function createTabState(prevShellId: string | null): TabState {
   return {
     id: nextTabId++,
     num: n,
-    label: `Terminal ${n}`,
+    label: 'Terminal',
     shellId: '',
     term: null,
     fitAddon: null,
@@ -171,7 +171,7 @@ function updateTabsLayout() {
   const count = tabs.value.length
 
   if (count > 1 && availableWidth > 0) {
-    tabWidth.value = Math.max(80, Math.min(160, Math.floor(availableWidth / count)))
+    tabWidth.value = Math.max(120, Math.min(160, Math.floor(availableWidth / count)))
   } else {
     tabWidth.value = 160
   }
@@ -387,7 +387,7 @@ async function initTab(tab: TabState) {
     convertEol: true,
     scrollback: 10000,
     fontSize: 14,
-    theme: { background: '#1e1e1e' },
+    theme: { background: '#272822' },
   })
 
   tab.fitAddon = new FitAddon()
@@ -944,7 +944,7 @@ watch(() => props.focused, (focused) => {
 .terminal-panel {
   width: 100%;
   height: 100%;
-  background: #1e1e1e;
+  background: #272822;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -969,6 +969,7 @@ watch(() => props.focused, (focused) => {
 .tabs-list {
   display: flex;
   align-items: stretch;
+  gap: 0.2rem;
   flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
@@ -979,22 +980,24 @@ watch(() => props.focused, (focused) => {
   display: none;
 }
 
-/* GNOME/Yaru style: inactive tabs blend into the bar, the active tab gets
-   a lighter "pressed in" panel with an accent underline. */
+/* Inactive tabs blend into the bar (transparent, no border/divider) — only
+   the active tab gets a filled "pressed in" pill — matching TextEditor's
+   tab-item look. Width fits the label (like TextEditor) instead of
+   stretching every tab to the same fixed size. */
 .tab-item {
-  flex: 0 0 var(--terminal-tab-width, 160px);
-  width: var(--terminal-tab-width, 160px);
+  flex: 0 1 auto;
+  width: auto;
   max-width: var(--terminal-tab-width, 160px);
-  min-width: 80px;
+  min-width: 120px;
   display: flex;
   align-items: center;
   gap: 5px;
   padding: 0 8px 0 10px;
   height: 32px;
   background: transparent;
-  border: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  color: #a9a9a9;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #b8b8b3;
   font-size: 0.72rem;
   font-family: inherit;
   cursor: pointer;
@@ -1004,14 +1007,13 @@ watch(() => props.focused, (focused) => {
 }
 
 .tab-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .tab-item.tab-active {
-  background: #4a4a4a;
+  background: #454545;
   color: #fff;
-  box-shadow: inset 0 -2px 0 #ec4899;
+  border-color: #565656;
 }
 
 .tab-label {
@@ -1026,20 +1028,19 @@ watch(() => props.focused, (focused) => {
   width: 15px;
   height: 15px;
   border-radius: 3px;
-  color: inherit;
+  color: #9a9a94;
   font-size: 0.9rem;
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0.4;
-  transition: opacity 0.1s, background 0.1s;
+  transition: color 0.1s, background 0.1s;
   user-select: none;
 }
 
 .tab-close:hover {
-  opacity: 1 !important;
+  color: #fff;
   background: rgba(255, 255, 255, 0.15);
 }
 
@@ -1050,7 +1051,7 @@ watch(() => props.focused, (focused) => {
   background: transparent;
   border: none;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
-  color: #a9a9a9;
+  color: #b8b8b3;
   font-size: 0.65rem;
   cursor: pointer;
   display: flex;
@@ -1065,8 +1066,7 @@ watch(() => props.focused, (focused) => {
 }
 
 .tab-scroll-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
-  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .tab-scroll-btn:disabled {
@@ -1079,7 +1079,7 @@ watch(() => props.focused, (focused) => {
   height: 32px;
   background: transparent;
   border: none;
-  color: #a9a9a9;
+  color: #b8b8b3;
   font-size: 1.1rem;
   cursor: pointer;
   display: flex;
@@ -1092,7 +1092,6 @@ watch(() => props.focused, (focused) => {
 
 .tab-add:hover {
   background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
 }
 
 .terminal-body {
@@ -1100,7 +1099,7 @@ watch(() => props.focused, (focused) => {
   min-height: 0;
   padding: 4px;
   overflow: hidden;
-  background: #1e1e1e;
+  background: #272822;
   overscroll-behavior: contain;
   touch-action: none;
 }
@@ -1186,7 +1185,7 @@ watch(() => props.focused, (focused) => {
 }
 
 .terminal-body :deep(.xterm-viewport) {
-  background: #1e1e1e !important;
+  background: #272822 !important;
   overflow-y: auto !important;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
