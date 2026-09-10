@@ -254,11 +254,38 @@ function readRangeParallel(
   return { stream }
 }
 
-// A range that fits in a single PARALLEL_CHUNK_SIZE chunk goes through the
-// exact single-channel/single-stream path (p2pReadRange/webTransportReadRange)
-// unchanged — only a range that actually splits into more than one chunk
-// takes the parallel path, so small transfers (previews, small-file
-// downloads) never carry any of that added complexity.
+// Always single-channel/single-stream, regardless of range size — for media
+// range requests (video/audio seeking via the Service Worker Range-request
+// bridge in FilePreviewModal.vue). Those are inherently short-lived and get
+// cancelled constantly as playback seeks elsewhere (a seek near the start of
+// a large file routinely asks for an open-ended range — "from here to EOF"
+// — that the player only reads a sliver of before cancelling for the next
+// seek). Parallel chunk workers optimize for a one-shot bulk transfer that
+// runs to completion, which is the opposite access pattern, so range
+// requests use this directly instead of the auto-routing requestRange below.
+export async function requestRangeStream(
+  session: WampSession,
+  realm: string,
+  path: string,
+  offset: number,
+  length: number,
+  signal?: AbortSignal,
+): Promise<RangeResult> {
+  const usesP2P = !!getWebRTCSession(session)
+  if (!usesP2P && typeof session?.openStream !== 'function') throw new NoDirectConnectionError()
+
+  const relPath = baseName(path)
+  return usesP2P
+    ? p2pReadRange(session, path, relPath, offset, length, signal)
+    : webTransportReadRange(session, realm, path, relPath, offset, length, signal)
+}
+
+// A range that fits in a single PARALLEL_CHUNK_SIZE chunk goes through
+// requestRangeStream unchanged — only a range that actually splits into
+// more than one chunk takes the parallel path, so small transfers (small-
+// file downloads) never carry any of that added complexity. Use this for
+// one-shot bulk transfers (file downloads); use requestRangeStream directly
+// for media range requests (see its own doc comment for why).
 export async function requestRange(
   session: WampSession,
   realm: string,
@@ -272,11 +299,7 @@ export async function requestRange(
 
   const relPath = baseName(path)
   const chunks = planChunks(offset, length)
-  if (chunks.length <= 1) {
-    return usesP2P
-      ? p2pReadRange(session, path, relPath, offset, length, signal)
-      : webTransportReadRange(session, realm, path, relPath, offset, length, signal)
-  }
+  if (chunks.length <= 1) return requestRangeStream(session, realm, path, offset, length, signal)
 
   return readRangeParallel(
     chunks, offset, length,

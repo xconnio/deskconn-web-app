@@ -11,7 +11,7 @@
 import { ref, computed, inject, onMounted, onUnmounted } from 'vue'
 import { type Session } from 'xconn'
 import { floatingWindowActionsKey } from '@/composables/floatingWindowToolbar'
-import { canStreamRanges, requestRange } from '@/services/fileStream'
+import { canStreamRanges, requestRangeStream } from '@/services/fileStream'
 import { uploadFileToPath, type UploadProgress } from '@/utils/fileUpload'
 import { downloadUrl, downloadBlob } from '@/utils/download'
 import { streamFileData, downloadFile, ensureDownloadServiceWorker, type DownloadProgressState } from '@/utils/fileDownload'
@@ -35,7 +35,18 @@ const props = defineProps<{
   focused?: boolean
 }>()
 
-const emit = defineEmits<{ 'update-title': [title: string] }>()
+const emit = defineEmits<{
+  'update-title': [title: string]
+  // Not emitted by this component — declared so Vue treats the listeners
+  // DesktopSessionHost.vue binds generically to every app window (@close,
+  // @open-files, @preview-file, @open-text-editor) as custom events rather
+  // than attrs it tries (and, with this component's multi-root template,
+  // fails) to inherit.
+  close: []
+  'open-files': [path: string]
+  'preview-file': [session: Session, entry: PreviewEntry, entries: PreviewEntry[]]
+  'open-text-editor': [session: Session, entry: PreviewEntry]
+}>()
 
 // Absent when there's no FloatingWindow ancestor — the download button then
 // renders inline instead of teleporting into the window's titlebar.
@@ -200,7 +211,7 @@ function startStreamBridge(port: MessagePort, session: Session, realm: string, p
     const controller = new AbortController()
     controllers.set(reqID, controller)
     try {
-      const { stream } = await requestRange(session, realm, path, offset, length, controller.signal)
+      const { stream } = await requestRangeStream(session, realm, path, offset, length, controller.signal)
       const reader = stream.getReader()
       while (true) {
         const { done, value } = await reader.read()
