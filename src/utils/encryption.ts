@@ -69,3 +69,19 @@ export function decryptPayload(data: Uint8Array, key: Uint8Array): Uint8Array {
   const cipher = chacha20poly1305(key, nonce)
   return cipher.decrypt(ciphertext)
 }
+
+// Matches Go's encoding/json convention of encoding []byte fields as
+// standard base64 — used for the plaintext key-exchange frames exchanged
+// before either raw-stream file-transfer protocol switches to binary.
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (const b of bytes) binary += String.fromCharCode(b)
+  return btoa(binary)
+}
+
+export function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}

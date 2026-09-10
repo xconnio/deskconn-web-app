@@ -1,12 +1,12 @@
 <script setup lang="ts">
 /**
  * File preview, rendered inside its own FloatingWindow (see DesktopSessionHost.vue).
- * Accepts an established session and a file entry. Images/pdf/text use the
- * WAMP-based full-buffer download (per-file key exchange, H/D framing).
- * Audio/video play natively via a same-origin URL backed by a Service Worker
- * Range-request proxy (see sw-download.ts), which forwards range reads over a
- * raw WebRTC data channel (see services/fileStream.ts) — this requires a
- * direct P2P connection to the device.
+ * Accepts an established session and a file entry. Images/pdf/text are fetched
+ * as a single whole-file range read (see services/fileStream.ts). Audio/video
+ * play natively via a same-origin URL backed by a Service Worker Range-request
+ * proxy (see sw-download.ts), which forwards range reads over the same
+ * fileStream.ts protocol — works over either a direct P2P connection or the
+ * relay, whichever the session has.
  */
 import { ref, computed, inject, onMounted, onUnmounted } from 'vue'
 import { type Session } from 'xconn'
@@ -101,13 +101,12 @@ const mediaRetryUsed       = ref(false)
 const downloadProgress = ref<DownloadProgressState | null>(null)
 let mounted = true
 
-async function fetchFileData(remotePath: string): Promise<Uint8Array> {
+async function fetchFileData(entry: PreviewEntry): Promise<Uint8Array> {
   const chunks: Uint8Array[] = []
   let total = 0
-  await streamFileData(props.session, remotePath, (chunk, expectedTotal) => {
+  await streamFileData(props.session, props.realm, entry.path, entry.size, (chunk) => {
     chunks.push(chunk)
     total += chunk.length
-    previewExpectedBytes.value = expectedTotal
     previewReceivedBytes.value = total
   })
   const combined = new Uint8Array(total)
@@ -130,10 +129,10 @@ async function fetchImageBlobUrl(
   try {
     const chunks: Uint8Array[] = []
     let total = 0
-    await streamFileData(props.session, entry.path, (chunk, expectedTotal) => {
+    await streamFileData(props.session, props.realm, entry.path, entry.size, (chunk) => {
       chunks.push(chunk)
       total += chunk.length
-      onProgress?.(total, expectedTotal)
+      onProgress?.(total, entry.size)
     })
     const combined = new Uint8Array(total)
     let offset = 0
@@ -190,18 +189,18 @@ function preloadImageNeighbors() {
 }
 
 // Bridges range-request messages coming from the stream service worker (see
-// sw-download.ts) to the raw WebRTC data channel range protocol (fileStream.ts).
+// sw-download.ts) to the raw file-stream range protocol (fileStream.ts).
 // Multiple range requests (e.g. a browser probing both the start and end of an
 // MP4 for its moov box) can be in flight concurrently, each tagged with its own
-// reqID and served by its own data channel.
-function startStreamBridge(port: MessagePort, session: Session, path: string): () => void {
+// reqID and served by its own channel/stream.
+function startStreamBridge(port: MessagePort, session: Session, realm: string, path: string): () => void {
   const controllers = new Map<number, AbortController>()
 
   async function handleRangeRequest(reqID: number, offset: number, length: number) {
     const controller = new AbortController()
     controllers.set(reqID, controller)
     try {
-      const { stream } = await requestRange(session, path, offset, length, controller.signal)
+      const { stream } = await requestRange(session, realm, path, offset, length, controller.signal)
       const reader = stream.getReader()
       while (true) {
         const { done, value } = await reader.read()
@@ -240,10 +239,10 @@ function stopActiveStream() {
 }
 
 // Plays audio/video natively via the stream service worker acting as a local
-// Range-request proxy backed by the WebRTC data channel: the <video>/<audio>
-// element gets a same-origin URL and the browser's own media engine handles
+// Range-request proxy backed by fileStream.ts: the <video>/<audio> element
+// gets a same-origin URL and the browser's own media engine handles
 // buffering and seeking exactly like it would for a regular HTTP video URL.
-// Returns false if there's no direct WebRTC connection to stream over.
+// Returns false if there's no stream-capable connection to this device.
 async function openStreamedMedia(pt: FilePreviewType): Promise<boolean> {
   if (!canStreamRanges(props.session)) return false
 
@@ -254,7 +253,7 @@ async function openStreamedMedia(pt: FilePreviewType): Promise<boolean> {
 
   const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
   const mc = new MessageChannel()
-  const stopBridge = startStreamBridge(mc.port1, props.session, currentEntry.value.path)
+  const stopBridge = startStreamBridge(mc.port1, props.session, props.realm, currentEntry.value.path)
   activeStreamCleanup = () => { stopBridge(); sw.postMessage({ type: 'stream-close', id }) }
 
   sw.postMessage({ type: 'stream-init', id, size: currentEntry.value.size, mimeType: getMimeType(currentEntry.value.name) }, [mc.port2])
@@ -335,7 +334,7 @@ async function openFile(isRetry = false) {
   previewError.value = ''
 
   try {
-    const data = await fetchFileData(currentEntry.value.path)
+    const data = await fetchFileData(currentEntry.value)
     if (!mounted) return
     if (pt === 'text') {
       previewTextContent.value = new TextDecoder('utf-8', { fatal: false }).decode(data)
@@ -371,7 +370,7 @@ function downloadFromPreview() {
 }
 
 async function downloadFileToClient() {
-  await downloadFile(props.session, currentEntry.value, downloadProgress)
+  await downloadFile(props.session, props.realm, currentEntry.value, downloadProgress)
 }
 
 // ── Crop & rotate editor ──────────────────────────────────────────────────

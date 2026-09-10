@@ -491,7 +491,7 @@ const downloadProgress = ref<DownloadProgressState | null>(null)
 function onPreviewFile(session: Session, entry: PreviewEntry, entries: PreviewEntry[]) {
   const pt = getFilePreviewType(entry.name)
   if (pt === 'none') {
-    downloadFile(session, entry, downloadProgress)
+    downloadFile(session, props.realm, entry, downloadProgress)
     return
   }
 

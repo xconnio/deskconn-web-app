@@ -10,14 +10,12 @@ import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import { parseFileEntry, createFileBrowser } from '@/utils/fileBrowse'
 import {
-  createX25519KeyPair,
-  deriveSessionKeys,
   encryptPayload,
   decryptPayload,
   type EncryptionKeys,
 } from '@/utils/encryption'
 import { uploadFileToPath } from '@/utils/fileUpload'
-import { downloadUrl } from '@/utils/download'
+import { downloadFile, ensureDownloadServiceWorker, type DownloadProgressState } from '@/utils/fileDownload'
 import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
 import { formatDesktopError, isDesktopOfflineError, isNoSuchProcedureException } from '@/utils/desktopError'
 import {
@@ -32,7 +30,6 @@ import {
 const procedureFileRename = 'io.xconn.deskconn.deskconnd.file.rename'
 const procedureFileDelete = 'io.xconn.deskconn.deskconnd.file.delete'
 const procedureFileCopy = 'io.xconn.deskconn.deskconnd.file.copy'
-const procedureFileDownload = 'io.xconn.deskconn.deskconnd.file.download'
 const procedureFileSearch = 'io.xconn.deskconn.deskconnd.file.search'
 const outsideHomeMessage = 'Access denied. You can only browse files inside the home directory.'
 const PAGE_SIZE = 100
@@ -48,6 +45,13 @@ const props = defineProps<{
 const emit = defineEmits<{
   'preview-file': [session: Session, entry: FileEntry, entries: FileEntry[]]
   'open-text-editor': [session: Session, entry: FileEntry]
+  // Not emitted by this component — declared so Vue treats the listeners
+  // DesktopSessionHost.vue binds generically to every app window (@close,
+  // @open-files, @update-title) as custom events rather than attrs it tries
+  // (and, with this component's multi-root template, fails) to inherit.
+  close: []
+  'open-files': [path: string]
+  'update-title': [title: string]
 }>()
 
 const sessionCacheStore = useSessionCacheStore()
@@ -133,16 +137,7 @@ const settingsMenuVisible = ref(false)
 const settingsMenuPos = ref<{ x: number; y: number } | null>(null)
 const settingsBtnRef = ref<HTMLElement | null>(null)
 
-type DownloadProgressState = {
-  name: string
-  received: number
-  total: number
-  speed: number
-  cancel: () => void
-}
 const downloadProgress = ref<DownloadProgressState | null>(null)
-let downloadServiceWorker: ServiceWorker | null = null
-let downloadServiceWorkerReadyPromise: Promise<ServiceWorker | null> | null = null
 
 const uploadInputRef = ref<HTMLInputElement | null>(null)
 type UploadProgressState = {
@@ -700,338 +695,11 @@ function openPreview(entry: FileEntry) {
   emit('preview-file', session.value, entry, visibleEntries.value)
 }
 
-// Low-level stream: calls onChunk for each decrypted data chunk as it arrives.
-// Used by the download-to-disk flow below (preview streaming lives in
-// FilePreviewModal.vue).
-async function streamFileData(
-  remotePath: string,
-  onChunk: (chunk: Uint8Array, expectedTotal: number) => void | Promise<void>,
-  signal?: AbortSignal,
-): Promise<void> {
-  const LATE_PROGRESS_WAIT_MS = 250
-  const MAX_LATE_PROGRESS_WAIT_MS = 5_000
-
-  if (!session.value) throw new Error('No active session')
-
-  const { publicKey, privateKey } = createX25519KeyPair()
-
-  type CallResult = Awaited<ReturnType<Session['call']>>
-
-  const progressResult: any = await session.value.callProgress(procedureFileDownload, [ // eslint-disable-line @typescript-eslint/no-explicit-any
-    remotePath, false, publicKey,
-  ])
-
-  // for-await over progressResult.receive() exits after the first message in Firefox.
-  // The library's async iterator closes prematurely when the final WAMP RESULT arrives
-  // before the iterator sets up its next waiter — a race that Chrome's event loop never
-  // triggers but Firefox's does. Using the callback-based registerProgress API instead
-  // routes all messages through a stable queue that is not affected by this race.
-  const queue: CallResult[] = []
-  let wakeUp: (() => void) | null = null
-  let streamDone = false
-  let streamError: unknown = null
-
-  const notify = () => { const fn = wakeUp; wakeUp = null; fn?.() }
-
-  progressResult.registerProgress((result: CallResult) => { queue.push(result); notify() })
-  progressResult.finalResultPromise
-    .then(() => { streamDone = true; notify() })
-    .catch((err: unknown) => { streamError = err; streamDone = true; notify() })
-
-  let receiveKey: Uint8Array | null = null
-  let firstMessage = true
-  let expectedTotal = 0
-  let receivedTotal = 0
-  let lateProgressWaitedMs = 0
-
-  // Wake any suspended promise immediately so the abort check at the loop top fires.
-  const onAbort = () => notify()
-  signal?.addEventListener('abort', onAbort, { once: true })
-
-  try {
-  while (true) {
-    if (signal?.aborted) throw new Error('cancelled')
-    if (queue.length === 0) {
-      if (streamDone) {
-        if (expectedTotal > 0 && receivedTotal < expectedTotal) {
-          await new Promise<void>((resolve) => {
-            let settled = false
-            const timer = window.setTimeout(() => {
-              if (settled) return
-              settled = true
-              wakeUp = null
-              resolve()
-            }, LATE_PROGRESS_WAIT_MS)
-
-            wakeUp = () => {
-              if (settled) return
-              settled = true
-              window.clearTimeout(timer)
-              wakeUp = null
-              resolve()
-            }
-          })
-
-          if (queue.length > 0) {
-            lateProgressWaitedMs = 0
-            continue
-          }
-
-          lateProgressWaitedMs += LATE_PROGRESS_WAIT_MS
-          if (lateProgressWaitedMs < MAX_LATE_PROGRESS_WAIT_MS) continue
-          throw new Error(
-            `Download stream ended early (${receivedTotal} of ${expectedTotal} bytes received)`,
-          )
-        }
-        break
-      }
-      await new Promise<void>(resolve => { wakeUp = resolve })
-      continue
-    }
-
-    const result = queue.shift()!
-    const args = (result.args ?? []) as unknown[]
-
-    if (firstMessage) {
-      firstMessage = false
-      const raw = args[0] as Uint8Array
-      if (raw.length < 36) throw new Error('Invalid key exchange message from server')
-      const keys = await deriveSessionKeys(privateKey, raw.slice(4))
-      receiveKey = keys.decryptKey
-      continue
-    }
-
-    if (!receiveKey || args.length < 2) continue
-    const msgType = args[0]
-    if (typeof msgType !== 'string') continue
-
-    if (msgType === 'H') {
-      const plaintext = decryptPayload(args[1] as Uint8Array, receiveKey)
-      const header = JSON.parse(new TextDecoder().decode(plaintext)) as { size?: number }
-      expectedTotal = header.size ?? 0
-    } else if (msgType === 'D') {
-      const chunk = decryptPayload(args[1] as Uint8Array, receiveKey)
-      receivedTotal += chunk.length
-      await onChunk(chunk, expectedTotal)
-    }
-  }
-  } finally {
-    signal?.removeEventListener('abort', onAbort)
-  }
-
-  if (streamError) throw streamError instanceof Error ? streamError : new Error('Stream failed')
-}
-
 async function downloadFileToClient(entry: FileEntry) {
-  if (entry.is_dir) return
-
-  const STALL_MS = 20_000
-  const controller = new AbortController()
-  let stallTimer: ReturnType<typeof setTimeout> | null = null
-  let stalledOut = false
-
-  function armStall() {
-    if (stallTimer !== null) clearTimeout(stallTimer)
-    stallTimer = setTimeout(() => { stalledOut = true; controller.abort() }, STALL_MS)
-  }
-  function clearStall() {
-    if (stallTimer !== null) { clearTimeout(stallTimer); stallTimer = null }
-  }
-  function onError(err: unknown) {
-    if (stalledOut) {
-      operationError.value = 'Download stalled — machine may have disconnected.'
-    } else if (!controller.signal.aborted) {
-      operationError.value = err instanceof Error ? err.message : 'Download failed'
-    }
-  }
-
-  if (!isFirefoxBrowser() && 'showSaveFilePicker' in window) {
-    await downloadFileWithSavePicker(entry, controller, armStall, clearStall, onError)
-    return
-  }
-
-  try {
-    await downloadFileWithBrowserDownload(entry, controller.signal, armStall, clearStall)
-  } catch (err) {
-    clearStall()
-    onError(err)
-  }
-}
-
-async function downloadFileWithSavePicker(
-  entry: FileEntry,
-  controller: AbortController,
-  armStall: () => void,
-  clearStall: () => void,
-  onError: (err: unknown) => void,
-) {
-  let writable: FileSystemWritableFileStream | null = null
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handle = await (window as any).showSaveFilePicker({ suggestedName: entry.name })
-    writable = await handle.createWritable()
-  } catch (err: unknown) {
-    if ((err as { name?: string })?.name === 'AbortError') return
-    operationError.value = err instanceof Error ? err.message : 'Could not open save dialog'
-    return
-  }
-
-  const startTime = Date.now()
-  let received = 0
-  downloadProgress.value = {
-    name: entry.name,
-    received: 0,
-    total: entry.size,
-    speed: 0,
-    cancel: () => controller.abort(),
-  }
-  armStall()
-
-  try {
-    await streamFileData(entry.path, async (chunk, expectedTotal) => {
-      armStall()
-      await writable!.write(chunk.slice())
-      received += chunk.length
-      if (!downloadProgress.value) return
-      downloadProgress.value.received = received
-      if (expectedTotal > 0) downloadProgress.value.total = expectedTotal
-      const elapsed = (Date.now() - startTime) / 1000
-      downloadProgress.value.speed = elapsed > 0 ? received / elapsed : 0
-    }, controller.signal)
-    await writable!.close()
-  } catch (err) {
-    try { await writable?.abort() } catch { /* ignore */ }
-    onError(err)
-  } finally {
-    clearStall()
-    downloadProgress.value = null
-  }
-}
-
-async function downloadFileWithBrowserDownload(
-  entry: FileEntry,
-  signal: AbortSignal,
-  armStall: () => void,
-  clearStall: () => void,
-) {
-  armStall()
-  const sw = downloadServiceWorker ?? await ensureDownloadServiceWorker()
-  if (!sw) throw new Error('Browser downloads are not available in this browser')
-
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  let sentDownloadMeta = false
-  let pendingPulls = 0
-  let bridgeError: Error | null = null
-  let pullWaiter: (() => void) | null = null
-  const mc = new MessageChannel()
-  const keepAliveTimer = window.setInterval(() => {
-    sw.postMessage({ type: 'ping', id })
-  }, 10_000)
-
-  function resolvePull() {
-    if (pullWaiter) {
-      const resolve = pullWaiter
-      pullWaiter = null
-      resolve()
-      return
-    }
-    pendingPulls += 1
-  }
-
-  function waitForPullSignal() {
-    if (bridgeError) return Promise.reject(bridgeError)
-    if (pendingPulls > 0) {
-      pendingPulls -= 1
-      return Promise.resolve()
-    }
-    return new Promise<void>((resolve, reject) => {
-      pullWaiter = () => {
-        if (bridgeError) {
-          reject(bridgeError)
-          return
-        }
-        resolve()
-      }
-    })
-  }
-
-  mc.port1.onmessage = (event) => {
-    const data = event.data ?? {}
-    if (data.type === 'pull') {
-      resolvePull()
-      return
-    }
-    if (data.type === 'error') {
-      bridgeError = new Error(data.message || 'Download bridge failed')
-      if (pullWaiter) {
-        const resolve = pullWaiter
-        pullWaiter = null
-        resolve()
-      }
-    }
-  }
-
-  sw.postMessage(
-    { type: 'download', id, filename: entry.name },
-    [mc.port2],
-  )
-
-  downloadUrl(`/_dl/${id}`, entry.name)
-
-  try {
-    await streamFileData(entry.path, async (chunk, expectedTotal) => {
-      armStall()
-      if (!sentDownloadMeta) {
-        mc.port1.postMessage({
-          type: 'meta',
-          filename: entry.name,
-          size: expectedTotal > 0 ? expectedTotal : 0,
-        })
-        sentDownloadMeta = true
-      }
-      await waitForPullSignal()
-      if (bridgeError) throw bridgeError
-      const payload = chunk.slice().buffer
-      mc.port1.postMessage({ type: 'chunk', chunk: payload }, [payload])
-    }, signal)
-    mc.port1.postMessage({ type: 'close' })
-  } catch (err) {
-    mc.port1.postMessage({
-      type: 'error',
-      message: err instanceof Error ? err.message : 'Download failed',
-    })
-    throw err
-  } finally {
-    window.clearInterval(keepAliveTimer)
-    clearStall()
-  }
-}
-
-async function ensureDownloadServiceWorker(): Promise<ServiceWorker | null> {
-  if (!('serviceWorker' in navigator)) return null
-  if (downloadServiceWorker) return downloadServiceWorker
-  if (!downloadServiceWorkerReadyPromise) {
-    downloadServiceWorkerReadyPromise = (async () => {
-      await navigator.serviceWorker.register('/sw-download.js', { scope: '/' })
-      await navigator.serviceWorker.ready
-      if (navigator.serviceWorker.controller) {
-        downloadServiceWorker = navigator.serviceWorker.controller
-        return downloadServiceWorker
-      }
-
-      downloadServiceWorker = await new Promise<ServiceWorker>((resolve) => {
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (navigator.serviceWorker.controller) resolve(navigator.serviceWorker.controller)
-        }, { once: true })
-      })
-      return downloadServiceWorker
-    })().catch((err) => {
-      downloadServiceWorkerReadyPromise = null
-      throw err
-    })
-  }
-
-  return downloadServiceWorkerReadyPromise
+  if (entry.is_dir || !session.value) return
+  await downloadFile(session.value, props.realm, entry, downloadProgress, (err) => {
+    operationError.value = err instanceof Error ? err.message : 'Download failed'
+  })
 }
 
 function triggerUpload() {
