@@ -52,3 +52,10 @@ export function dirName(path: string): string {
   if (idx <= 0) return sep
   return path.slice(0, idx)
 }
+
+export function baseName(path: string): string {
+  const sep = detectPathSeparator(path)
+  const trimmed = path.length > 1 && path.endsWith(sep) ? path.slice(0, -1) : path
+  const idx = trimmed.lastIndexOf(sep)
+  return idx === -1 ? trimmed : trimmed.slice(idx + 1)
+}

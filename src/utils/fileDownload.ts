@@ -1,101 +1,39 @@
 /**
- * Client side of the `io.xconn.deskconn.deskconnd.file.download` protocol —
- * shared by FilePreviewModal.vue (its own Download button / oversized-file
- * fallback) and DesktopSessionHost.vue (files that have no previewer at all,
- * which skip opening a preview window and go straight to a download).
+ * Client side of downloading a file over deskconn's stream-based file-transfer
+ * protocol (see services/fileStream.ts) — shared by FilePreviewModal.vue (its
+ * own Download button / oversized-file fallback) and EmbeddedDesktopFiles.vue
+ * (files that have no previewer at all, which skip opening a preview window
+ * and go straight to a download).
  */
 import { type Ref } from 'vue'
 import { type Session } from 'xconn'
-import { createX25519KeyPair, deriveSessionKeys, decryptPayload } from '@/utils/encryption'
+import { requestRange } from '@/services/fileStream'
 import { downloadUrl } from '@/utils/download'
 import { isFirefoxBrowser } from '@/utils/fileTypes'
-
-const procedureFileDownload = 'io.xconn.deskconn.deskconnd.file.download'
 
 export type DownloadEntry = { path: string; name: string; size: number }
 export type DownloadProgressState = { name: string; received: number; total: number; speed: number; cancel: () => void }
 
-type CallResult = Awaited<ReturnType<Session['call']>>
-
 export async function streamFileData(
   session: Session,
+  realm: string,
   remotePath: string,
+  size: number,
   onChunk: (chunk: Uint8Array, expectedTotal: number) => void | Promise<void>,
   signal?: AbortSignal,
 ): Promise<void> {
-  const LATE_PROGRESS_WAIT_MS = 250
-  const MAX_LATE_PROGRESS_WAIT_MS = 5_000
-
-  const { publicKey, privateKey } = createX25519KeyPair()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const progressResult: any = await session.callProgress(procedureFileDownload, [remotePath, false, publicKey])
-
-  const queue: CallResult[] = []
-  let wakeUp: (() => void) | null = null
-  let streamDone = false
-  let streamError: unknown = null
-
-  const notify = () => { const fn = wakeUp; wakeUp = null; fn?.() }
-  progressResult.registerProgress((result: CallResult) => { queue.push(result); notify() })
-  progressResult.finalResultPromise
-    .then(() => { streamDone = true; notify() })
-    .catch((err: unknown) => { streamError = err; streamDone = true; notify() })
-
-  let receiveKey: Uint8Array | null = null
-  let firstMessage = true
-  let expectedTotal = 0
-  let receivedTotal = 0
-  let lateProgressWaitedMs = 0
-
-  const onAbort = () => notify()
-  signal?.addEventListener('abort', onAbort, { once: true })
-
+  const { stream } = await requestRange(session, realm, remotePath, 0, size, signal)
+  const reader = stream.getReader()
   try {
     while (true) {
       if (signal?.aborted) throw new Error('cancelled')
-      if (queue.length === 0) {
-        if (streamDone) {
-          if (expectedTotal > 0 && receivedTotal < expectedTotal) {
-            await new Promise<void>((resolve) => {
-              let settled = false
-              const timer = window.setTimeout(() => { if (settled) return; settled = true; wakeUp = null; resolve() }, LATE_PROGRESS_WAIT_MS)
-              wakeUp = () => { if (settled) return; settled = true; window.clearTimeout(timer); wakeUp = null; resolve() }
-            })
-            if (queue.length > 0) { lateProgressWaitedMs = 0; continue }
-            lateProgressWaitedMs += LATE_PROGRESS_WAIT_MS
-            if (lateProgressWaitedMs < MAX_LATE_PROGRESS_WAIT_MS) continue
-            throw new Error(`Download stream ended early (${receivedTotal} of ${expectedTotal} bytes)`)
-          }
-          break
-        }
-        await new Promise<void>(resolve => { wakeUp = resolve })
-        continue
-      }
-      const result = queue.shift()!
-      const args = (result.args ?? []) as unknown[]
-      if (firstMessage) {
-        firstMessage = false
-        const raw = args[0] as Uint8Array
-        if (raw.length < 36) throw new Error('Invalid key exchange message from server')
-        receiveKey = (await deriveSessionKeys(privateKey, raw.slice(4))).decryptKey
-        continue
-      }
-      if (!receiveKey || args.length < 2) continue
-      const msgType = args[0]
-      if (typeof msgType !== 'string') continue
-      if (msgType === 'H') {
-        const plain = decryptPayload(args[1] as Uint8Array, receiveKey)
-        expectedTotal = (JSON.parse(new TextDecoder().decode(plain)) as { size?: number }).size ?? 0
-      } else if (msgType === 'D') {
-        const chunk = decryptPayload(args[1] as Uint8Array, receiveKey)
-        receivedTotal += chunk.length
-        await onChunk(chunk, expectedTotal)
-      }
+      const { done, value } = await reader.read()
+      if (done) break
+      await onChunk(value, size)
     }
   } finally {
-    signal?.removeEventListener('abort', onAbort)
+    reader.releaseLock()
   }
-  if (streamError) throw streamError instanceof Error ? streamError : new Error('Stream failed')
 }
 
 let downloadServiceWorker: ServiceWorker | null = null
@@ -125,6 +63,7 @@ export async function ensureDownloadServiceWorker(): Promise<ServiceWorker | nul
 
 async function downloadFileWithSavePicker(
   session: Session,
+  realm: string,
   entry: DownloadEntry,
   progress: Ref<DownloadProgressState | null>,
   controller: AbortController,
@@ -148,13 +87,12 @@ async function downloadFileWithSavePicker(
   armStall()
 
   try {
-    await streamFileData(session, entry.path, async (chunk, expectedTotal) => {
+    await streamFileData(session, realm, entry.path, entry.size, async (chunk) => {
       armStall()
       await writable!.write(chunk.slice())
       received += chunk.length
       if (!progress.value) return
       progress.value.received = received
-      if (expectedTotal > 0) progress.value.total = expectedTotal
       const elapsed = (Date.now() - startTime) / 1000
       progress.value.speed = elapsed > 0 ? received / elapsed : 0
     }, controller.signal)
@@ -169,6 +107,7 @@ async function downloadFileWithSavePicker(
 
 async function downloadFileWithBrowserDownload(
   session: Session,
+  realm: string,
   entry: DownloadEntry,
   signal: AbortSignal,
   armStall: () => void,
@@ -211,10 +150,10 @@ async function downloadFileWithBrowserDownload(
   downloadUrl(`/_dl/${id}`, entry.name)
 
   try {
-    await streamFileData(session, entry.path, async (chunk, expectedTotal) => {
+    await streamFileData(session, realm, entry.path, entry.size, async (chunk) => {
       armStall()
       if (!sentMeta) {
-        mc.port1.postMessage({ type: 'meta', filename: entry.name, size: expectedTotal > 0 ? expectedTotal : 0 })
+        mc.port1.postMessage({ type: 'meta', filename: entry.name, size: entry.size })
         sentMeta = true
       }
       await waitForPull()
@@ -233,11 +172,15 @@ async function downloadFileWithBrowserDownload(
 
 /** Downloads `entry` to the client, reporting progress into `progress` when the
  * File System Access API is available (Firefox and the plain-browser-download
- * fallback have no progress signal of their own). */
+ * fallback have no progress signal of their own). Failures are logged and
+ * passed to `onFailure` (if given) rather than thrown — there's no in-flight
+ * caller left to usefully catch them by the time most of these surface. */
 export async function downloadFile(
   session: Session,
+  realm: string,
   entry: DownloadEntry,
   progress: Ref<DownloadProgressState | null>,
+  onFailure?: (err: unknown) => void,
 ): Promise<void> {
   const STALL_MS = 20_000
   const controller = new AbortController()
@@ -252,15 +195,17 @@ export async function downloadFile(
     if (stallTimer !== null) { clearTimeout(stallTimer); stallTimer = null }
   }
   function onError(err: unknown) {
-    if (stalledOut) return
-    if (!controller.signal.aborted && err instanceof Error) console.warn('Download failed:', err.message)
+    if (stalledOut) { onFailure?.(new Error('Download stalled — machine may have disconnected.')); return }
+    if (controller.signal.aborted) return
+    if (err instanceof Error) console.warn('Download failed:', err.message)
+    onFailure?.(err)
   }
 
   if (!isFirefoxBrowser() && 'showSaveFilePicker' in window) {
-    await downloadFileWithSavePicker(session, entry, progress, controller, armStall, clearStall, onError); return
+    await downloadFileWithSavePicker(session, realm, entry, progress, controller, armStall, clearStall, onError); return
   }
   try {
-    await downloadFileWithBrowserDownload(session, entry, controller.signal, armStall, clearStall)
+    await downloadFileWithBrowserDownload(session, realm, entry, controller.signal, armStall, clearStall)
   } catch (err) {
     clearStall(); onError(err)
   }
