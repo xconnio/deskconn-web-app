@@ -296,9 +296,8 @@ const apps: AppDef[] = [
     icon: 'bi-terminal',
     iconColor: '#ffffff',
     iconBg: '#1e293b',
-    width: 820,
-    height: 560,
-    minWidth: 420,
+    width: 640,
+    height: 420,
   },
   {
     id: 'pictures',
