@@ -197,8 +197,23 @@ function ensureStream(id: string): StreamEntry {
   return entry
 }
 
+// Media elements routinely issue open-ended range requests ("bytes=X-",
+// meaning "give me the rest of the file", including implicitly via no Range
+// header at all on the very first fetch) to let the browser manage its own
+// buffering — then abort well before that arrives, the moment they have
+// enough buffered or seek elsewhere. Declaring the true remaining length as
+// Content-Length for those promises far more than we'll ever deliver, and
+// the resulting abort-before-Content-Length-is-reached is what real media
+// servers avoid by capping how much an open-ended range actually returns;
+// mirror that here instead of promising size - start (or the whole file)
+// up front.
+const OPEN_ENDED_RANGE_CAP = 8 * 1024 * 1024 // 8MB
+
 function parseRange(rangeHeader: string | null, size: number): { start: number; length: number; partial: boolean } | null {
-  if (!rangeHeader) return { start: 0, length: size, partial: false }
+  if (!rangeHeader) {
+    if (size <= OPEN_ENDED_RANGE_CAP) return { start: 0, length: size, partial: false }
+    return { start: 0, length: OPEN_ENDED_RANGE_CAP, partial: true }
+  }
 
   const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim())
   if (!match) return null
@@ -215,7 +230,7 @@ function parseRange(rangeHeader: string | null, size: number): { start: number; 
     end = size - 1
   } else {
     start = parseInt(startStr, 10)
-    end = endStr === '' ? size - 1 : parseInt(endStr, 10)
+    end = endStr === '' ? Math.min(size - 1, start + OPEN_ENDED_RANGE_CAP - 1) : parseInt(endStr, 10)
   }
 
   if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end) return null
