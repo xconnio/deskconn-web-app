@@ -230,8 +230,8 @@ export const useAuthStore = defineStore('auth', () => {
     const verifyResult = await authService.verifyLoginOtp(null, username, password, code, principalPublicKey)
     const principalExpiresAt = verifyResult?.args?.[0]?.expires_at
 
-    // OTP confirmed - complete the real login via CRA & Get Account
-    const { session: s, result } = await authService.login(username, password)
+    // OTP confirmed, continue as the principal just registered, via cryptosign.
+    const { session: s, result } = await authService.autoLogin(username, principalPrivateKey)
     session.value = s
 
     const userDetails = result.args[0]

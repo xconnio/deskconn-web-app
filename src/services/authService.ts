@@ -56,12 +56,6 @@ export const authService = {
     return { result, session: s }
   },
 
-  async login(username: string, password: string) {
-    const s = await wampService.connectWithCRA(username, password)
-    const result = await s.call('io.xconn.deskconn.account.get')
-    return { session: s, result }
-  },
-
   async requestLoginOtp(email: string, password: string) {
     const s = await wampService.connectWithCRA(email, password)
     try {
