@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css'
 import { Progress, Result, Session } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
+import { useTabScroll } from '@/composables/useTabScroll'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import {
   createX25519KeyPair,
@@ -31,26 +32,7 @@ const toolbarHostRef = inject(floatingWindowToolbarKey)
 const toolbarTarget = computed(() => toolbarHostRef?.value ?? null)
 const panelRef = ref<HTMLDivElement | null>(null)
 const keybarRef = ref<HTMLDivElement | null>(null)
-const tabsListRef = ref<HTMLDivElement | null>(null)
-const tabsScrollLeft = ref(0)
-const tabsScrollMax = ref(0)
-
-function updateTabsScroll() {
-  const el = tabsListRef.value
-  if (!el) return
-  tabsScrollLeft.value = el.scrollLeft
-  tabsScrollMax.value = Math.max(0, el.scrollWidth - el.clientWidth)
-}
-
-function scrollTabsBy(delta: number) {
-  tabsListRef.value?.scrollBy({ left: delta, behavior: 'smooth' })
-}
-
-function scrollTabsToEnd() {
-  const el = tabsListRef.value
-  if (!el) return
-  el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' })
-}
+const { tabsListRef, tabsScrollLeft, tabsScrollMax, updateTabsScroll, scrollTabsBy, scrollTabsToEnd } = useTabScroll()
 
 async function scrollActiveTabIntoView(alignToEnd = false) {
   await nextTick()
@@ -160,12 +142,13 @@ function registerTermEl(id: number, el: unknown) {
   }
 }
 
+// Equal-width tab sizing is terminal-only (TextEditor's tabs shrink-wrap
+// their label instead) — layered on top of the shared scroll/overflow
+// tracking from useTabScroll.
 function updateTabsLayout() {
+  updateTabsScroll()
   const el = tabsListRef.value
   if (!el) return
-
-  tabsScrollLeft.value = el.scrollLeft
-  tabsScrollMax.value = Math.max(0, el.scrollWidth - el.clientWidth)
 
   const availableWidth = el.clientWidth
   const count = tabs.value.length
