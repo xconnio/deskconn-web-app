@@ -351,8 +351,8 @@ const apps: AppDef[] = [
     icon: 'bi-file-earmark-richtext',
     iconColor: '#ffffff',
     iconBg: '#0f766e',
-    width: 820,
-    height: 560,
+    width: 640,
+    height: 420,
     minWidth: 420,
   },
 ]
