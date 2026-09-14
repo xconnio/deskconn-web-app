@@ -6,8 +6,8 @@ import '@xterm/xterm/css/xterm.css'
 import { Progress, Result, Session } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
-import { useTabScroll } from '@/composables/useTabScroll'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import TabStrip from '@/components/TabStrip.vue'
 import {
   createX25519KeyPair,
   deriveSessionKeys,
@@ -32,13 +32,6 @@ const toolbarHostRef = inject(floatingWindowToolbarKey)
 const toolbarTarget = computed(() => toolbarHostRef?.value ?? null)
 const panelRef = ref<HTMLDivElement | null>(null)
 const keybarRef = ref<HTMLDivElement | null>(null)
-const { tabsListRef, tabsScrollLeft, tabsScrollMax, updateTabsScroll, scrollTabsBy, scrollTabsToEnd } = useTabScroll()
-
-async function scrollActiveTabIntoView(alignToEnd = false) {
-  await nextTick()
-  const el = tabsListRef.value?.querySelector<HTMLElement>('.tab-active')
-  el?.scrollIntoView({ block: 'nearest', inline: alignToEnd ? 'end' : 'nearest' })
-}
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -85,12 +78,11 @@ const tabs = shallowRef<TabState[]>([])
 const activeTabId = ref(-1)
 let nextTabId = 0
 const termElMap = new Map<number, HTMLDivElement>()
-const tabWidth = ref(160)
+const stripTabs = computed(() => tabs.value.map((t) => ({ id: t.id, label: t.label })))
 
 const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value) ?? null)
 
 let keybarResizeObserver: ResizeObserver | null = null
-let tabsListResizeObserver: ResizeObserver | null = null
 let panelResizeObserver: ResizeObserver | null = null
 let previousBodyOverflow = ''
 let previousHtmlOverflow = ''
@@ -139,24 +131,6 @@ function registerTermEl(id: number, el: unknown) {
     termElMap.set(id, el)
   } else {
     termElMap.delete(id)
-  }
-}
-
-// Equal-width tab sizing is terminal-only (TextEditor's tabs shrink-wrap
-// their label instead) — layered on top of the shared scroll/overflow
-// tracking from useTabScroll.
-function updateTabsLayout() {
-  updateTabsScroll()
-  const el = tabsListRef.value
-  if (!el) return
-
-  const availableWidth = el.clientWidth
-  const count = tabs.value.length
-
-  if (count > 1 && availableWidth > 0) {
-    tabWidth.value = Math.max(80, Math.min(160, Math.floor(availableWidth / count)))
-  } else {
-    tabWidth.value = 160
   }
 }
 
@@ -412,15 +386,13 @@ async function addTab() {
   const tab = createTabState(activeTab.value ? effectiveShellId(activeTab.value) : null)
   tabs.value = [...tabs.value, tab]
   activeTabId.value = tab.id
+  // initTab needs the new tab's .terminal-mount div (v-for'd below) to
+  // already exist in the DOM before it can open the terminal into it.
   await nextTick()
-  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-  updateTabsLayout()
-  scrollTabsToEnd()
   await initTab(tab)
 }
 
-async function switchTab(id: number, e?: MouseEvent) {
-  if ((e?.target as HTMLElement | undefined)?.closest('.tab-close')) return
+async function switchTab(id: number) {
   if (activeTabId.value === id) {
     activeTab.value?.term?.focus()
     return
@@ -432,7 +404,6 @@ async function switchTab(id: number, e?: MouseEvent) {
     tab.fitAddon?.fit()
     tab.term?.focus()
   }
-  void scrollActiveTabIntoView()
 }
 
 function closeTab(id: number) {
@@ -515,15 +486,6 @@ function cancelPendingClose() {
   if (p?.kind === 'window') p.resolve(false)
 }
 
-function onTabMouseDown(tab: TabState, e: MouseEvent) {
-  if (e.button === 1) {
-    void requestCloseTab(tab.id)
-    return
-  }
-  void switchTab(tab.id, e)
-}
-
-
 const updateKeybarPosition = () => {
   requestAnimationFrame(() => {
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight
@@ -539,19 +501,8 @@ const observePanelSize = () => {
   panelResizeObserver?.disconnect()
   panelResizeObserver = new ResizeObserver(() => {
     if (activeTab.value) handleResizeTab(activeTab.value)
-    updateTabsLayout()
   })
   panelResizeObserver.observe(panelRef.value)
-}
-
-const observeTabsListSize = () => {
-  if (!tabsListRef.value || typeof ResizeObserver === 'undefined') return
-
-  tabsListResizeObserver?.disconnect()
-  tabsListResizeObserver = new ResizeObserver(() => {
-    updateTabsLayout()
-  })
-  tabsListResizeObserver.observe(tabsListRef.value)
 }
 
 const observeKeybarHeight = () => {
@@ -674,13 +625,10 @@ onMounted(async () => {
   window.visualViewport?.addEventListener('scroll', updateKeybarPosition)
   await nextTick()
   observeKeybarHeight()
-  observeTabsListSize()
   observePanelSize()
-  updateTabsLayout()
   updateKeybarPosition()
 
   await addTab()
-  requestAnimationFrame(updateTabsLayout)
 })
 
 onUnmounted(() => {
@@ -690,8 +638,6 @@ onUnmounted(() => {
   window.visualViewport?.removeEventListener('scroll', updateKeybarPosition)
   keybarResizeObserver?.disconnect()
   keybarResizeObserver = null
-  tabsListResizeObserver?.disconnect()
-  tabsListResizeObserver = null
   panelResizeObserver?.disconnect()
   panelResizeObserver = null
   clearTerminalTouchScroll()
@@ -705,11 +651,6 @@ watch([terminalInsetBottom, panelViewportHeight], () => {
   })
 })
 
-watch(() => tabs.value.length, async () => {
-  await nextTick()
-  requestAnimationFrame(updateTabsLayout)
-})
-
 // Window focus doesn't move DOM focus, so refocus xterm ourselves.
 watch(() => props.focused, (focused) => {
   if (focused) activeTab.value?.term?.focus()
@@ -719,44 +660,15 @@ watch(() => props.focused, (focused) => {
 <template>
   <div ref="panelRef" class="terminal-panel" :style="terminalPanelStyle">
     <Teleport :to="toolbarTarget ?? 'body'" :disabled="!toolbarTarget">
-      <div class="tab-bar">
-        <button
-          v-if="tabsScrollMax > 0"
-          class="tab-scroll-btn"
-          :disabled="tabsScrollLeft <= 0"
-          @click="scrollTabsBy(-160)"
-        ><i class="bi bi-chevron-left"></i></button>
-        <div
-          ref="tabsListRef"
-          class="tabs-list"
-          :style="{ '--terminal-tab-width': `${tabWidth}px` }"
-          @scroll="updateTabsScroll"
-        >
-          <button
-            v-for="tab in tabs"
-            :key="tab.id"
-            class="tab-item"
-            :class="{ 'tab-active': tab.id === activeTabId }"
-            @mousedown.prevent="onTabMouseDown(tab, $event)"
-            @mouseup.prevent
-            >
-              <span class="tab-label">{{ tab.label }}</span>
-              <span
-                class="tab-close"
-                role="button"
-                :title="`Close ${tab.label}`"
-                @click.stop="requestCloseTab(tab.id)"
-              >&times;</span>
-            </button>
-          <button class="tab-add" title="New terminal" @click="addTab">+</button>
-        </div>
-        <button
-          v-if="tabsScrollMax > 0"
-          class="tab-scroll-btn"
-          :disabled="tabsScrollLeft >= tabsScrollMax"
-          @click="scrollTabsBy(160)"
-        ><i class="bi bi-chevron-right"></i></button>
-      </div>
+      <TabStrip
+        class="tab-bar-bleed"
+        :tabs="stripTabs"
+        :active-id="activeTabId"
+        new-tab-title="New terminal"
+        @switch="switchTab"
+        @close="requestCloseTab"
+        @add="addTab"
+      />
     </Teleport>
 
     <div
@@ -936,146 +848,14 @@ watch(() => props.focused, (focused) => {
   overscroll-behavior: contain;
 }
 
-/* Terminal only ever renders inside a FloatingWindow, so the tab bar always
-   teleports into its titlebar — bleeds into the titlebar's padding to fill
-   it edge-to-edge, and shrinks to fit .fwin-toolbar-host (tabs-list's own
-   overflow-x:auto handles scrolling once this is constrained). */
-.tab-bar {
-  display: flex;
-  align-items: stretch;
-  overflow: hidden;
+/* Terminal only ever renders inside a FloatingWindow, and TabStrip is the
+   sole content teleported into its titlebar — bleeds into the titlebar's
+   own 0.25rem/0.6rem padding so the 32px-tall tab strip fills it
+   edge-to-edge instead of sitting inside it (see TabStrip.vue for why this
+   isn't baked into the component itself: TextEditor nests it next to a
+   "Files" button and bleeds its own wrapper instead). */
+.tab-bar-bleed {
   margin: -0.25rem 0 -0.25rem -0.6rem;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.tabs-list {
-  display: flex;
-  align-items: stretch;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tabs-list::-webkit-scrollbar {
-  display: none;
-}
-
-/* GNOME/Yaru style: inactive tabs blend into the bar, the active tab gets
-   a lighter "pressed in" panel with an accent underline. */
-.tab-item {
-  flex: 0 0 var(--terminal-tab-width, 160px);
-  width: var(--terminal-tab-width, 160px);
-  max-width: var(--terminal-tab-width, 160px);
-  min-width: 80px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 8px 0 10px;
-  height: 32px;
-  background: transparent;
-  border: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  color: #a9a9a9;
-  font-size: 0.72rem;
-  font-family: inherit;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  transition: background 0.12s, color 0.12s;
-}
-
-.tab-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #e2e8f0;
-}
-
-.tab-item.tab-active {
-  background: #4a4a4a;
-  color: #fff;
-  box-shadow: inset 0 -2px 0 #ec4899;
-}
-
-.tab-label {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
-}
-
-.tab-close {
-  flex-shrink: 0;
-  width: 15px;
-  height: 15px;
-  border-radius: 3px;
-  color: inherit;
-  font-size: 0.9rem;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0.4;
-  transition: opacity 0.1s, background 0.1s;
-  user-select: none;
-}
-
-.tab-close:hover {
-  opacity: 1 !important;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.tab-scroll-btn {
-  flex: 0 0 28px;
-  height: 32px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  color: #a9a9a9;
-  font-size: 0.65rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s, color 0.12s;
-}
-
-.tab-scroll-btn:last-child {
-  border-right: none;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.tab-scroll-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
-  color: #e2e8f0;
-}
-
-.tab-scroll-btn:disabled {
-  opacity: 0.25;
-  cursor: default;
-}
-
-.tab-add {
-  flex: 0 0 28px;
-  height: 32px;
-  background: transparent;
-  border: none;
-  color: #a9a9a9;
-  font-size: 1.1rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s, color 0.12s;
-  border-radius: 3px;
-  margin: 2px 2px 2px 1px;
-}
-
-.tab-add:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
 }
 
 .terminal-body {

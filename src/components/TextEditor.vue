@@ -12,10 +12,10 @@
 import { ref, reactive, computed, inject, watch, nextTick, onMounted, onUnmounted, shallowRef } from 'vue'
 import { type Session } from 'xconn'
 import { floatingWindowActionsKey, floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
-import { useTabScroll } from '@/composables/useTabScroll'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import EditorFileTree from '@/components/EditorFileTree.vue'
 import GitFolderPicker from '@/components/GitFolderPicker.vue'
+import TabStrip from '@/components/TabStrip.vue'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSessionEncryptionStore } from '@/stores/sessionEncryption'
 import { streamFileCat } from '@/utils/fileCat'
@@ -124,6 +124,13 @@ function tabLabel(tab: TabState): string {
   return tab.entry?.name ?? 'Untitled'
 }
 
+const stripTabs = computed(() => tabs.value.map((t) => ({
+  id: t.id,
+  label: tabLabel(t),
+  dirty: isDirty(t),
+  preview: t.isPreview,
+})))
+
 // reactive() here (not a plain object) so the reference held across the async
 // gap in loadTabContent/performSave/etc. IS the reactive proxy itself — a
 // plain object only becomes reactive when read back out of tabs.value, and
@@ -150,37 +157,19 @@ function createTab(entry: TextEntry | null, isPreview: boolean): TabState {
   })
 }
 
-// toEnd is for a brand-new tab pushed onto the end of the list — scrolling
-// just far enough to reveal the tab itself (the plain "nearest" case, used
-// when switching to an already-existing tab) would still leave the "+"
-// add-tab button, which sits right after it, off-screen.
-function switchTab(id: number, opts: { toEnd?: boolean } = {}) {
+function switchTab(id: number) {
   activeTabId.value = id
   nextTick(() => {
     updateAvailableWidth()
     updateLineHeight()
     activeTextareaEl.value?.focus()
-
-    // Recomputing scroll state can toggle the scroll-chevron buttons
-    // (v-if="tabsScrollMax > 0"), which changes tabs-list's clientWidth —
-    // wait one more tick for that to render before measuring where to
-    // scroll, or scrollIntoView aims at stale geometry and the active tab
-    // ends up drifting under the newly-appeared chevron.
-    updateTabsScroll()
-    nextTick(() => {
-      if (opts.toEnd) {
-        scrollTabsToEnd()
-      } else {
-        tabButtonElMap.get(id)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-      }
-    })
   })
 }
 
 function addBlankTab() {
   const tab = createTab(null, false)
   tabs.value.push(tab)
-  switchTab(tab.id, { toEnd: true })
+  switchTab(tab.id)
 }
 
 async function loadGitBaseline(tab: TabState) {
@@ -292,7 +281,7 @@ function openFileInTab(target: TextEntry, pinned: boolean) {
 
   const tab = createTab(target, !pinned)
   tabs.value.push(tab)
-  switchTab(tab.id, { toEnd: true })
+  switchTab(tab.id)
   void loadTabContent(tab)
 }
 
@@ -586,27 +575,6 @@ function setGutterEl(id: number, el: Element | null) {
   else gutterElMap.delete(id)
 }
 
-// Plain (non-reactive) map — only ever read inside event handlers below, never
-// from a computed, so there's no staleness concern that would need reactive().
-const tabButtonElMap = new Map<number, HTMLElement>()
-function setTabButtonEl(id: number, el: Element | null) {
-  if (el) tabButtonElMap.set(id, el as HTMLElement)
-  else tabButtonElMap.delete(id)
-}
-function onTabBarWheel(event: WheelEvent) {
-  // Tab bar only scrolls horizontally, but a normal mouse wheel emits
-  // vertical delta — remap it so tabs scroll without needing shift held.
-  if (event.deltaY === 0) return
-  ;(event.currentTarget as HTMLElement).scrollBy({ left: event.deltaY })
-  event.preventDefault()
-}
-
-// Scroll chevrons + overflow tracking for the tab strip, shared with
-// TerminalPanel's identical tabs-list via useTabScroll — without these, the
-// "+" add-tab button just scrolls out of view once tabs overflow the
-// titlebar, with no affordance telling you it's still there.
-const { tabsListRef, tabsScrollLeft, tabsScrollMax, updateTabsScroll, scrollTabsBy, scrollTabsToEnd } = useTabScroll()
-let tabsListResizeObserver: ResizeObserver | null = null
 const activeTextareaEl = computed(() => (activeTabId.value !== null ? textareaElMap.get(activeTabId.value) ?? null : null))
 const activeGutterEl = computed(() => (activeTabId.value !== null ? gutterElMap.get(activeTabId.value) ?? null : null))
 
@@ -835,12 +803,6 @@ function handleKeydown(e: KeyboardEvent) {
 onMounted(async () => {
   document.addEventListener('keydown', handleKeydown)
 
-  await nextTick()
-  if (tabsListRef.value && typeof ResizeObserver !== 'undefined') {
-    tabsListResizeObserver = new ResizeObserver(updateTabsScroll)
-    tabsListResizeObserver.observe(tabsListRef.value)
-  }
-
   await bootstrapSession()
   if (initError.value) return
 
@@ -860,12 +822,6 @@ onUnmounted(() => {
   for (const controller of loadControllers.values()) controller.abort()
   if (savedFlashTimer) clearTimeout(savedFlashTimer)
   resizeObserver?.disconnect()
-  tabsListResizeObserver?.disconnect()
-})
-
-watch(() => tabs.value.length, async () => {
-  await nextTick()
-  requestAnimationFrame(updateTabsScroll)
 })
 </script>
 
@@ -896,41 +852,14 @@ watch(() => tabs.value.length, async () => {
         <button ref="filesMenuBtnRef" class="files-menu-btn" @click="toggleFilesMenu">
           <i class="bi bi-folder2"></i><span>Files</span>
         </button>
-        <div class="tab-bar">
-          <button
-            v-if="tabsScrollMax > 0"
-            class="tab-scroll-btn"
-            :disabled="tabsScrollLeft <= 0"
-            @click="scrollTabsBy(-160)"
-          ><i class="bi bi-chevron-left"></i></button>
-          <div
-            ref="tabsListRef"
-            class="tabs-list"
-            @wheel="onTabBarWheel"
-            @scroll="updateTabsScroll"
-          >
-            <button
-              v-for="tab in tabs"
-              :key="tab.id"
-              :ref="(el) => setTabButtonEl(tab.id, el as Element | null)"
-              class="tab-item"
-              :class="{ 'tab-active': tab.id === activeTabId, 'tab-preview': tab.isPreview }"
-              @mousedown.left="switchTab(tab.id)"
-              @mousedown.middle.prevent="requestCloseTab(tab.id, $event)"
-            >
-              <span v-if="isDirty(tab)" class="tab-dot"></span>
-              <span class="tab-label">{{ tabLabel(tab) }}</span>
-              <span class="tab-close" role="button" :title="`Close ${tabLabel(tab)}`" @click="requestCloseTab(tab.id, $event)">&times;</span>
-            </button>
-            <button class="tab-add" title="New file" @click="addBlankTab">+</button>
-          </div>
-          <button
-            v-if="tabsScrollMax > 0"
-            class="tab-scroll-btn"
-            :disabled="tabsScrollLeft >= tabsScrollMax"
-            @click="scrollTabsBy(160)"
-          ><i class="bi bi-chevron-right"></i></button>
-        </div>
+        <TabStrip
+          :tabs="stripTabs"
+          :active-id="activeTabId"
+          new-tab-title="New file"
+          @switch="switchTab"
+          @close="requestCloseTab"
+          @add="addBlankTab"
+        />
       </div>
     </Teleport>
 
@@ -1105,12 +1034,17 @@ watch(() => tabs.value.length, async () => {
 .editor-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Toolbar: Files menu button + tab strip ── */
+/* Bleeds into the titlebar's own padding, same as TerminalPanel's .tab-bar —
+   without this, the titlebar ends up taller here than in the terminal since
+   its 0.25rem/0.6rem padding would otherwise sit on top of the tab strip's
+   own 32px height instead of being absorbed by it. */
 .editor-toolbar {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   width: 100%;
   min-width: 0;
+  margin: -0.25rem 0 -0.25rem -0.6rem;
 }
 
 .files-menu-btn {
@@ -1167,115 +1101,6 @@ watch(() => tabs.value.length, async () => {
   background: #f1f5f9;
   margin: 0.3rem 0.2rem;
 }
-
-.tab-bar {
-  display: flex;
-  align-items: stretch;
-  overflow: hidden;
-  min-width: 0;
-  flex: 1;
-}
-
-.tabs-list {
-  display: flex;
-  align-items: stretch;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.tabs-list::-webkit-scrollbar { display: none; }
-
-.tab-scroll-btn {
-  flex: 0 0 28px;
-  height: 32px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  color: #a9a9a9;
-  font-size: 0.65rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.12s, color 0.12s;
-}
-.tab-scroll-btn:last-child {
-  border-right: none;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
-}
-.tab-scroll-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); color: #e2e8f0; }
-.tab-scroll-btn:disabled { opacity: 0.25; cursor: default; }
-
-/* GNOME/Yaru style, matching TerminalPanel's tab strip: flush square tabs
-   separated by a hairline divider, active tab gets a pressed-in panel with
-   a pink accent underline. */
-.tab-item {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-shrink: 0;
-  max-width: 160px;
-  padding: 0 8px 0 10px;
-  height: 32px;
-  border: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  background: transparent;
-  color: #a9a9a9;
-  font-size: 0.78rem;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.tab-item:hover { background: rgba(255, 255, 255, 0.06); color: #e2e8f0; }
-.tab-active {
-  background: #4a4a4a;
-  color: #ffffff;
-  box-shadow: inset 0 -2px 0 #ec4899;
-}
-.tab-preview .tab-label { font-style: italic; }
-
-.tab-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f59e0b;
-  flex-shrink: 0;
-}
-.tab-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tab-close {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  border-radius: 3px;
-  color: inherit;
-  line-height: 1;
-  opacity: 0.4;
-  transition: opacity 0.1s, background 0.1s;
-}
-.tab-close:hover { opacity: 1 !important; background: rgba(255, 255, 255, 0.15); }
-
-.tab-add {
-  flex-shrink: 0;
-  width: 28px;
-  height: 32px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: #a9a9a9;
-  font-size: 1.1rem;
-  cursor: pointer;
-  margin: 2px 2px 2px 1px;
-  transition: background 0.12s, color 0.12s;
-}
-.tab-add:hover { background: rgba(255, 255, 255, 0.1); color: #e2e8f0; }
 
 /* ── Layout ── */
 .editor-layout {
