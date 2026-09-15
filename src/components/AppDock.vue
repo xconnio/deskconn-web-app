@@ -28,6 +28,10 @@ const props = defineProps<{
   /** From io.xconn.deskconn.deskconnd.device.is_desktop — false on a headless
    * machine, which never registers the screenshot RPC on the deskconnd side. */
   isDesktop?: boolean
+  /** Narrow screens: apps render as desktop icons (see .desktop-icon-grid)
+   * instead of dock icons, and this bar shrinks to a machine/windows/profile
+   * switcher, like a phone's bottom nav. */
+  mobile?: boolean
 }>()
 
 // Screenshot only exists on desktop machines — deskconnd doesn't even
@@ -413,206 +417,315 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="dockRootRef" class="dock" :class="`dock-${position}`">
+  <div ref="dockRootRef" class="dock" :class="mobile ? 'dock-bottom dock-mobile-nav' : `dock-${position}`">
     <div class="dock-inner">
-      <!-- Navigating away skips mouseleave, so clear the tooltip on click too. -->
-      <div class="dock-icon-wrapper" :ref="(el) => setIconRef('machines', el as Element | null)">
-        <button
-          class="dock-icon dock-icon-machines"
-          aria-label="Machines"
-          @click="hideTooltip(); requestMachinesPicker()"
-          @mouseenter="showTooltip('machines')"
-          @mouseleave="hideTooltip"
-        >
-          <i class="bi bi-window-stack"></i>
-        </button>
-      </div>
+      <template v-if="!mobile">
+        <!-- Navigating away skips mouseleave, so clear the tooltip on click too. -->
+        <div class="dock-icon-wrapper" :ref="(el) => setIconRef('machines', el as Element | null)">
+          <button
+            class="dock-icon dock-icon-machines"
+            aria-label="Machines"
+            @click="hideTooltip(); requestMachinesPicker()"
+            @mouseenter="showTooltip('machines')"
+            @mouseleave="hideTooltip"
+          >
+            <i class="bi bi-window-stack"></i>
+          </button>
+        </div>
 
-      <div
-        class="dock-icon-wrapper"
-        :ref="(el) => setIconRef('windows-overview', el as Element | null)"
-      >
-        <button
-          class="dock-icon dock-icon-machines"
-          aria-label="Show all windows"
-          @click="openWindowsOverview()"
-          @mouseenter="showTooltip('windows-overview')"
-          @mouseleave="hideTooltip"
-        >
-          <i class="bi bi-grid-3x3-gap-fill"></i>
-        </button>
-        <span v-if="windows.length > 0" class="dock-dots">
-          <span v-for="n in Math.min(windows.length, 4)" :key="n" class="dock-dot"></span>
-        </span>
-      </div>
-
-      <Teleport to="body">
         <div
-          v-if="showWindowsOverview"
-          class="windows-overview"
-          @click.self="closeWindowsOverview()"
-          @contextmenu.prevent
+          class="dock-icon-wrapper"
+          :ref="(el) => setIconRef('windows-overview', el as Element | null)"
         >
-          <div class="windows-overview-header">
-            <h2 class="windows-overview-title">Open Windows</h2>
-            <button class="windows-overview-close" @click="closeWindowsOverview()">
-              <i class="bi bi-x-lg"></i>
-            </button>
-          </div>
+          <button
+            class="dock-icon dock-icon-machines"
+            aria-label="Show all windows"
+            @click="openWindowsOverview()"
+            @mouseenter="showTooltip('windows-overview')"
+            @mouseleave="hideTooltip"
+          >
+            <i class="bi bi-grid-3x3-gap-fill"></i>
+          </button>
+          <span v-if="windows.length > 0" class="dock-dots">
+            <span v-for="n in Math.min(windows.length, 4)" :key="n" class="dock-dot"></span>
+          </span>
+        </div>
 
-          <div ref="windowsOverviewGridRef" class="windows-overview-grid">
+        <div class="dock-divider"></div>
+
+        <div
+          v-for="app in orderedApps"
+          :key="app.id"
+          class="dock-icon-wrapper"
+          :ref="(el) => setIconRef(app.id, el as Element | null)"
+        >
+          <button
+            class="dock-icon dock-icon-app"
+            :class="{ 'dock-icon-focused': isAppFocused(app.id), 'dock-icon-disabled': offline }"
+            :style="{ color: app.iconColor, background: app.iconBg }"
+            :aria-label="offline ? `${app.label} (offline)` : app.label"
+            @pointerdown="onIconPointerDown(app.id, $event)"
+            @contextmenu.prevent="handleIconContextMenu(app.id)"
+            @mouseenter="showTooltip(app.id)"
+            @mouseleave="hideTooltip"
+          >
+            <i class="bi" :class="app.icon"></i>
+          </button>
+          <span v-if="dotCount(app.id) > 0" class="dock-dots">
+            <span v-for="n in dotCount(app.id)" :key="n" class="dock-dot"></span>
+          </span>
+
+          <Teleport to="body">
             <div
-              v-for="win in windows"
-              :key="win.id"
-              class="windows-overview-card"
-              :class="{
-                'windows-overview-card-active': focusedId === win.id,
-                'kbd-focused': selectedOverviewWindow?.id === win.id,
-              }"
-              tabindex="-1"
-              @click="activateFromOverview(win.id)"
+              v-if="openPopoverAppId === app.id"
+              :ref="(el) => (popoverRef = el as HTMLElement | null)"
+              class="dock-popover"
+              :style="popoverStyle"
+              @click.stop
             >
-              <span
-                class="windows-overview-close-card"
-                title="Close"
-                @click.stop="closeInstance(win.id, $event)"
+              <div class="dock-popover-title">{{ app.label }}</div>
+              <button
+                v-for="win in instancesByApp.get(app.id)"
+                :key="win.id"
+                class="dock-popover-row"
+                :class="{ 'dock-popover-row-active': focusedId === win.id }"
+                @click="activateInstance(win.id)"
               >
-                <i class="bi bi-x"></i>
-              </span>
-              <div class="windows-overview-preview">
-                <!-- The owning DesktopSessionHost teleports this window's live app content in here. -->
-                <div class="windows-overview-preview-slot" :ref="windowPreviewRef(win.id)"></div>
-                <div
-                  class="windows-overview-icon-badge"
+                <span
+                  class="dock-popover-icon"
                   :style="{ color: win.iconColor, background: win.iconBg }"
                 >
                   <i class="bi" :class="win.icon"></i>
-                </div>
-              </div>
-              <div class="windows-overview-label">{{ win.title }}</div>
-              <span v-if="win.minimized" class="windows-overview-minimized">Minimized</span>
+                </span>
+                <span class="dock-popover-label">{{ win.title }}</span>
+                <span v-if="win.minimized" class="dock-popover-minimized">minimized</span>
+                <span class="dock-popover-close" title="Close" @click="closeInstance(win.id, $event)">
+                  <i class="bi bi-x"></i>
+                </span>
+              </button>
+              <button
+                v-if="app.launchable !== false"
+                class="dock-popover-row dock-popover-new"
+                @click="launchNew(app.id)"
+              >
+                <span class="dock-popover-icon dock-popover-icon-new">
+                  <i class="bi bi-plus-lg"></i>
+                </span>
+                <span class="dock-popover-label">New Window</span>
+              </button>
+              <button
+                v-if="(instancesByApp.get(app.id)?.length ?? 0) > 0"
+                class="dock-popover-row dock-popover-quit"
+                @click="quitAll(app.id)"
+              >
+                <span class="dock-popover-icon dock-popover-icon-quit">
+                  <i class="bi bi-power"></i>
+                </span>
+                <span class="dock-popover-label">
+                  {{
+                    instancesByApp.get(app.id)!.length === 1
+                      ? 'Quit'
+                      : `Quit ${instancesByApp.get(app.id)!.length} Windows`
+                  }}
+                </span>
+              </button>
             </div>
+          </Teleport>
+        </div>
 
-            <div v-if="windows.length === 0" class="windows-overview-empty">No apps open</div>
+        <div class="dock-divider"></div>
+
+        <div class="dock-icon-wrapper" :ref="(el) => setIconRef('profile', el as Element | null)">
+          <button
+            class="dock-icon dock-icon-account"
+            aria-label="Profile"
+            @click="accountPanelStore.open('account')"
+            @mouseenter="showTooltip('profile')"
+            @mouseleave="hideTooltip"
+          >
+            <i class="bi bi-person-circle"></i>
+          </button>
+        </div>
+
+        <div
+          class="dock-icon-wrapper"
+          :ref="(el) => setIconRef('machine-badge', el as Element | null)"
+        >
+          <div
+            class="dock-icon dock-icon-machine-badge"
+            @mouseenter="showTooltip('machine-badge')"
+            @mouseleave="hideTooltip"
+          >
+            {{ machineInitials }}
           </div>
         </div>
-      </Teleport>
+      </template>
 
-      <div class="dock-divider"></div>
-
-      <div
-        v-for="app in orderedApps"
-        :key="app.id"
-        class="dock-icon-wrapper"
-        :ref="(el) => setIconRef(app.id, el as Element | null)"
-      >
-        <button
-          class="dock-icon dock-icon-app"
-          :class="{ 'dock-icon-focused': isAppFocused(app.id), 'dock-icon-disabled': offline }"
-          :style="{ color: app.iconColor, background: app.iconBg }"
-          :aria-label="offline ? `${app.label} (offline)` : app.label"
-          @pointerdown="onIconPointerDown(app.id, $event)"
-          @contextmenu.prevent="handleIconContextMenu(app.id)"
-          @mouseenter="showTooltip(app.id)"
-          @mouseleave="hideTooltip"
-        >
-          <i class="bi" :class="app.icon"></i>
+      <!-- Mobile: apps live on the desktop as icons instead (.desktop-icon-grid
+           below) — this bar is just the machine/windows/profile switcher. -->
+      <template v-else>
+        <button class="mobile-nav-item" aria-label="Machines" @click="requestMachinesPicker()">
+          <i class="bi bi-window-stack"></i>
+          <span class="mobile-nav-label">Machine</span>
         </button>
-        <span v-if="dotCount(app.id) > 0" class="dock-dots">
-          <span v-for="n in dotCount(app.id)" :key="n" class="dock-dot"></span>
-        </span>
 
-        <Teleport to="body">
+        <button class="mobile-nav-item" aria-label="Show all windows" @click="openWindowsOverview()">
+          <i class="bi bi-grid-3x3-gap-fill"></i>
+          <span class="mobile-nav-label">Windows</span>
+          <span v-if="windows.length > 0" class="mobile-nav-badge">{{ Math.min(windows.length, 9) }}</span>
+        </button>
+
+        <button class="mobile-nav-item" aria-label="Profile" @click="accountPanelStore.open('account')">
+          <i class="bi bi-person-circle"></i>
+          <span class="mobile-nav-label">Profile</span>
+        </button>
+      </template>
+    </div>
+
+    <Teleport to="body">
+      <div
+        v-if="showWindowsOverview"
+        class="windows-overview"
+        @click.self="closeWindowsOverview()"
+        @contextmenu.prevent
+      >
+        <div class="windows-overview-header">
+          <h2 class="windows-overview-title">Open Windows</h2>
+          <button class="windows-overview-close" @click="closeWindowsOverview()">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+
+        <div ref="windowsOverviewGridRef" class="windows-overview-grid">
           <div
-            v-if="openPopoverAppId === app.id"
-            :ref="(el) => (popoverRef = el as HTMLElement | null)"
-            class="dock-popover"
-            :style="popoverStyle"
-            @click.stop
+            v-for="win in windows"
+            :key="win.id"
+            class="windows-overview-card"
+            :class="{
+              'windows-overview-card-active': focusedId === win.id,
+              'kbd-focused': selectedOverviewWindow?.id === win.id,
+            }"
+            tabindex="-1"
+            @click="activateFromOverview(win.id)"
           >
-            <div class="dock-popover-title">{{ app.label }}</div>
-            <button
-              v-for="win in instancesByApp.get(app.id)"
-              :key="win.id"
-              class="dock-popover-row"
-              :class="{ 'dock-popover-row-active': focusedId === win.id }"
-              @click="activateInstance(win.id)"
+            <span
+              class="windows-overview-close-card"
+              title="Close"
+              @click.stop="closeInstance(win.id, $event)"
             >
-              <span
-                class="dock-popover-icon"
+              <i class="bi bi-x"></i>
+            </span>
+            <div class="windows-overview-preview">
+              <!-- The owning DesktopSessionHost teleports this window's live app content in here. -->
+              <div class="windows-overview-preview-slot" :ref="windowPreviewRef(win.id)"></div>
+              <div
+                class="windows-overview-icon-badge"
                 :style="{ color: win.iconColor, background: win.iconBg }"
               >
                 <i class="bi" :class="win.icon"></i>
-              </span>
-              <span class="dock-popover-label">{{ win.title }}</span>
-              <span v-if="win.minimized" class="dock-popover-minimized">minimized</span>
-              <span class="dock-popover-close" title="Close" @click="closeInstance(win.id, $event)">
-                <i class="bi bi-x"></i>
-              </span>
-            </button>
-            <button
-              v-if="app.launchable !== false"
-              class="dock-popover-row dock-popover-new"
-              @click="launchNew(app.id)"
-            >
-              <span class="dock-popover-icon dock-popover-icon-new">
-                <i class="bi bi-plus-lg"></i>
-              </span>
-              <span class="dock-popover-label">New Window</span>
-            </button>
-            <button
-              v-if="(instancesByApp.get(app.id)?.length ?? 0) > 0"
-              class="dock-popover-row dock-popover-quit"
-              @click="quitAll(app.id)"
-            >
-              <span class="dock-popover-icon dock-popover-icon-quit">
-                <i class="bi bi-power"></i>
-              </span>
-              <span class="dock-popover-label">
-                {{
-                  instancesByApp.get(app.id)!.length === 1
-                    ? 'Quit'
-                    : `Quit ${instancesByApp.get(app.id)!.length} Windows`
-                }}
-              </span>
-            </button>
+              </div>
+            </div>
+            <div class="windows-overview-label">{{ win.title }}</div>
+            <span v-if="win.minimized" class="windows-overview-minimized">Minimized</span>
           </div>
-        </Teleport>
-      </div>
 
-      <div class="dock-divider"></div>
-
-      <div class="dock-icon-wrapper" :ref="(el) => setIconRef('profile', el as Element | null)">
-        <button
-          class="dock-icon dock-icon-account"
-          aria-label="Profile"
-          @click="accountPanelStore.open('account')"
-          @mouseenter="showTooltip('profile')"
-          @mouseleave="hideTooltip"
-        >
-          <i class="bi bi-person-circle"></i>
-        </button>
-      </div>
-
-      <div
-        class="dock-icon-wrapper"
-        :ref="(el) => setIconRef('machine-badge', el as Element | null)"
-      >
-        <div
-          class="dock-icon dock-icon-machine-badge"
-          @mouseenter="showTooltip('machine-badge')"
-          @mouseleave="hideTooltip"
-        >
-          {{ machineInitials }}
+          <div v-if="windows.length === 0" class="windows-overview-empty">No apps open</div>
         </div>
       </div>
-    </div>
+    </Teleport>
 
     <Teleport to="body">
       <div v-if="hoveredAppId" class="dock-tooltip" :style="tooltipStyle">
         {{ tooltipText }}
       </div>
     </Teleport>
+  </div>
+
+  <!-- Mobile: pinned apps as desktop icons instead of dock icons — same
+       launch/instance-switch behavior (handleIconClick), just a home-screen
+       layout instead of a strip. -->
+  <div v-if="mobile" class="desktop-icon-grid">
+    <div
+      v-for="app in orderedApps"
+      :key="app.id"
+      class="desktop-icon-wrapper"
+      :ref="(el) => setIconRef(app.id, el as Element | null)"
+    >
+      <button
+        class="desktop-icon"
+        :class="{ 'desktop-icon-focused': isAppFocused(app.id), 'desktop-icon-disabled': offline }"
+        :aria-label="offline ? `${app.label} (offline)` : app.label"
+        @click="handleIconClick(app.id)"
+        @contextmenu.prevent="handleIconContextMenu(app.id)"
+      >
+        <span class="desktop-icon-glyph" :style="{ color: app.iconColor, background: app.iconBg }">
+          <i class="bi" :class="app.icon"></i>
+        </span>
+        <span v-if="dotCount(app.id) > 0" class="dock-dots desktop-icon-dots">
+          <span v-for="n in dotCount(app.id)" :key="n" class="dock-dot"></span>
+        </span>
+      </button>
+      <span class="desktop-icon-label">{{ app.label }}</span>
+
+      <!-- ponytail: duplicates the dock's instance-switcher popover markup —
+           extract to a shared subcomponent if a third call site shows up. -->
+      <Teleport to="body">
+        <div
+          v-if="openPopoverAppId === app.id"
+          :ref="(el) => (popoverRef = el as HTMLElement | null)"
+          class="dock-popover"
+          :style="popoverStyle"
+          @click.stop
+        >
+          <div class="dock-popover-title">{{ app.label }}</div>
+          <button
+            v-for="win in instancesByApp.get(app.id)"
+            :key="win.id"
+            class="dock-popover-row"
+            :class="{ 'dock-popover-row-active': focusedId === win.id }"
+            @click="activateInstance(win.id)"
+          >
+            <span
+              class="dock-popover-icon"
+              :style="{ color: win.iconColor, background: win.iconBg }"
+            >
+              <i class="bi" :class="win.icon"></i>
+            </span>
+            <span class="dock-popover-label">{{ win.title }}</span>
+            <span v-if="win.minimized" class="dock-popover-minimized">minimized</span>
+            <span class="dock-popover-close" title="Close" @click="closeInstance(win.id, $event)">
+              <i class="bi bi-x"></i>
+            </span>
+          </button>
+          <button
+            v-if="app.launchable !== false"
+            class="dock-popover-row dock-popover-new"
+            @click="launchNew(app.id)"
+          >
+            <span class="dock-popover-icon dock-popover-icon-new">
+              <i class="bi bi-plus-lg"></i>
+            </span>
+            <span class="dock-popover-label">New Window</span>
+          </button>
+          <button
+            v-if="(instancesByApp.get(app.id)?.length ?? 0) > 0"
+            class="dock-popover-row dock-popover-quit"
+            @click="quitAll(app.id)"
+          >
+            <span class="dock-popover-icon dock-popover-icon-quit">
+              <i class="bi bi-power"></i>
+            </span>
+            <span class="dock-popover-label">
+              {{
+                instancesByApp.get(app.id)!.length === 1
+                  ? 'Quit'
+                  : `Quit ${instancesByApp.get(app.id)!.length} Windows`
+              }}
+            </span>
+          </button>
+        </div>
+      </Teleport>
+    </div>
   </div>
 </template>
 
@@ -1137,5 +1250,131 @@ onUnmounted(() => {
 .windows-overview-empty {
   color: rgba(255, 255, 255, 0.6);
   font-size: 0.9rem;
+}
+
+/* Mobile bottom nav — machine/windows/profile switcher only, evenly spaced,
+   labeled like a phone's tab bar. Shorter than the desktop dock bar (which
+   also has to fit a strip of app icons). */
+.dock-mobile-nav {
+  min-height: 3.2rem;
+}
+
+.dock-mobile-nav .dock-inner {
+  flex: 1;
+  justify-content: space-around;
+  padding: 0.2rem 0.5rem env(safe-area-inset-bottom, 0.2rem);
+}
+
+.mobile-nav-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 4.5rem;
+  padding: 0.15rem;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 1.15rem;
+  cursor: pointer;
+}
+
+.mobile-nav-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.mobile-nav-badge {
+  position: absolute;
+  top: 0;
+  right: 0.6rem;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #f97316;
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* Mobile home-screen — pinned apps as icons on the desktop instead of dock
+   icons. Sits behind open app windows (see .windows-layer z-index in
+   DesktopSessionHost), like real desktop icons do. */
+.desktop-icon-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 1.1rem 0.75rem;
+  padding: 1rem 1rem calc(3.2rem + env(safe-area-inset-bottom, 0px) + 0.75rem);
+  overflow-y: auto;
+}
+
+.desktop-icon-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  width: 72px;
+}
+
+.desktop-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.desktop-icon-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  font-size: 1.7rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.desktop-icon-focused .desktop-icon-glyph {
+  outline: 2px solid rgba(59, 130, 246, 0.7);
+  outline-offset: 2px;
+}
+
+.desktop-icon-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.desktop-icon-dots {
+  bottom: -3px;
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: row;
+}
+
+.desktop-icon-label {
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

@@ -136,6 +136,10 @@ onUnmounted(() => {
 .app-wrapper {
   display: flex;
   min-height: 100vh;
+  /* 100vh on mobile = viewport with the browser chrome hidden, taller than
+     what's actually visible on load — pushes the bottom dock below the fold
+     until the user scrolls. dvh tracks the real visible height instead. */
+  min-height: 100dvh;
 }
 
 .global-account-btn {

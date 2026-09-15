@@ -726,6 +726,7 @@ onUnmounted(() => {
         :position="dockPosition"
         :offline="isDisconnected"
         :is-desktop="isDesktop"
+        :mobile="isMobile"
         @launch="handleLaunch"
         @activate="onActivateWindow"
         @close="onCloseWindow"
