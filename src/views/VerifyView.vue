@@ -142,7 +142,7 @@ const handleOnChange = () => {
           <div class="d-flex justify-content-center mb-4">
             <v-otp-input
               ref="otpInput"
-              input-classes="otp-input form-control text-center mx-1 fs-4 fw-bold"
+              input-classes="otp-input form-control text-center mx-1 fw-bold"
               separator=""
               :num-inputs="6"
               :should-auto-focus="true"
@@ -193,7 +193,8 @@ const handleOnChange = () => {
 </template>
 
 <style scoped>
-.otp-input {
+:deep(.otp-input) {
+  box-sizing: border-box;
   width: 50px;
   height: 60px;
   padding: 0;
@@ -207,8 +208,20 @@ const handleOnChange = () => {
   background-color: #fff;
   transition: all 0.2s ease;
 }
+
+/* 6 boxes at desktop size (50px + 8px margin each) overflow narrow phone
+   screens, pushing/clipping later digits out of view. Shrink to fit. */
+@media (max-width: 575.98px) {
+  :deep(.otp-input) {
+    width: 32px;
+    height: 44px;
+    margin: 0 2px;
+    font-size: 1.1rem;
+    line-height: 44px;
+  }
+}
 /* Focus style handled by bootstrap form-control mostly, but we can enhance */
-.otp-input:focus {
+:deep(.otp-input:focus) {
   border-color: var(--bs-primary);
   box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.08);
   transform: translateY(-2px);
