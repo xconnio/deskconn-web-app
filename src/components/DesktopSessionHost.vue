@@ -3,15 +3,15 @@ import { ref, onMounted, onUnmounted, computed, watch, nextTick, markRaw, type C
 import { type Session } from 'xconn'
 import type { FileEntry } from '@/types'
 import { requestMachinesPicker } from '@/router/index'
-import type { AppWindow } from '@/composables/useWindowManager'
+import type { AppWindow, CloseableWindowInstance } from '@/composables/useWindowManager'
 
 import { useMachinesStore } from '@/stores/machines'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useDesktopSessionsStore } from '@/stores/desktopSessions'
-import { useMachinesOverviewStore, PREVIEW_WIDTH, PREVIEW_HEIGHT } from '@/stores/machinesOverview'
-import { useWindowsOverviewStore, WINDOW_PREVIEW_WIDTH, WINDOW_PREVIEW_HEIGHT } from '@/stores/windowsOverview'
+import { useMachinesOverviewStore } from '@/stores/machinesOverview'
+import { useWindowsOverviewStore } from '@/stores/windowsOverview'
 import EmbeddedDesktopFiles from '@/components/EmbeddedDesktopFiles.vue'
 import EmbeddedIndexedFiles from '@/components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
@@ -43,7 +43,8 @@ const {
   windows,
   focusedId,
   openWindow,
-  closeWindow,
+  closeWindowSafely,
+  registerWindowInstance,
   closeAll,
   focusWindow,
   minimizeWindow,
@@ -86,10 +87,42 @@ function captureContainerSize() {
 
 const previewTarget = computed(() => machinesOverviewStore.previewTargets[props.realm])
 
+// The slot's own rendered size (not a fixed constant) — it's a grid cell in
+// MachinesOverview and varies with column count/viewport, e.g. 2-up on mobile.
+const previewTargetSize = ref<{ width: number; height: number } | null>(null)
+let previewTargetResizeObserver: ResizeObserver | null = null
+
+watch(
+  previewTarget,
+  (el) => {
+    previewTargetResizeObserver?.disconnect()
+    previewTargetResizeObserver = null
+    previewTargetSize.value = null
+    if (!el || typeof ResizeObserver === 'undefined') return
+    previewTargetResizeObserver = new ResizeObserver(([entry]) => {
+      const { width, height } = entry!.contentRect
+      if (width && height) previewTargetSize.value = { width, height }
+    })
+    previewTargetResizeObserver.observe(el)
+  },
+  { immediate: true },
+)
+
+// Uniform (not stretched) scale, like object-fit:contain — a desktop whose
+// aspect ratio doesn't match the card's would otherwise get squashed. The
+// leftover space is centered via the translate offset below.
 const previewScale = computed(() => {
   const { width, height } = lastKnownSize.value
-  if (!previewTarget.value || !width || !height) return null
-  return { scaleX: PREVIEW_WIDTH / width, scaleY: PREVIEW_HEIGHT / height, width, height }
+  const target = previewTargetSize.value
+  if (!target || !width || !height) return null
+  const scale = Math.min(target.width / width, target.height / height)
+  return {
+    scale,
+    offsetX: (target.width - width * scale) / 2,
+    offsetY: (target.height - height * scale) / 2,
+    width,
+    height,
+  }
 })
 
 const launcherBodyStyle = computed(() => {
@@ -105,7 +138,7 @@ const launcherBodyStyle = computed(() => {
     left: '0',
     width: `${scale.width}px`,
     height: `${scale.height}px`,
-    transform: `scale(${scale.scaleX}, ${scale.scaleY})`,
+    transform: `translate(${scale.offsetX}px, ${scale.offsetY}px) scale(${scale.scale})`,
     transformOrigin: 'top left',
     pointerEvents: 'none',
   }
@@ -113,23 +146,75 @@ const launcherBodyStyle = computed(() => {
 
 // Same scale-in-place technique as the machine-level preview above, but per
 // window — the teleported content keeps its real pixel size (so nothing
-// reflows) and is just visually shrunk to fit AppDock's overview tile.
+// reflows) and is just visually shrunk to fit AppDock's overview tile. The
+// tile's own rendered size is observed rather than assumed, same reasoning
+// as previewTargetSize above.
 function windowPreviewTarget(windowId: string): HTMLElement | undefined {
   return windowsOverviewStore.previewTargets[windowId]
 }
 
+const windowPreviewSizes = ref<Record<string, { width: number; height: number }>>({})
+const windowPreviewObservers = new Map<string, ResizeObserver>()
+
+function observeWindowPreviewTarget(windowId: string, el: HTMLElement | null) {
+  windowPreviewObservers.get(windowId)?.disconnect()
+  windowPreviewObservers.delete(windowId)
+
+  if (el && typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry!.contentRect
+      if (width && height) {
+        windowPreviewSizes.value = { ...windowPreviewSizes.value, [windowId]: { width, height } }
+      }
+    })
+    observer.observe(el)
+    windowPreviewObservers.set(windowId, observer)
+  } else if (windowId in windowPreviewSizes.value) {
+    const next = { ...windowPreviewSizes.value }
+    delete next[windowId]
+    windowPreviewSizes.value = next
+  }
+}
+
 function windowPreviewStyle(win: AppWindow): Record<string, string> {
+  const target = windowPreviewSizes.value[win.id]
+  if (!target) return { display: 'contents' }
+  // Uniform scale (object-fit:contain, not stretch) — a square-ish app
+  // window shouldn't get squashed to fill a wide/short card; it's centered
+  // in the leftover space instead, same as the machine preview above.
+  const scale = Math.min(target.width / win.width, target.height / win.height)
+  const offsetX = (target.width - win.width * scale) / 2
+  const offsetY = (target.height - win.height * scale) / 2
   return {
     position: 'absolute',
     top: '0',
     left: '0',
     width: `${win.width}px`,
     height: `${win.height}px`,
-    transform: `scale(${WINDOW_PREVIEW_WIDTH / win.width}, ${WINDOW_PREVIEW_HEIGHT / win.height})`,
+    transform: `translate(${offsetX}px, ${offsetY}px) scale(${scale})`,
     transformOrigin: 'top left',
     pointerEvents: 'none',
   }
 }
+
+// AppDock (not this component) owns registering/unregistering each open
+// window's overview-tile slot into the store as its grid re-renders — this
+// just reacts by (dis)connecting a ResizeObserver for whichever of *this*
+// realm's windows currently have one.
+watch(
+  () => windowsOverviewStore.previewTargets,
+  (targets) => {
+    const ids = new Set(windows.value.map((w) => w.id))
+    for (const id of [...windowPreviewObservers.keys()]) {
+      if (!ids.has(id) || !targets[id]) observeWindowPreviewTarget(id, null)
+    }
+    for (const id of ids) {
+      const el = targets[id]
+      if (el) observeWindowPreviewTarget(id, el)
+    }
+  },
+  { immediate: true },
+)
 
 function applyWallpaperUrl(url: string | null) {
   if (activeWallpaperObjUrl && activeWallpaperObjUrl !== url) URL.revokeObjectURL(activeWallpaperObjUrl)
@@ -533,24 +618,13 @@ function onOpenFiles(path: string) {
   launchApp(filesApp, path)
 }
 
-// Some embedded apps (Terminal) need an async say over whether the window
-// may actually close — e.g. warning before killing a running process — which
-// a synchronous `dirty` flag can't express. They opt in via defineExpose.
-interface CloseableWindowInstance {
-  requestClose?: () => Promise<boolean>
-}
-const windowInstances = new Map<string, CloseableWindowInstance>()
+// registerWindowInstance lives on the window manager (not here) so the Open
+// Windows page can also close a window safely, without bypassing whatever
+// confirmation its live component (e.g. Terminal) wants to run first.
 function windowRef(id: string) {
   return (instance: unknown) => {
-    if (instance) windowInstances.set(id, instance as CloseableWindowInstance)
-    else windowInstances.delete(id)
+    registerWindowInstance(id, instance as CloseableWindowInstance | null)
   }
-}
-
-async function onCloseWindow(id: string) {
-  const canClose = await windowInstances.get(id)?.requestClose?.()
-  if (canClose === false) return
-  closeWindow(id)
 }
 
 const dockThickness = ref(0)
@@ -655,6 +729,9 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', updateIsMobile)
   launcherBodyResizeObserver?.disconnect()
+  previewTargetResizeObserver?.disconnect()
+  for (const observer of windowPreviewObservers.values()) observer.disconnect()
+  windowPreviewObservers.clear()
   if (activeWallpaperObjUrl) URL.revokeObjectURL(activeWallpaperObjUrl)
 })
 </script>
@@ -691,7 +768,7 @@ onUnmounted(() => {
           :inset-left="insetLeft"
           :inset-right="insetRight"
           :inset-bottom="insetBottom"
-          @close="onCloseWindow(win.id)"
+          @close="closeWindowSafely(win.id)"
           @focus="focusWindow(win.id)"
           @minimize="minimizeWindow(win.id)"
           @toggle-maximize="onToggleMaximize(win.id)"
@@ -701,12 +778,12 @@ onUnmounted(() => {
                .fwin-body's flex layout entirely, so it's a no-op box until
                the overview actually teleports it (see windowPreviewStyle). -->
           <Teleport :to="windowPreviewTarget(win.id)" :disabled="!windowPreviewTarget(win.id)">
-            <div :style="windowPreviewTarget(win.id) ? windowPreviewStyle(win) : { display: 'contents' }">
+            <div :style="windowPreviewStyle(win)">
               <component
                 :is="appComponents[win.appId]"
                 :ref="windowRef(win.id)"
                 v-bind="windowProps(win)"
-                @close="onCloseWindow(win.id)"
+                @close="closeWindowSafely(win.id)"
                 @open-files="onOpenFiles"
                 @preview-file="onPreviewFile"
                 @open-text-editor="onOpenTextEditor"
@@ -729,7 +806,7 @@ onUnmounted(() => {
         :mobile="isMobile"
         @launch="handleLaunch"
         @activate="onActivateWindow"
-        @close="onCloseWindow"
+        @close="closeWindowSafely"
       />
     </div>
     </Teleport>

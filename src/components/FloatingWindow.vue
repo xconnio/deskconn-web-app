@@ -592,8 +592,15 @@ function startResize(e: PointerEvent, dir: string) {
   border-color: #242424;
 }
 
+/* absolute, not fixed — fixed positions against the real browser viewport
+   regardless of ancestors, which breaks when this window's whole desktop
+   gets teleported into a tiny live-preview card (e.g. a Machines overview
+   thumbnail): the window would ignore that and cover the entire screen
+   instead of shrinking into the card. absolute+inset:0 fills the same
+   .windows-layer box in the normal (non-preview) case, so it looks identical
+   there, but stays correctly confined/clipped when teleported. */
 .floating-window.is-mobile {
-  position: fixed;
+  position: absolute;
   inset: 0;
   width: 100% !important;
   height: 100% !important;

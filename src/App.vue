@@ -40,12 +40,15 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
 const isDesktopView = computed(() => route.name === 'desktop-launcher')
 const hasDarkBackground = computed(() => isDesktopView.value || route.name === 'home')
 
-// Hidden on the machines overview whenever its own close button is showing
-// (reached from an open session) — the two sit in the same corner.
+// Hidden wherever an OverviewGrid page (Machines, Open Windows) is already
+// showing its own close/back button — the two would sit in the same corner.
+// Machines only has one when reached from an open session; Open Windows
+// always does.
 const showAccountBtn = computed(
   () =>
     authStore.isAuthenticated &&
     !isDesktopView.value &&
+    route.name !== 'desktop-windows' &&
     !(route.name === 'home' && machinesOverviewReturnRealm.value),
 )
 

@@ -31,3 +31,7 @@ export function openIndexedFiles(realm: string, category: string, desktopName?: 
     query: desktopName ? { name: desktopName } : {},
   })
 }
+
+export function openWindowsOverview(realm: string) {
+  router.push({ name: 'desktop-windows', params: { realm } })
+}

@@ -1,11 +1,6 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 
-// Size of the tile a window's live content is scaled down to fit — matches
-// .windows-overview-preview in AppDock.vue.
-export const WINDOW_PREVIEW_WIDTH = 200
-export const WINDOW_PREVIEW_HEIGHT = 125
-
 // Per-window-id slot the owning FloatingWindow's live content teleports
 // into while AppDock's "show all windows" overview is open.
 export const useWindowsOverviewStore = defineStore('windowsOverview', () => {
