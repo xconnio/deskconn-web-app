@@ -61,6 +61,12 @@ const router = createRouter({
       component: () => import('../views/IndexedFilesView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/app/machine/:realm/windows',
+      name: 'desktop-windows',
+      component: () => import('../views/WindowsOverviewView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

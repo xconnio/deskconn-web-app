@@ -1,11 +1,6 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 
-// Size of the card slot the live desktop preview is scaled down to fit —
-// matches .machines-card-preview in MachinesOverview.vue.
-export const PREVIEW_WIDTH = 240
-export const PREVIEW_HEIGHT = 150
-
 export const useMachinesOverviewStore = defineStore('machinesOverview', () => {
   // Per-realm slot a live DesktopSessionHost teleports its desktop into —
   // only populated while the Machines page (MachinesOverview.vue) is mounted.

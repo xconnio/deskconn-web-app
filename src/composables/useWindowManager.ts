@@ -66,6 +66,13 @@ interface HomeBounds {
   container: ContainerRect
 }
 
+/** Some embedded apps (Terminal) need an async say over whether their window
+ * may actually close — e.g. warning before killing a running process — which
+ * a synchronous `dirty` flag can't express. They opt in via defineExpose. */
+export interface CloseableWindowInstance {
+  requestClose?: () => Promise<boolean>
+}
+
 export function useWindowManager() {
   const windows = ref<AppWindow[]>([])
   const focusedId = ref<string | null>(null)
@@ -73,6 +80,10 @@ export function useWindowManager() {
   let nextId = 1
   let cascadeIndex = 0
   const homeById = new Map<string, HomeBounds>()
+  // Registered by whoever renders the window's live content (DesktopSessionHost)
+  // — consulted by closeWindowSafely so any view (the desktop itself, or the
+  // Open Windows page) can close a window without bypassing its confirmation.
+  const instances = new Map<string, CloseableWindowInstance>()
   // Last container any call here was told about — updateBounds (a plain drag/
   // resize) isn't given one, so it reuses whatever was seen most recently.
   let lastContainer: ContainerRect | null = null
@@ -150,12 +161,25 @@ export function useWindowManager() {
   function closeWindow(id: string) {
     windows.value = windows.value.filter((w) => w.id !== id)
     homeById.delete(id)
+    instances.delete(id)
     if (focusedId.value === id) refocusTopWindow()
+  }
+
+  function registerWindowInstance(id: string, instance: CloseableWindowInstance | null) {
+    if (instance) instances.set(id, instance)
+    else instances.delete(id)
+  }
+
+  async function closeWindowSafely(id: string) {
+    const canClose = await instances.get(id)?.requestClose?.()
+    if (canClose === false) return
+    closeWindow(id)
   }
 
   function closeAll() {
     windows.value = []
     homeById.clear()
+    instances.clear()
     focusedId.value = null
   }
 
@@ -257,6 +281,8 @@ export function useWindowManager() {
     focusedId,
     openWindow,
     closeWindow,
+    closeWindowSafely,
+    registerWindowInstance,
     closeAll,
     focusWindow,
     minimizeWindow,
