@@ -475,7 +475,7 @@ function startResize(e: PointerEvent, dir: string) {
     class="floating-window"
     :class="{ 'is-mobile': mobile, 'is-focused': focused, 'is-minimized': minimized, 'is-maximized': maximized, 'is-dark-titlebar': darkTitlebar, 'is-interacting': interacting, 'is-fullscreen': isFullscreen }"
     :inert="minimized"
-    :style="mobile ? { zIndex } : {
+    :style="mobile ? { zIndex, bottom: `${insetBottom ?? 0}px` } : {
       left: x + 'px',
       top: y + 'px',
       width: width + 'px',
@@ -601,9 +601,10 @@ function startResize(e: PointerEvent, dir: string) {
    there, but stays correctly confined/clipped when teleported. */
 .floating-window.is-mobile {
   position: absolute;
+  /* bottom is overridden inline with the dock's height, so content docked
+     to this window's own bottom edge (e.g. Terminal's mobile key row) isn't
+     covered by AppDock's nav drawing on top of it. */
   inset: 0;
-  width: 100% !important;
-  height: 100% !important;
   border: none;
 }
 
