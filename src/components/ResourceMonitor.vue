@@ -394,6 +394,7 @@ function handleKill() {
           :key="s.id"
           class="rm-nav-item"
           :class="{ 'rm-nav-item--active': activeSection === s.id }"
+          :aria-label="s.label"
           @click="selectSection(s.id)"
         >
           <span class="rm-nav-row">
@@ -1150,6 +1151,67 @@ function handleKill() {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/* Mobile: the 152px side rail leaves barely any room for content on a phone
+   width, and the 5-column process grid doesn't fit at all — rail becomes a
+   horizontal tab strip (sparkline previews dropped, each section's own graph
+   already shows that), and the process row drops its least essential column. */
+@media (max-width: 575.98px) {
+  .resource-monitor {
+    flex-direction: column;
+  }
+
+  .rm-sidebar {
+    width: auto;
+    flex-direction: row;
+    border-right: none;
+    border-bottom: 1px solid #e2e8f0;
+  }
+
+  /* Evenly-filled single row of tabs — sparkline previews dropped (each
+     section's own graph already shows that) to keep every tab's label
+     readable without needing to scroll to see the rest. */
+  .rm-nav-item {
+    flex: 1;
+    align-items: center;
+    padding: 0.45rem 0.2rem;
+  }
+
+  /* Icon above, label below — row's default is side-by-side. */
+  .rm-nav-row {
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .rm-nav-spark {
+    display: none;
+  }
+
+  .rm-nav-label {
+    font-size: 0.65rem;
+  }
+
+  .rm-nav-row .bi {
+    font-size: 1.05rem;
+  }
+
+  .rm-list-row {
+    padding: 0.55rem 0.4rem;
+  }
+
+  .rm-app-row {
+    grid-template-columns: 1fr 66px 66px;
+  }
+
+  .rm-proc-row {
+    grid-template-columns: 1fr 55px 70px 55px;
+  }
+
+  /* Drop the User column — Process/Memory/CPU matter more at this width. */
+  .rm-proc-row > *:nth-child(3) {
+    display: none;
+  }
 }
 
 /* ── Context menu ── */
