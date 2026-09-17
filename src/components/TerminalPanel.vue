@@ -3,23 +3,13 @@ import { ref, shallowRef, onMounted, onUnmounted, computed, inject, nextTick, wa
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { Progress, Result, Session } from 'xconn'
+import { Session } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
 import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import TabStrip from '@/components/TabStrip.vue'
-import {
-  createX25519KeyPair,
-  deriveSessionKeys,
-  encryptPayload,
-  decryptPayload,
-} from '@/utils/encryption'
-import {
-  BACKEND_UPDATE_MESSAGE,
-  DESKTOP_OFFLINE_MESSAGE,
-  isDataChannelClosedError,
-  isNoSuchProcedureException,
-} from '@/utils/desktopError'
+import { openShell, type ShellHandle } from '@/services/shellStream'
+import { isDataChannelClosedError, formatDesktopError } from '@/utils/desktopError'
 
 const props = defineProps<{ realm: string; desktopName: string; embedded?: boolean; focused?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -34,26 +24,6 @@ const panelRef = ref<HTMLDivElement | null>(null)
 const keybarRef = ref<HTMLDivElement | null>(null)
 
 const enc = new TextEncoder()
-const dec = new TextDecoder()
-
-class ProgressChannel {
-  private queue: Progress[] = []
-  private waiting: ((p: Progress) => void) | null = null
-
-  push(p: Progress) {
-    if (this.waiting) {
-      this.waiting(p)
-      this.waiting = null
-    } else {
-      this.queue.push(p)
-    }
-  }
-
-  async next(): Promise<Progress> {
-    if (this.queue.length > 0) return this.queue.shift()!
-    return new Promise((resolve) => { this.waiting = resolve })
-  }
-}
 
 interface TabState {
   id: number
@@ -63,15 +33,8 @@ interface TabState {
   term: Terminal | null
   fitAddon: FitAddon | null
   session: Session | null
-  channel: ProgressChannel | null
+  conn: ShellHandle | null
   closed: boolean
-  encKeys: { encryptKey: Uint8Array; decryptKey: Uint8Array } | null
-  encryptionMode: 'pending' | 'enabled' | 'disabled'
-  clientPrivateKey: Uint8Array | null
-  clientPublicKey: Uint8Array | null
-  pendingInputs: Uint8Array[]
-  isFirstSizeSent: boolean
-  prevShellId: string | null
 }
 
 const tabs = shallowRef<TabState[]>([])
@@ -102,7 +65,7 @@ const terminalPanelStyle = computed(() =>
     : undefined,
 )
 
-function createTabState(prevShellId: string | null): TabState {
+function createTabState(): TabState {
   const used = new Set(tabs.value.map(t => t.num))
   let n = 1
   while (used.has(n)) n++
@@ -114,15 +77,8 @@ function createTabState(prevShellId: string | null): TabState {
     term: null,
     fitAddon: null,
     session: null,
-    channel: null,
+    conn: null,
     closed: false,
-    encKeys: null,
-    encryptionMode: 'pending',
-    clientPrivateKey: null,
-    clientPublicKey: null,
-    pendingInputs: [],
-    isFirstSizeSent: false,
-    prevShellId,
   }
 }
 
@@ -134,52 +90,9 @@ function registerTermEl(id: number, el: unknown) {
   }
 }
 
-// The server only echoes a shell ID for the 2nd+ shell; the 1st shell's ID is the session ID.
-function effectiveShellId(tab: TabState): string | null {
-  if (tab.shellId) return tab.shellId
-  const sessionID = tab.session?.details.sessionID
-  return sessionID !== undefined ? String(sessionID) : null
-}
-
-function pushEncrypted(tab: TabState, bytes: Uint8Array) {
-  if (!tab.channel) return
-  const encrypted = tab.encKeys ? encryptPayload(bytes, tab.encKeys.encryptKey) : bytes
-  // Non-first shells must prefix every frame with "<shellId>:" so the server can route it.
-  let payload: Uint8Array
-  if (tab.shellId) {
-    const prefix = enc.encode(tab.shellId + ':')
-    payload = new Uint8Array(prefix.length + encrypted.length)
-    payload.set(prefix)
-    payload.set(encrypted, prefix.length)
-  } else {
-    payload = encrypted
-  }
-  tab.channel.push(new Progress([payload], {}, { progress: true }))
-}
-
 function sendSize(tab: TabState) {
-  if (!tab.term || !tab.channel) return
-  const { cols, rows } = tab.term
-  const sizeStr = `SIZE:${cols}:${rows}`
-
-  if (!tab.isFirstSizeSent) {
-    tab.isFirstSizeSent = true
-    const sizeBytes = enc.encode(sizeStr)
-    const keyMarker = enc.encode(':KEY:')
-    const first = new Uint8Array(sizeBytes.length + keyMarker.length + tab.clientPublicKey!.length)
-    first.set(sizeBytes, 0)
-    first.set(keyMarker, sizeBytes.length)
-    first.set(tab.clientPublicKey!, sizeBytes.length + keyMarker.length)
-    const kwargs = tab.prevShellId ? { 'prev-shell': tab.prevShellId } : {}
-    tab.channel.push(new Progress([first], kwargs, { progress: true }))
-    return
-  }
-
-  if (tab.encryptionMode === 'enabled') {
-    pushEncrypted(tab, enc.encode(sizeStr))
-  } else if (tab.encryptionMode === 'disabled') {
-    tab.channel.push(new Progress([sizeStr], {}, { progress: true }))
-  }
+  if (!tab.term || !tab.conn) return
+  tab.conn.resize(tab.term.cols, tab.term.rows)
 }
 
 function handleResizeTab(tab: TabState) {
@@ -194,7 +107,7 @@ const handleResize = () => {
 }
 
 function handleTerminalInput(tab: TabState, data: string) {
-  if (tab.closed || !tab.channel) return
+  if (tab.closed || !tab.conn) return
 
   let input = data
   if (ctrlActive.value && data.length === 1) {
@@ -203,134 +116,38 @@ function handleTerminalInput(tab: TabState, data: string) {
     ctrlActive.value = false
   }
 
-  const bytes = enc.encode(input)
-  if (tab.encryptionMode === 'pending') {
-    tab.pendingInputs.push(bytes)
-    return
-  }
-  if (tab.encryptionMode === 'enabled') {
-    pushEncrypted(tab, bytes)
-  } else {
-    tab.channel.push(new Progress([input], {}, { progress: true }))
-  }
-}
-
-function flushPendingInputs(tab: TabState) {
-  for (const bytes of tab.pendingInputs) {
-    if (tab.encryptionMode === 'enabled') {
-      pushEncrypted(tab, bytes)
-    } else {
-      tab.channel?.push(new Progress([dec.decode(bytes)], {}, { progress: true }))
-    }
-  }
-  tab.pendingInputs = []
-}
-
-function resetEncryptionState(tab: TabState) {
-  tab.encKeys = null
-  tab.encryptionMode = 'pending'
-  tab.shellId = ''
-  tab.clientPrivateKey = null
-  tab.clientPublicKey = null
-  tab.pendingInputs = []
-  tab.isFirstSizeSent = false
+  tab.conn.send(enc.encode(input))
 }
 
 function cleanupTab(tab: TabState) {
   if (tab.closed) return
   // Interrupt any foreground process (top, a stuck command, ...) so it exits
-  // promptly on the pty hangup below, instead of leaving the server's output
-  // reader blocked against it until the process notices on its own.
-  handleTerminalInput(tab, '\x03')
+  // promptly on the pty hangup below, instead of leaving it running until
+  // the process notices on its own.
+  tab.conn?.send(enc.encode('\x03'))
   tab.closed = true
   tab.term?.dispose()
-  // Non-progress frame unblocks the sender; without it the call lingers on the cached session.
-  // Pass the shell ID so the server routes cleanup to the correct PTY (not the caller-default).
-  tab.channel?.push(new Progress(tab.shellId ? [tab.shellId] : [], {}, {}))
-  tab.channel = null
+  tab.conn?.close()
+  tab.conn = null
   tab.session = null
 }
 
 async function startShell(tab: TabState) {
-  if (!tab.session || !tab.channel) return
-
-  let firstServerMessage = true
-  const pendingOutput: Uint8Array[] = []
+  if (!tab.session || !tab.term) return
 
   try {
-    await tab.session.callProgressiveProgress(
-      'io.xconn.deskconn.deskconnd.shell',
-      async () => tab.channel!.next(),
-      async (progressResult: Result) => {
-        if (tab.closed) return
-        const args = progressResult.args
-        if (!args || args.length === 0) {
-          closeTab(tab.id)
-          return
-        }
-
-        const raw = args[0]
-        const data: Uint8Array =
-          raw instanceof Uint8Array ? raw : enc.encode(typeof raw === 'string' ? raw : String(raw))
-
-        if (firstServerMessage) {
-          firstServerMessage = false
-          const keyPrefix = enc.encode('KEY:')
-          const startsWithKey =
-            data.length > keyPrefix.length &&
-            data.slice(0, keyPrefix.length).every((b, i) => b === keyPrefix[i])
-
-          if (startsWithKey) {
-            // X25519 public key is always 32 bytes. For non-first shells the server
-            // appends the assigned shell ID after the key; capture it so we can
-            // prefix every outgoing frame with "<shellId>:" for server-side routing.
-            const afterKey = data.slice(keyPrefix.length)
-            const serverPublicKey = afterKey.slice(0, 32)
-            if (afterKey.length > 32) {
-              tab.shellId = dec.decode(afterKey.slice(32))
-            }
-            // deriveSessionKeys is async — frames that arrive during this await are
-            // buffered in pendingOutput and flushed below once keys are ready.
-            tab.encKeys = await deriveSessionKeys(tab.clientPrivateKey!, serverPublicKey)
-            tab.encryptionMode = 'enabled'
-            for (const buffered of pendingOutput) {
-              tab.term?.write(decryptPayload(buffered, tab.encKeys.decryptKey))
-            }
-            pendingOutput.length = 0
-          } else {
-            tab.encryptionMode = 'disabled'
-            tab.term?.write(data)
-            for (const buffered of pendingOutput) tab.term?.write(buffered)
-            pendingOutput.length = 0
-          }
-
-          flushPendingInputs(tab)
-          return
-        }
-
-        // Key derivation still in progress — buffer until encryption mode is known.
-        if (tab.encryptionMode === 'pending') {
-          pendingOutput.push(data)
-          return
-        }
-
-        if (tab.encryptionMode === 'enabled' && tab.encKeys) {
-          tab.term?.write(decryptPayload(data, tab.encKeys.decryptKey))
-        } else {
-          tab.term?.write(data)
-        }
-      },
+    const conn = await openShell(
+      tab.session, props.realm, tab.term.cols, tab.term.rows,
+      (bytes) => { if (!tab.closed) tab.term?.write(bytes) },
+      () => { if (!tab.closed) closeTab(tab.id) },
     )
+    if (tab.closed) { conn.close(); return }
+    tab.conn = conn
+    tab.shellId = conn.shellId
   } catch (err) {
     if (tab.closed) return
-    if (isNoSuchProcedureException(err)) {
-      tab.term?.write(BACKEND_UPDATE_MESSAGE)
-    } else if (isDataChannelClosedError(err)) {
-      tab.term?.write(DESKTOP_OFFLINE_MESSAGE)
-      sessionCacheStore.reportUnreachable(props.realm)
-    } else {
-      tab.term?.write(`Shell error: ${err}`)
-    }
+    if (isDataChannelClosedError(err)) sessionCacheStore.reportUnreachable(props.realm)
+    tab.term.write(formatDesktopError(err, `Shell error: ${err}`))
   }
 }
 
@@ -365,25 +182,18 @@ async function initTab(tab: TabState) {
     return
   }
 
-  resetEncryptionState(tab)
-  const kp = createX25519KeyPair()
-  tab.clientPrivateKey = kp.privateKey
-  tab.clientPublicKey = kp.publicKey
-
-  tab.channel = new ProgressChannel()
   tab.term.onData((data) => handleTerminalInput(tab, data))
   tab.term.onTitleChange((title) => {
     if (tab.closed || !title) return
     tab.label = title
     tabs.value = [...tabs.value]
   })
-  handleResizeTab(tab)
 
   await startShell(tab)
 }
 
 async function addTab() {
-  const tab = createTabState(activeTab.value ? effectiveShellId(activeTab.value) : null)
+  const tab = createTabState()
   tabs.value = [...tabs.value, tab]
   activeTabId.value = tab.id
   // initTab needs the new tab's .terminal-mount div (v-for'd below) to
@@ -423,10 +233,9 @@ function closeTab(id: number) {
 // Mirrors GNOME Terminal: only warn when something other than the shell
 // itself owns the pty's foreground (a running command, an ssh session, ...).
 async function isTabBusy(tab: TabState): Promise<boolean> {
-  const shellId = effectiveShellId(tab)
-  if (!tab.session || !shellId) return false
+  if (!tab.session || !tab.shellId) return false
   try {
-    const result = await tab.session.call('io.xconn.deskconn.deskconnd.shell.isbusy', [shellId])
+    const result = await tab.session.call('io.xconn.deskconn.deskconnd.shell.isbusy', [tab.shellId])
     return Boolean(result.args?.[0])
   } catch (err) {
     // Fails open (no warning) rather than blocking the close — but log it,

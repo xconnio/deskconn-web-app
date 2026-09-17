@@ -1,23 +1,17 @@
 // Client side of deskconn's stream-based file-transfer protocol: a transfer
-// opens a raw WebRTC data channel (direct P2P) or WebTransport stream
-// (relay, via deskconn-router — bridged straight through to the same
-// device-side handler) on the caller's single existing connection. It does
-// its own per-stream X25519 key exchange first, then an encrypted control
-// message tells the backend what to do ('read' for downloads/range
-// requests, 'init' + 'write' for uploads), followed by raw encrypted byte
-// chunks. See deskconn's filestreamencryption.go/filetransferp2p.go (P2P)
-// and quictransfer.go (relay) for the server side of this protocol.
+// opens a raw WebRTC data channel (P2P) or WebTransport stream (relay) on
+// the caller's single existing connection, does a per-stream X25519 key
+// exchange, then an encrypted control message says what to do ('read' /
+// 'init' + 'write') followed by raw encrypted byte chunks (see
+// filestreamencryption.go/filetransferp2p.go and quictransfer.go).
 //
-// Both directions split anything over PARALLEL_CHUNK_SIZE into that many
-// byte ranges and fetch/send them over up to PARALLEL_WORKERS channels/
-// streams in parallel, mirroring the CLI's parallel chunk workers
-// (filetransfer.go's parallelChunkSize/parallelStreamWorkers). Uploads don't
-// care what order chunks land in — the server writes each one at its own
-// offset — but downloads reassemble the (possibly out-of-order) pieces back
-// into one ordered byte stream (see ChunkReassembler). A range that fits in
-// a single chunk skips all of that and goes through a plain single-channel/
-// single-stream path instead (p2pReadRange/webTransportReadRange) — the
-// common case (previews, small files) never carries the added complexity.
+// Anything over PARALLEL_CHUNK_SIZE is split into that many byte ranges and
+// fetched/sent over up to PARALLEL_WORKERS channels/streams in parallel
+// (mirroring the CLI); downloads reassemble the out-of-order pieces back
+// into one ordered stream (ChunkReassembler), uploads don't need to since
+// the server writes each chunk at its own offset. Anything smaller skips
+// all of that for a plain single-channel/single-stream path instead
+// (p2pReadRange/webTransportReadRange).
 import { getWebRTCSession } from './rtcRegistry'
 import type { WampSession } from './wamp'
 import { baseName } from '@/utils/filePath'
@@ -370,7 +364,10 @@ const P2P_MESSAGE_SIZE = 16 * 1024
 const P2P_MAX_BUFFERED = 512 * 1024
 const P2P_LOW_BUFFERED = 256 * 1024
 
-function p2pEnvelope(kind: number, plaintext: Uint8Array, key: Uint8Array): Uint8Array<ArrayBuffer> {
+// Exported: also used by shellStream.ts, which sends the same kind-byte
+// envelope shape over both a P2P data channel and (unlike file transfer,
+// which never needs it — see the header comment) a WebTransport stream too.
+export function p2pEnvelope(kind: number, plaintext: Uint8Array, key: Uint8Array): Uint8Array<ArrayBuffer> {
   const ciphertext = encryptPayload(plaintext, key)
   const envelope = new Uint8Array(1 + ciphertext.length)
   envelope[0] = kind
@@ -378,17 +375,23 @@ function p2pEnvelope(kind: number, plaintext: Uint8Array, key: Uint8Array): Uint
   return envelope
 }
 
-function p2pDecryptEnvelope(data: ArrayBuffer, key: Uint8Array): { kind: number; plaintext: Uint8Array } {
+export function p2pDecryptEnvelope(data: ArrayBuffer, key: Uint8Array): { kind: number; plaintext: Uint8Array } {
   const bytes = new Uint8Array(data)
   const kind = bytes[0]
   if (kind === undefined) throw new Error('empty message')
   return { kind, plaintext: decryptPayload(bytes.slice(1), key) }
 }
 
-async function openP2PChannel(session: WampSession, signal?: AbortSignal): Promise<RTCDataChannel> {
+// label defaults to the file-stream channel label so existing callers are
+// unaffected; shellStream.ts passes shellChannelLabel ("shell") instead —
+// the server classifies a P2P shell channel by label rather than by its
+// first message's content (see HandleAuxDataChannel in iptunnel.go).
+export async function openP2PChannel(
+  session: WampSession, signal?: AbortSignal, label: string = CHANNEL_LABEL,
+): Promise<RTCDataChannel> {
   const webrtc = getWebRTCSession(session)
   if (!webrtc) throw new NoDirectConnectionError()
-  const channel = await webrtc.openDataChannel(CHANNEL_LABEL)
+  const channel = await webrtc.openDataChannel(label)
   if (signal?.aborted) {
     channel.close()
     throw new Error('cancelled')
@@ -403,7 +406,7 @@ async function openP2PChannel(session: WampSession, signal?: AbortSignal): Promi
 // if the channel closes/errors mid-handshake — the caller is expected to
 // have already wired its own abort signal to close the channel, so this is
 // what turns that close into a real rejection instead of a silent stall.
-async function p2pKeyExchange(channel: RTCDataChannel): Promise<EncryptionKeys> {
+export async function p2pKeyExchange(channel: RTCDataChannel): Promise<EncryptionKeys> {
   const { publicKey, privateKey } = createX25519KeyPair()
 
   const serverPublicKey = await new Promise<Uint8Array>((resolve, reject) => {
@@ -714,7 +717,8 @@ async function openP2PWriteWorker(
 
 // Buffers reads from a WebTransport stream so exact-length frames can be
 // pulled out regardless of how the underlying reads happen to chunk.
-class FrameReader {
+// Exported: also used by shellStream.ts.
+export class FrameReader {
   private buffer = new Uint8Array(0)
   constructor(private reader: ReadableStreamDefaultReader<Uint8Array>) {}
 
@@ -753,9 +757,9 @@ function encodeFrame(data: Uint8Array): Uint8Array {
   return framed
 }
 
-type ByteWriter = WritableStreamDefaultWriter<Uint8Array>
+export type ByteWriter = WritableStreamDefaultWriter<Uint8Array>
 
-async function writeFrame(writer: ByteWriter, data: Uint8Array): Promise<void> {
+export async function writeFrame(writer: ByteWriter, data: Uint8Array): Promise<void> {
   await writer.write(encodeFrame(data))
 }
 
@@ -790,7 +794,7 @@ async function webTransportKeyExchange(writer: ByteWriter, reader: FrameReader):
   return deriveSessionKeys(privateKey, serverPublicKey)
 }
 
-interface WebTransportStream {
+export interface WebTransportStream {
   writer: ByteWriter
   reader: FrameReader
   raw: WebTransportBidirectionalStream
@@ -800,8 +804,10 @@ interface WebTransportStream {
 // signal, if given, is wired to abort the raw stream only for the duration
 // of this call (including the key exchange) — not the same as the caller's
 // own longer-lived listener for the rest of the worker's life, which it
-// still needs to register itself once this returns.
-async function openWebTransportStream(
+// still needs to register itself once this returns. Exported: also used by
+// shellStream.ts, with op="shell" and an empty path (see fsOpShell in
+// filetransfer.go — it doesn't carry an fsRequest, just routes the stream).
+export async function openWebTransportStream(
   session: WampSession,
   realm: string,
   op: string,
@@ -826,7 +832,7 @@ async function openWebTransportStream(
   }
 }
 
-function abortWebTransportStream(raw: WebTransportBidirectionalStream): void {
+export function abortWebTransportStream(raw: WebTransportBidirectionalStream): void {
   try { raw.writable.abort() } catch { /* ignore */ }
   try { raw.readable.cancel() } catch { /* ignore */ }
 }
