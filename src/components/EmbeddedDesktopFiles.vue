@@ -45,6 +45,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'preview-file': [session: Session, entry: FileEntry, entries: FileEntry[]]
   'open-text-editor': [session: Session, entry: FileEntry]
+  'open-app': [appId: string]
   // Not emitted by this component — declared so Vue treats the listeners
   // DesktopSessionHost.vue binds generically to every app window (@close,
   // @open-files, @update-title) as custom events rather than attrs it tries
@@ -53,6 +54,12 @@ const emit = defineEmits<{
   'open-files': [path: string]
   'update-title': [title: string]
 }>()
+
+const places = [
+  { id: 'documents', label: 'Documents', icon: 'bi-file-earmark-text' },
+  { id: 'pictures', label: 'Pictures', icon: 'bi-image' },
+  { id: 'videos', label: 'Videos', icon: 'bi-film' },
+]
 
 const sessionCacheStore = useSessionCacheStore()
 const sessionEncryptionStore = useSessionEncryptionStore()
@@ -1178,6 +1185,19 @@ onUnmounted(() => {
 
 <template>
   <div class="embedded-explorer">
+    <nav class="places-sidebar">
+      <button
+        class="place-btn"
+        :class="{ 'place-btn--active': breadcrumbSegments.length === 1 }"
+        :disabled="isConnecting || isLoading"
+        @click="loadPath()"
+      >
+        <i class="bi bi-house"></i>Home
+      </button>
+      <button v-for="p in places" :key="p.id" class="place-btn" @click="emit('open-app', p.id)">
+        <i class="bi" :class="p.icon"></i>{{ p.label }}
+      </button>
+    </nav>
     <div class="explorer-shell" ref="explorerShellRef" @scroll="handleScroll">
       <section class="toolbar-card" :class="{ 'toolbar-card--embedded': !!toolbarTarget }">
       <Teleport :to="toolbarTarget ?? 'body'" :disabled="!toolbarTarget">
@@ -1722,6 +1742,60 @@ onUnmounted(() => {
   height: 100%;
   overflow: hidden;
   position: relative;
+}
+
+.places-sidebar {
+  display: flex;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  padding: 0.5rem;
+  overflow-x: auto;
+  background: #f8fafc;
+  border-right: 1px solid #e2e8f0;
+}
+
+.place-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.7rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #334155;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.place-btn .bi {
+  font-size: 1.05rem;
+  color: #64748b;
+}
+
+.place-btn:hover:not(:disabled) {
+  background: #eef2f6;
+}
+
+.place-btn--active,
+.place-btn--active:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.place-btn--active .bi {
+  color: #2563eb;
+}
+
+@media (min-width: 768px) {
+  .places-sidebar {
+    flex-direction: column;
+    width: 9rem;
+    overflow: visible;
+  }
 }
 
 .explorer-shell {
@@ -2431,12 +2505,13 @@ onUnmounted(() => {
 @media (min-width: 768px) {
   .embedded-explorer {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     flex: 1;
   }
 
   .explorer-shell {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     max-width: none;
