@@ -13,7 +13,6 @@ import { useDesktopSessionsStore } from '@/stores/desktopSessions'
 import { useMachinesOverviewStore } from '@/stores/machinesOverview'
 import { useWindowsOverviewStore } from '@/stores/windowsOverview'
 import EmbeddedDesktopFiles from '@/components/EmbeddedDesktopFiles.vue'
-import EmbeddedIndexedFiles from '@/components/EmbeddedIndexedFiles.vue'
 import TerminalPanel from '@/components/TerminalPanel.vue'
 import ResourceMonitor from '@/components/ResourceMonitor.vue'
 import DesktopSettingsPanel from '@/components/DesktopSettingsPanel.vue'
@@ -421,16 +420,8 @@ const apps: AppDef[] = [
   },
 ]
 
-// Opened from Files' sidebar, not pinned in the dock.
-const indexedApps: AppDef[] = [
-  { id: 'pictures', label: 'Pictures', icon: 'bi-images', iconColor: '#ffffff', iconBg: '#db2777', launchable: false },
-  { id: 'videos', label: 'Videos', icon: 'bi-collection-play', iconColor: '#ffffff', iconBg: '#7c3aed', launchable: false },
-  { id: 'documents', label: 'Documents', icon: 'bi-file-earmark-richtext', iconColor: '#ffffff', iconBg: '#d97706', launchable: false },
-]
-
-// Not pinned in the dock's launcher strip — these (and indexedApps) only show
-// up (via dockApps below) once a window is actually open, purely as an
-// instance switcher.
+// Not pinned in the dock's launcher strip — these only show up (via dockApps
+// below) once an image/video is actually open, purely as an instance switcher.
 const imageViewerApp: AppDef = {
   id: 'image-viewer',
   label: 'Image Viewer',
@@ -450,8 +441,10 @@ const videoPlayerApp: AppDef = {
 }
 
 const dockApps = computed(() => {
-  const open = new Set(windows.value.map((w) => w.appId))
-  return [...apps, ...[...indexedApps, imageViewerApp, videoPlayerApp].filter((a) => open.has(a.id))]
+  const list = [...apps]
+  if (windows.value.some((w) => w.appId === 'image-viewer')) list.push(imageViewerApp)
+  if (windows.value.some((w) => w.appId === 'video-player')) list.push(videoPlayerApp)
+  return list
 })
 
 function launchApp(app: AppDef, initialPath?: string) {
@@ -471,9 +464,6 @@ function launchApp(app: AppDef, initialPath?: string) {
 const appComponents: Record<string, Component> = {
   files: EmbeddedDesktopFiles,
   terminal: TerminalPanel,
-  pictures: EmbeddedIndexedFiles,
-  videos: EmbeddedIndexedFiles,
-  documents: EmbeddedIndexedFiles,
   'resource-monitor': ResourceMonitor,
   screenshot: ScreenshotPanel,
   settings: DesktopSettingsPanel,
@@ -659,16 +649,8 @@ function onActivateWindow(id: string) {
 
 function handleLaunch(appId: string) {
   if (isDisconnected.value) return
-  const app = [...apps, ...indexedApps].find((a) => a.id === appId)
+  const app = apps.find((a) => a.id === appId)
   if (app) launchApp(app)
-}
-
-// Files sidebar: bring an already-open Pictures/Videos/Documents window to the
-// front (un-minimizing it) instead of stacking another one.
-function onOpenApp(appId: string) {
-  const existing = windows.value.find((w) => w.appId === appId)
-  if (existing) restoreWindow(existing.id)
-  else handleLaunch(appId)
 }
 
 // App.vue keeps one DesktopSessionHost per realm mounted forever (v-show, not
@@ -778,7 +760,6 @@ onUnmounted(() => {
                 v-bind="windowProps(win)"
                 @close="closeWindowSafely(win.id)"
                 @open-files="onOpenFiles"
-                @open-app="onOpenApp"
                 @preview-file="onPreviewFile"
                 @open-text-editor="onOpenTextEditor"
                 @update-title="updateTitle(win.id, $event)"
