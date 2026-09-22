@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import VOtpInput from 'vue3-otp-input'
 import { useAuthStore } from '../stores/auth'
+import { errorMessage } from '../utils/errorMessage'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -86,8 +87,7 @@ const handleResend = async () => {
     }, 3000)
   } catch (e: unknown) {
     console.error(e)
-    const errorMsg = e instanceof Error ? e.message : String(e)
-    error.value = 'Resend failed: ' + errorMsg
+    error.value = 'Resend failed: ' + errorMessage(e)
   } finally {
     isLoading.value = false
   }
@@ -106,8 +106,7 @@ const handleOnComplete = async (value: string) => {
     }
   } catch (e: unknown) {
     console.error(e)
-    const errorMsg = e instanceof Error ? e.message : String(e)
-    error.value = 'Verification failed: ' + errorMsg
+    error.value = 'Verification failed: ' + errorMessage(e)
     // clear input on error
     otpInput.value?.clearInput()
   } finally {
