@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Modal } from 'bootstrap'
 import { useAuthStore } from '../stores/auth'
+import { errorMessage } from '../utils/errorMessage'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -58,8 +59,7 @@ const handleLogin = async () => {
     router.replace('/verify')
   } catch (e: unknown) {
     console.error(e)
-    const errorMsg = e instanceof Error ? e.message : String(e)
-    error.value = 'Login failed: ' + errorMsg
+    error.value = 'Login failed: ' + errorMessage(e)
   }
 }
 
