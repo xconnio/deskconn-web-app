@@ -6,6 +6,7 @@ import { useSessionCacheStore } from '@/stores/sessionCache'
 import { useSessionEncryptionStore } from '@/stores/sessionEncryption'
 import { useSettingsStore } from '@/stores/settings'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
+import EmbeddedIndexedFiles from '@/components/EmbeddedIndexedFiles.vue'
 import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import { parseFileEntry, createFileBrowser } from '@/utils/fileBrowse'
@@ -19,6 +20,7 @@ import { downloadFile, ensureDownloadServiceWorker, type DownloadProgressState }
 import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
 import { formatDesktopError, isDesktopOfflineError, isNoSuchProcedureException } from '@/utils/desktopError'
 import {
+  baseName,
   detectPathSeparator,
   dirName,
   isAbsolutePath,
@@ -43,9 +45,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'preview-file': [session: Session, entry: FileEntry, entries: FileEntry[]]
+  'preview-file': [session: Session, entry: { path: string; name: string; size: number }, entries: { path: string; name: string; size: number }[]]
   'open-text-editor': [session: Session, entry: FileEntry]
-  'open-app': [appId: string]
   // Not emitted by this component — declared so Vue treats the listeners
   // DesktopSessionHost.vue binds generically to every app window (@close,
   // @open-files, @update-title) as custom events rather than attrs it tries
@@ -55,11 +56,25 @@ const emit = defineEmits<{
   'update-title': [title: string]
 }>()
 
-const places = [
+type Place = 'files' | 'documents' | 'pictures' | 'videos'
+
+const places: { id: Place; label: string; icon: string }[] = [
   { id: 'documents', label: 'Documents', icon: 'bi-file-earmark-text' },
   { id: 'pictures', label: 'Pictures', icon: 'bi-image' },
   { id: 'videos', label: 'Videos', icon: 'bi-film' },
 ]
+
+const activePlace = ref<Place>('files')
+
+// The indexed view's "View in Files" context menu item routes back here with
+// the file's full path — open its containing folder and highlight it.
+async function onIndexOpenFiles(filePath: string) {
+  activePlace.value = 'files'
+  await loadPath(dirName(filePath))
+  selectedEntry.value = currentBrowse.value?.entries?.find((e) => e.name === baseName(filePath)) ?? null
+  await nextTick()
+  entryListRef.value?.querySelector<HTMLElement>('.entry-row.active')?.scrollIntoView({ block: 'center' })
+}
 
 const sessionCacheStore = useSessionCacheStore()
 const sessionEncryptionStore = useSessionEncryptionStore()
@@ -1094,7 +1109,7 @@ const { handleNavKey } = useEntryNavigation({
 })
 
 function handleGlobalKeydown(e: KeyboardEvent) {
-  if (!props.focused) return
+  if (!props.focused || activePlace.value !== 'files') return
 
   const target = e.target as HTMLElement
 
@@ -1188,13 +1203,19 @@ onUnmounted(() => {
     <nav class="places-sidebar">
       <button
         class="place-btn"
-        :class="{ 'place-btn--active': breadcrumbSegments.length === 1 }"
-        :disabled="isConnecting || isLoading"
-        @click="loadPath()"
+        :class="{ 'place-btn--active': activePlace === 'files' && breadcrumbSegments.length === 1 }"
+        :disabled="activePlace === 'files' && (isConnecting || isLoading)"
+        @click="activePlace = 'files'; loadPath()"
       >
         <i class="bi bi-house"></i>Home
       </button>
-      <button v-for="p in places" :key="p.id" class="place-btn" @click="emit('open-app', p.id)">
+      <button
+        v-for="p in places"
+        :key="p.id"
+        class="place-btn"
+        :class="{ 'place-btn--active': activePlace === p.id }"
+        @click="activePlace = p.id"
+      >
         <i class="bi" :class="p.icon"></i>{{ p.label }}
       </button>
     </nav>
@@ -1205,7 +1226,7 @@ onUnmounted(() => {
           <button
             class="tool-btn"
             @click="goBack"
-            :disabled="!canGoBack || isLoading || isConnecting"
+            :disabled="activePlace !== 'files' || !canGoBack || isLoading || isConnecting"
             title="Go back"
           >
             <i class="bi bi-arrow-left"></i>
@@ -1213,7 +1234,7 @@ onUnmounted(() => {
           <button
             class="tool-btn"
             @click="goForward"
-            :disabled="!canGoForward || isLoading || isConnecting"
+            :disabled="activePlace !== 'files' || !canGoForward || isLoading || isConnecting"
             title="Go forward"
           >
             <i class="bi bi-arrow-right"></i>
@@ -1221,7 +1242,7 @@ onUnmounted(() => {
           <button
             class="tool-btn"
             @click="refreshCurrentPath"
-            :disabled="isLoading || isConnecting"
+            :disabled="activePlace !== 'files' || isLoading || isConnecting"
             title="Refresh"
           >
             <i class="bi bi-arrow-clockwise"></i>
@@ -1230,7 +1251,7 @@ onUnmounted(() => {
             class="tool-btn"
             :class="{ 'tool-btn--active': fileSearchActive }"
             @click="fileSearchActive ? exitFileSearch() : enterFileSearch()"
-            :disabled="isConnecting || !currentBrowse"
+            :disabled="activePlace !== 'files' || isConnecting || !currentBrowse"
             title="Search (Ctrl+F)"
           >
             <i class="bi bi-search"></i>
@@ -1238,7 +1259,7 @@ onUnmounted(() => {
           <button
             class="tool-btn"
             @click="triggerUpload"
-            :disabled="isConnecting || !currentBrowse?.is_dir || isLoading"
+            :disabled="activePlace !== 'files' || isConnecting || !currentBrowse?.is_dir || isLoading"
             title="Upload files"
           >
             <i class="bi bi-cloud-upload"></i>
@@ -1248,6 +1269,7 @@ onUnmounted(() => {
             class="tool-btn"
             :class="{ 'tool-btn--active': settingsMenuVisible }"
             @click="toggleSettingsMenu"
+            :disabled="activePlace !== 'files'"
             title="Settings"
           >
             <i class="bi bi-gear"></i>
@@ -1261,6 +1283,15 @@ onUnmounted(() => {
           />
 
           <div
+            v-if="activePlace !== 'files'"
+            class="breadcrumb-search-area breadcrumb-search-area--static fwin-no-drag"
+            :class="{ 'breadcrumb-search-area--embedded': !!toolbarTarget }"
+          >
+            <i class="bi me-1" :class="places.find((p) => p.id === activePlace)?.icon"></i>
+            {{ places.find((p) => p.id === activePlace)?.label }}
+          </div>
+          <div
+            v-else
             class="breadcrumb-search-area fwin-no-drag"
             :class="{ 'breadcrumb-search-active': searchMode || fileSearchActive, 'breadcrumb-search-area--embedded': !!toolbarTarget }"
             @click="!searchMode && !fileSearchActive && enterSearchMode()"
@@ -1315,11 +1346,12 @@ onUnmounted(() => {
         </div>
       </Teleport>
 
-        <div v-if="errorMessage" class="alert alert-danger mb-0 mt-3">
+        <div v-if="activePlace === 'files' && errorMessage" class="alert alert-danger mb-0 mt-3">
           <i class="bi bi-exclamation-octagon me-2"></i>{{ errorMessage }}
         </div>
       </section>
 
+      <template v-if="activePlace === 'files'">
       <div v-if="isConnecting" class="state-card">
         <div class="spinner-border text-warning mb-3" role="status">
           <span class="visually-hidden">Connecting...</span>
@@ -1487,6 +1519,18 @@ onUnmounted(() => {
         </section>
 
       </div>
+      </template>
+
+      <EmbeddedIndexedFiles
+        v-else
+        :key="activePlace"
+        :realm="realm"
+        :category="activePlace"
+        :desktop-name="desktopName"
+        :focused="focused"
+        @open-files="onIndexOpenFiles"
+        @preview-file="(session, entry, entries) => emit('preview-file', session, entry, entries)"
+      />
     </div>
 
     <div class="selection-status">
@@ -1930,6 +1974,17 @@ onUnmounted(() => {
 
 .breadcrumb-search-area:hover {
   border-color: #cbd5e1;
+}
+
+.breadcrumb-search-area--static {
+  cursor: default;
+  color: #475569;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.breadcrumb-search-area--static:hover {
+  border-color: #e2e8f0;
 }
 
 .breadcrumb-search-active {

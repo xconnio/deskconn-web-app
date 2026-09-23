@@ -83,9 +83,7 @@ function closeContextMenu() {
 }
 
 function viewInFiles(entry: IndexEntry) {
-  const slash = entry.path.lastIndexOf('/')
-  const dir = slash > 0 ? entry.path.substring(0, slash) : '/'
-  emit('open-files', dir)
+  emit('open-files', entry.path)
 }
 
 function handleContextMenuKeydown(e: KeyboardEvent) {
