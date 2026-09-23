@@ -20,6 +20,7 @@ import { downloadFile, ensureDownloadServiceWorker, type DownloadProgressState }
 import { formatSize, getFilePreviewType, isFirefoxBrowser } from '@/utils/fileTypes'
 import { formatDesktopError, isDesktopOfflineError, isNoSuchProcedureException } from '@/utils/desktopError'
 import {
+  baseName,
   detectPathSeparator,
   dirName,
   isAbsolutePath,
@@ -65,10 +66,14 @@ const places: { id: Place; label: string; icon: string }[] = [
 
 const activePlace = ref<Place>('files')
 
-// The indexed view's "View in Files" context menu item routes back here.
-function onIndexOpenFiles(path: string) {
+// The indexed view's "View in Files" context menu item routes back here with
+// the file's full path — open its containing folder and highlight it.
+async function onIndexOpenFiles(filePath: string) {
   activePlace.value = 'files'
-  loadPath(path)
+  await loadPath(dirName(filePath))
+  selectedEntry.value = currentBrowse.value?.entries?.find((e) => e.name === baseName(filePath)) ?? null
+  await nextTick()
+  entryListRef.value?.querySelector<HTMLElement>('.entry-row.active')?.scrollIntoView({ block: 'center' })
 }
 
 const sessionCacheStore = useSessionCacheStore()
