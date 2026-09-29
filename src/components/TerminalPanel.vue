@@ -52,6 +52,11 @@ let previousHtmlOverflow = ''
 let previousBodyOverscrollBehavior = ''
 let previousHtmlOverscrollBehavior = ''
 let touchScrollLastY: number | null = null
+let touchStartPoint: { x: number; y: number } | null = null
+let longPressTimer: ReturnType<typeof setTimeout> | undefined
+// Buffer offsets (inclusive) of the long-pressed word; set while the finger is still down.
+let selectAnchor: { start: number; end: number } | null = null
+let handleDrag: { which: 'start' | 'end'; dx: number; dy: number } | null = null
 
 const isMobile = computed(() => 'ontouchstart' in window || navigator.maxTouchPoints > 0)
 const ctrlActive = ref(false)
@@ -183,6 +188,22 @@ async function initTab(tab: TabState) {
   }
 
   tab.term.onData((data) => handleTerminalInput(tab, data))
+  // Ctrl+Shift+C/V for Linux/ChromeOS/Windows (Cmd+C/V on macOS and the
+  // right-click menu already work natively through xterm).
+  tab.term.attachCustomKeyEventHandler((e) => {
+    if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return true
+    if (e.code === 'KeyC') {
+      e.preventDefault()
+      if (e.type === 'keydown') void copySelection()
+      return false
+    }
+    // Returning false lets the browser fire its native paste event, which xterm handles.
+    return e.code !== 'KeyV'
+  })
+  tab.term.onScroll(() => selViewTick.value++)
+  tab.term.onSelectionChange(() => {
+    if (tab === activeTab.value && !tab.term?.hasSelection()) touchSel.value = null
+  })
   tab.term.onTitleChange((title) => {
     if (tab.closed || !title) return
     tab.label = title
@@ -368,22 +389,198 @@ const unlockPageScroll = () => {
   document.documentElement.style.overscrollBehavior = previousHtmlOverscrollBehavior
 }
 
-const clearTerminalTouchScroll = () => {
-  touchScrollLastY = null
+async function copySelection() {
+  const text = activeTab.value?.term?.getSelection()
+  if (text) await navigator.clipboard.writeText(text)
 }
 
+async function pasteClipboard() {
+  const term = activeTab.value?.term
+  if (!term) return
+  const text = await navigator.clipboard.readText().catch(() => '')
+  if (text) term.paste(text)
+  term.focus()
+}
+
+const contextMenu = ref<{ x: number; y: number; canCopy: boolean; touch?: boolean } | null>(null)
+
+// The desktop suppresses the browser's context menu, so offer our own.
+function openContextMenu(e: MouseEvent) {
+  if ((e as PointerEvent).pointerType === 'touch') return // long-press selects instead
+  contextMenu.value = { x: e.clientX, y: e.clientY, canCopy: !!activeTab.value?.term?.hasSelection() }
+}
+
+async function runContextAction(action: () => Promise<void>) {
+  const touch = contextMenu.value?.touch
+  contextMenu.value = null
+  await action()
+  if (touch) clearTouchSelection()
+  activeTab.value?.term?.focus()
+}
+
+function closeContextMenu() {
+  if (contextMenu.value?.touch) clearTouchSelection()
+  contextMenu.value = null
+}
+
+// Linear buffer offset (row * cols + col) of the cell under a viewport point.
+function cellOffsetAt(term: Terminal, x: number, y: number) {
+  const rect = term.element!.querySelector('.xterm-screen')!.getBoundingClientRect()
+  const col = Math.min(term.cols - 1, Math.max(0, Math.floor(((x - rect.left) / rect.width) * term.cols)))
+  const row = Math.min(term.rows - 1, Math.max(0, Math.floor(((y - rect.top) / rect.height) * term.rows)))
+  return (row + term.buffer.active.viewportY) * term.cols + col
+}
+
+// Offsets of the non-blank run around `offset` on its line (Termux-style word pick).
+function wordAt(term: Terminal, offset: number) {
+  const row = Math.floor(offset / term.cols)
+  const line = term.buffer.active.getLine(row)?.translateToString(false) ?? ''
+  let start = offset % term.cols
+  let end = start
+  if (!line[start]?.trim()) return { start: offset, end: offset }
+  while (start > 0 && line[start - 1]?.trim()) start--
+  while (end < term.cols - 1 && line[end + 1]?.trim()) end++
+  return { start: row * term.cols + start, end: row * term.cols + end }
+}
+
+// Touch selection as inclusive buffer offsets; drives the drag handles.
+const touchSel = ref<{ start: number; end: number } | null>(null)
+const selViewTick = ref(0) // bumped on scroll so the handles follow the text
+
+function applyTouchSelection(term: Terminal, a: number, b: number) {
+  const start = Math.min(a, b)
+  const end = Math.max(a, b)
+  touchSel.value = { start, end }
+  term.select(start % term.cols, Math.floor(start / term.cols), end - start + 1)
+}
+
+function clearTouchSelection() {
+  touchSel.value = null
+  activeTab.value?.term?.clearSelection()
+}
+
+// Viewport box of a buffer cell, or null when it's scrolled out of view.
+function cellBox(term: Terminal, offset: number) {
+  const rect = term.element!.querySelector('.xterm-screen')!.getBoundingClientRect()
+  const w = rect.width / term.cols
+  const h = rect.height / term.rows
+  const row = Math.floor(offset / term.cols) - term.buffer.active.viewportY
+  if (row < 0 || row >= term.rows) return null
+  const left = rect.left + (offset % term.cols) * w
+  const top = rect.top + row * h
+  return { left, top, right: left + w, bottom: top + h }
+}
+
+const selHandles = computed(() => {
+  void selViewTick.value
+  const term = activeTab.value?.term
+  const sel = touchSel.value
+  if (!term || !sel) return null
+  return { start: cellBox(term, sel.start), end: cellBox(term, sel.end) }
+})
+
+// Toolbar sits above the selection, or below its handles when there's no room above.
+function showTouchToolbar(term: Terminal, fallback: { x: number; y: number }) {
+  const sel = touchSel.value
+  const a = sel && cellBox(term, sel.start)
+  const b = sel && cellBox(term, sel.end)
+  const top = a?.top ?? fallback.y - 16
+  const bottom = b?.bottom ?? fallback.y + 16
+  const x = a?.left ?? fallback.x
+  contextMenu.value = {
+    x: Math.max(8, Math.min(x - 20, window.innerWidth - 180)),
+    y: top - 56 >= 8 ? top - 56 : bottom + 34,
+    canCopy: !!sel,
+    touch: true,
+  }
+}
+
+function onHandleDown(which: 'start' | 'end', e: PointerEvent) {
+  const term = activeTab.value?.term
+  const sel = touchSel.value
+  const box = term && sel && cellBox(term, sel[which])
+  if (!box) return
+  ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+  // Keep the finger's offset from the cell so the text under it stays visible.
+  handleDrag = {
+    which,
+    dx: e.clientX - (box.left + box.right) / 2,
+    dy: e.clientY - (box.top + box.bottom) / 2,
+  }
+  contextMenu.value = null
+}
+
+function onHandleMove(e: PointerEvent) {
+  const term = activeTab.value?.term
+  const sel = touchSel.value
+  if (!handleDrag || !term || !sel) return
+  const cur = cellOffsetAt(term, e.clientX - handleDrag.dx, e.clientY - handleDrag.dy)
+  const fixed = handleDrag.which === 'start' ? sel.end : sel.start
+  if (cur !== fixed) handleDrag.which = cur < fixed ? 'start' : 'end'
+  applyTouchSelection(term, cur, fixed)
+}
+
+function onHandleUp(e: PointerEvent) {
+  const term = activeTab.value?.term
+  if (!handleDrag || !term) return
+  handleDrag = null
+  showTouchToolbar(term, { x: e.clientX, y: e.clientY })
+}
+
+const clearTerminalTouchScroll = (event?: TouchEvent) => {
+  clearTimeout(longPressTimer)
+  const term = activeTab.value?.term
+  const touch = event?.changedTouches.item(0)
+  if (selectAnchor !== null && term && touch) {
+    showTouchToolbar(term, { x: touch.clientX, y: touch.clientY })
+  } else if (touchStartPoint) {
+    // A plain tap (no drag, no long-press) clears any existing selection.
+    clearTouchSelection()
+  }
+  touchScrollLastY = null
+  touchStartPoint = null
+  selectAnchor = null
+}
+
+// Long-press selects the word under the finger; dragging before lifting extends it.
 const handleTerminalTouchStart = (event: TouchEvent) => {
-  if (!isMobile.value || event.touches.length !== 1) return
+  if (event.touches.length !== 1) return
   const touch = event.touches.item(0)
   if (!touch) return
-  touchScrollLastY = touch.clientY
+  const { clientX: x, clientY: y } = touch
+  touchStartPoint = { x, y }
+  touchScrollLastY = y
+  clearTimeout(longPressTimer)
+  longPressTimer = setTimeout(() => {
+    const term = activeTab.value?.term
+    if (!term) return
+    const word = wordAt(term, cellOffsetAt(term, x, y))
+    selectAnchor = word
+    applyTouchSelection(term, word.start, word.end)
+    // Nothing under the finger: leave only Paste on offer.
+    if (!term.getSelection().trim()) clearTouchSelection()
+    triggerHapticFeedback()
+  }, 450)
 }
 
 const handleTerminalTouchMove = (event: TouchEvent) => {
-  if (!isMobile.value || event.touches.length !== 1 || touchScrollLastY === null) return
-
   const touch = event.touches.item(0)
-  if (!touch) return
+  if (event.touches.length !== 1 || !touch) return
+
+  const term = activeTab.value?.term
+  if (selectAnchor !== null && term) {
+    event.preventDefault()
+    event.stopPropagation()
+    const cur = cellOffsetAt(term, touch.clientX, touch.clientY)
+    applyTouchSelection(term, Math.min(selectAnchor.start, cur), Math.max(selectAnchor.end, cur))
+    return
+  }
+  if (touchStartPoint && Math.hypot(touch.clientX - touchStartPoint.x, touch.clientY - touchStartPoint.y) > 8) {
+    clearTimeout(longPressTimer)
+    touchStartPoint = null
+  }
+
+  if (!isMobile.value || touchScrollLastY === null) return
 
   const nextY = touch.clientY
   const deltaY = nextY - touchScrollLastY
@@ -485,13 +682,57 @@ watch(() => props.focused, (focused) => {
       :key="tab.id"
       v-show="tab.id === activeTabId"
       class="terminal-body"
-      @touchstart="handleTerminalTouchStart"
-      @touchmove="handleTerminalTouchMove"
+      @touchstart.capture="handleTerminalTouchStart"
+      @touchmove.capture="handleTerminalTouchMove"
       @touchend="clearTerminalTouchScroll"
       @touchcancel="clearTerminalTouchScroll"
+      @contextmenu.prevent="openContextMenu"
     >
       <div :ref="(el) => registerTermEl(tab.id, el)" class="terminal-mount"></div>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="contextMenu"
+        class="ctx-backdrop"
+        @pointerdown="closeContextMenu"
+        @contextmenu.prevent="closeContextMenu"
+      ></div>
+      <div
+        v-if="selHandles?.start"
+        class="sel-handle sel-handle--start"
+        :style="{ left: selHandles.start.left - 22 + 'px', top: selHandles.start.bottom + 'px' }"
+        @pointerdown.prevent="onHandleDown('start', $event)"
+        @pointermove="onHandleMove"
+        @pointerup="onHandleUp"
+        @pointercancel="onHandleUp"
+      ></div>
+      <div
+        v-if="selHandles?.end"
+        class="sel-handle sel-handle--end"
+        :style="{ left: selHandles.end.right + 'px', top: selHandles.end.bottom + 'px' }"
+        @pointerdown.prevent="onHandleDown('end', $event)"
+        @pointermove="onHandleMove"
+        @pointerup="onHandleUp"
+        @pointercancel="onHandleUp"
+      ></div>
+      <div
+        v-if="contextMenu"
+        class="ctx-menu"
+        :class="{ 'ctx-menu--touch': contextMenu.touch }"
+        :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
+        @keydown.esc="closeContextMenu"
+      >
+        <button class="ctx-item" :disabled="!contextMenu.canCopy" @click="runContextAction(copySelection)">
+          <i class="bi bi-clipboard"></i>
+          Copy
+        </button>
+        <button class="ctx-item" @click="runContextAction(pasteClipboard)">
+          <i class="bi bi-clipboard-check"></i>
+          Paste
+        </button>
+      </div>
+    </Teleport>
 
     <div
       v-if="isMobile"
@@ -675,6 +916,68 @@ watch(() => props.focused, (focused) => {
   background: #1e1e1e;
   overscroll-behavior: contain;
   touch-action: none;
+}
+
+.ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+}
+
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(71, 85, 105, 0.14);
+  padding: 0.3rem;
+  min-width: 160px;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: #1e293b;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.ctx-item:hover:not(:disabled) { background: #f1f5f9; }
+.ctx-item:disabled { opacity: 0.45; cursor: default; }
+.ctx-item .bi { font-size: 0.95rem; color: #2563eb; }
+
+.sel-handle {
+  position: fixed;
+  z-index: 10000;
+  width: 22px;
+  height: 22px;
+  background: #3b82f6;
+  border-radius: 50%;
+  touch-action: none;
+}
+
+.sel-handle--start { border-top-right-radius: 0; }
+.sel-handle--end { border-top-left-radius: 0; }
+
+.ctx-menu--touch {
+  display: flex;
+  min-width: 0;
+}
+
+.ctx-menu--touch .ctx-item {
+  width: auto;
+  padding: 0.6rem 0.9rem;
 }
 
 .terminal-keybar-spacer {
