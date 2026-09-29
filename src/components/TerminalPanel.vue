@@ -58,7 +58,12 @@ let longPressTimer: ReturnType<typeof setTimeout> | undefined
 let selectAnchor: { start: number; end: number } | null = null
 let handleDrag: { which: 'start' | 'end'; dx: number; dy: number } | null = null
 
-const isMobile = computed(() => 'ontouchstart' in window || navigator.maxTouchPoints > 0)
+// Phones only: tablets, iPads and Chromebooks have touch too but a screen whose short side is >= 600px (Android sw600dp tablet cutoff).
+const isMobile = computed(
+  () =>
+    ('ontouchstart' in window || navigator.maxTouchPoints > 0) &&
+    Math.min(window.screen.width, window.screen.height) < 600,
+)
 const ctrlActive = ref(false)
 const panelViewportHeight = ref<number | null>(null)
 const keybarHeight = ref(0)
