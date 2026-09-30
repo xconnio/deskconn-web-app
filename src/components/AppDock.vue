@@ -252,6 +252,9 @@ function handleIconClick(appId: string) {
 // running instances — otherwise there'd be no way to open a 2nd instance of
 // an app once one is already running (a plain click just focuses it).
 function handleIconContextMenu(appId: string) {
+  // A touch long-press lands here with the pointer still down; drop the
+  // pending press so lifting the finger doesn't also count as a click.
+  onIconPointerCancel()
   togglePopover(appId)
 }
 
@@ -270,6 +273,18 @@ function onIconPointerDown(appId: string, e: PointerEvent) {
   dragState = { appId, startX: e.clientX, startY: e.clientY, moved: false }
   window.addEventListener('pointermove', onIconPointerMove)
   window.addEventListener('pointerup', onIconPointerUp)
+  window.addEventListener('pointercancel', onIconPointerCancel)
+}
+
+// The browser cancels the pointer when a finger drag turns into a scroll of
+// the dock; without this the press would linger and the next pointerup
+// anywhere would launch the app.
+function onIconPointerCancel() {
+  window.removeEventListener('pointermove', onIconPointerMove)
+  window.removeEventListener('pointerup', onIconPointerUp)
+  window.removeEventListener('pointercancel', onIconPointerCancel)
+  if (dragState?.moved) persistPinnedOrder()
+  dragState = null
 }
 
 const DRAG_THRESHOLD = 6
@@ -320,6 +335,7 @@ function moveDraggedTo(targetIdx: number) {
 function onIconPointerUp() {
   window.removeEventListener('pointermove', onIconPointerMove)
   window.removeEventListener('pointerup', onIconPointerUp)
+  window.removeEventListener('pointercancel', onIconPointerCancel)
   if (!dragState) return
 
   const { appId, moved } = dragState

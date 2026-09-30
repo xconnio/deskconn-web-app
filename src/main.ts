@@ -7,10 +7,13 @@ import './assets/theme.css'
 
 import App from './App.vue'
 import router from './router'
+import { installLongPressContextMenu } from './utils/longPressContextMenu'
 
 const app = createApp(App)
 
 app.use(createPinia())
 app.use(router)
+
+installLongPressContextMenu()
 
 router.isReady().then(() => app.mount('#app'))

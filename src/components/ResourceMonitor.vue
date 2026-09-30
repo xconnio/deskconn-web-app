@@ -1087,6 +1087,15 @@ function handleKill() {
   border-bottom: 1px solid #e2e8f0;
 }
 
+/* Long-press opens the row menu on touch; don't let it start a text selection instead. */
+@media (pointer: coarse) {
+  .rm-list-row {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
+
 .rm-list-row {
   padding: 0.4rem;
   border-bottom: 1px solid #f1f5f9;

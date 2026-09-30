@@ -2172,6 +2172,8 @@ onUnmounted(() => {
 }
 
 .entry-row {
+  /* iOS: keep the image/link callout from fighting the long-press menu. */
+  -webkit-touch-callout: none;
   display: flex;
   justify-content: space-between;
   align-items: center;

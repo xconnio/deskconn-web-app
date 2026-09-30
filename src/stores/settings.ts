@@ -16,7 +16,10 @@ function readResourceMonitorInterval(realm: string): number {
 
 export const useSettingsStore = defineStore('settings', () => {
   const lastRealm = ref(localStorage.getItem('setting_last_realm'))
-  const singleClickOpen = ref(localStorage.getItem('setting_single_click_open') === 'true')
+  // Defaults to on for touch-only devices: iPad Safari has no reliable double-tap.
+  const singleClickOpen = ref(
+    (localStorage.getItem('setting_single_click_open') ?? String(window.matchMedia('(hover: none)').matches)) === 'true',
+  )
   const useRemoteWallpaper = ref(localStorage.getItem('setting_use_remote_wallpaper') !== 'false')
   const showLogicalCpus = ref(localStorage.getItem('setting_show_logical_cpus') === 'true')
   // Dock position and resource monitor refresh interval are per-machine —
