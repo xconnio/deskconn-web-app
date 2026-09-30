@@ -5,6 +5,7 @@ import type { FileEntry } from '@/types'
 import type { EncryptionKeys } from '@/utils/encryption'
 import { createFileBrowser } from '@/utils/fileBrowse'
 import { formatDesktopError } from '@/utils/desktopError'
+import { useSettingsStore } from '@/stores/settings'
 import { detectPathSeparator, joinPath, normalizeComparablePath, relativeSegments } from '@/utils/filePath'
 
 const props = defineProps<{
@@ -109,8 +110,16 @@ function isDisabledEntry(entry: FileEntry): boolean {
 
 // Single click only selects (matches native folder pickers) — it never
 // navigates. Double click is what opens a directory.
+const settingsStore = useSettingsStore()
+
 function onEntryClick(entry: FileEntry) {
   if (isDisabledEntry(entry)) return
+  // Single-click-open (the touch default): a tap enters folders; files still
+  // just select so the confirm button stays the only way to pick one.
+  if (entry.is_dir && settingsStore.singleClickOpen) {
+    void load(entry.path)
+    return
+  }
   selectedEntry.value = entry
 }
 

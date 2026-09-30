@@ -631,6 +631,9 @@ function startResize(e: PointerEvent, dir: string) {
   background: #fff;
   flex-shrink: 0;
   user-select: none;
+  /* Without this the browser claims a finger drag for its own pan/zoom and
+     cancels the pointer a few pixels in. */
+  touch-action: none;
 }
 
 .floating-window:not(.is-focused) .fwin-titlebar {
@@ -813,6 +816,7 @@ function startResize(e: PointerEvent, dir: string) {
 .fwin-resize {
   position: absolute;
   z-index: 2;
+  touch-action: none;
 }
 
 .fwin-resize-n,
@@ -849,4 +853,26 @@ function startResize(e: PointerEvent, dir: string) {
 .fwin-resize-nw { top: -3px; left: -3px; cursor: nwse-resize; }
 .fwin-resize-se { bottom: -3px; right: -3px; cursor: nwse-resize; }
 .fwin-resize-sw { bottom: -3px; left: -3px; cursor: nesw-resize; }
+
+/* Finger-sized grab areas on touch screens; they sit mostly outside the
+   window so they don't swallow taps on its content. */
+@media (pointer: coarse) {
+  .fwin-resize-n,
+  .fwin-resize-s { height: 16px; }
+  .fwin-resize-e,
+  .fwin-resize-w { width: 16px; }
+  .fwin-resize-n { top: -12px; }
+  .fwin-resize-s { bottom: -12px; }
+  .fwin-resize-e { right: -12px; }
+  .fwin-resize-w { left: -12px; }
+
+  .fwin-resize-ne,
+  .fwin-resize-nw,
+  .fwin-resize-se,
+  .fwin-resize-sw { width: 28px; height: 28px; }
+  .fwin-resize-ne { top: -12px; right: -12px; }
+  .fwin-resize-nw { top: -12px; left: -12px; }
+  .fwin-resize-se { bottom: -12px; right: -12px; }
+  .fwin-resize-sw { bottom: -12px; left: -12px; }
+}
 </style>

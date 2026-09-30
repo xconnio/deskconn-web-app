@@ -162,6 +162,10 @@ function onTabMouseDown(id: number, e: MouseEvent) {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* The strip sits in a window titlebar and its empty space is the drag
+     handle. As a scroller it would otherwise claim finger drags for itself
+     and cancel the window move; the chevron buttons still scroll it. */
+  touch-action: none;
 }
 .tabs-list::-webkit-scrollbar { display: none; }
 

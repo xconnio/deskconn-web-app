@@ -411,7 +411,18 @@ const contextMenu = ref<{ x: number; y: number; canCopy: boolean; touch?: boolea
 
 // The desktop suppresses the browser's context menu, so offer our own.
 function openContextMenu(e: MouseEvent) {
-  if ((e as PointerEvent).pointerType === 'touch') return // long-press selects instead
+  if ((e as PointerEvent).pointerType === 'touch') {
+    // Android/ChromeOS report a long-press as a contextmenu, and may cancel
+    // the touch before our own timer fires — so treat it as the long-press.
+    const term = activeTab.value?.term
+    if (!term) return
+    clearTimeout(longPressTimer)
+    beginTouchSelection(term, e.clientX, e.clientY)
+    showTouchToolbar(term, { x: e.clientX, y: e.clientY })
+    // Touch already ended: no touchend will come to reset the anchor.
+    if (!touchStartPoint) selectAnchor = null
+    return
+  }
   contextMenu.value = { x: e.clientX, y: e.clientY, canCopy: !!activeTab.value?.term?.hasSelection() }
 }
 
@@ -547,6 +558,16 @@ const clearTerminalTouchScroll = (event?: TouchEvent) => {
   selectAnchor = null
 }
 
+function beginTouchSelection(term: Terminal, x: number, y: number) {
+  if (selectAnchor !== null) return
+  const word = wordAt(term, cellOffsetAt(term, x, y))
+  selectAnchor = word
+  applyTouchSelection(term, word.start, word.end)
+  // Nothing under the finger: leave only Paste on offer.
+  if (!term.getSelection().trim()) clearTouchSelection()
+  triggerHapticFeedback()
+}
+
 // Long-press selects the word under the finger; dragging before lifting extends it.
 const handleTerminalTouchStart = (event: TouchEvent) => {
   if (event.touches.length !== 1) return
@@ -555,16 +576,12 @@ const handleTerminalTouchStart = (event: TouchEvent) => {
   const { clientX: x, clientY: y } = touch
   touchStartPoint = { x, y }
   touchScrollLastY = y
+  selectAnchor = null
   clearTimeout(longPressTimer)
+  // Fallback for browsers that send no contextmenu on long-press (iOS Safari).
   longPressTimer = setTimeout(() => {
     const term = activeTab.value?.term
-    if (!term) return
-    const word = wordAt(term, cellOffsetAt(term, x, y))
-    selectAnchor = word
-    applyTouchSelection(term, word.start, word.end)
-    // Nothing under the finger: leave only Paste on offer.
-    if (!term.getSelection().trim()) clearTouchSelection()
-    triggerHapticFeedback()
+    if (term) beginTouchSelection(term, x, y)
   }, 450)
 }
 
