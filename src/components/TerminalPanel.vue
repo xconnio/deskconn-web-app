@@ -2,6 +2,7 @@
 import { ref, shallowRef, onMounted, onUnmounted, computed, inject, nextTick, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { Session } from 'xconn'
 import { useSessionCacheStore } from '@/stores/sessionCache'
@@ -176,6 +177,8 @@ async function initTab(tab: TabState) {
 
   tab.fitAddon = new FitAddon()
   tab.term.loadAddon(tab.fitAddon)
+  // Makes http(s) URLs clickable; they open in a new browser tab.
+  tab.term.loadAddon(new WebLinksAddon())
   tab.term.open(el)
   tab.fitAddon.fit()
   tab.term.focus()
