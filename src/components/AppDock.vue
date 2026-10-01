@@ -512,17 +512,12 @@ onUnmounted(() => {
       </template>
 
       <!-- Mobile: apps live on the desktop as icons instead (.desktop-icon-grid
-           below) — this bar is just the machine/windows/profile switcher. -->
+           below) and open one at a time, so there's no window switcher here —
+           this bar is just the machine/profile switcher. -->
       <template v-else>
         <button class="mobile-nav-item" aria-label="Machines" @click="requestMachinesPicker()">
           <i class="bi bi-window-stack"></i>
           <span class="mobile-nav-label">Machine</span>
-        </button>
-
-        <button class="mobile-nav-item" aria-label="Show all windows" @click="openWindowsOverview(realm)">
-          <i class="bi bi-grid-3x3-gap-fill"></i>
-          <span class="mobile-nav-label">Windows</span>
-          <span v-if="windows.length > 0" class="mobile-nav-badge">{{ Math.min(windows.length, 9) }}</span>
         </button>
 
         <button class="mobile-nav-item" aria-label="Profile" @click="accountPanelStore.open('account')">
@@ -1006,22 +1001,6 @@ onUnmounted(() => {
 .mobile-nav-label {
   font-size: 0.65rem;
   font-weight: 600;
-}
-
-.mobile-nav-badge {
-  position: absolute;
-  top: 0;
-  right: 0.6rem;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 3px;
-  border-radius: 8px;
-  background: #f97316;
-  color: #fff;
-  font-size: 0.62rem;
-  font-weight: 700;
-  line-height: 16px;
-  text-align: center;
 }
 
 /* Mobile home-screen — pinned apps as icons on the desktop instead of dock

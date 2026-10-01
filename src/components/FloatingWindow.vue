@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { provide, ref, onMounted, onUnmounted, nextTick } from 'vue'
-import { floatingWindowToolbarKey, floatingWindowActionsKey, floatingWindowMenuKey } from '@/composables/floatingWindowToolbar'
+import { computed, provide, ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { floatingWindowToolbarKey, floatingWindowActionsKey, floatingWindowMenuKey, floatingWindowMobileKey } from '@/composables/floatingWindowToolbar'
 
 const rootEl = ref<HTMLElement | null>(null)
 const toolbarHostEl = ref<HTMLElement | null>(null)
@@ -35,6 +35,8 @@ const props = defineProps<{
   /** Dark titlebar background, for apps with a dark embedded toolbar (e.g. the terminal's tab bar). */
   darkTitlebar?: boolean
 }>()
+
+provide(floatingWindowMobileKey, computed(() => props.mobile))
 
 const emit = defineEmits<{
   close: []
@@ -485,7 +487,11 @@ function startResize(e: PointerEvent, dir: string) {
     @pointerdown="$emit('focus')"
   >
     <div class="fwin-titlebar" :class="{ 'fwin-titlebar--dark': darkTitlebar }" @pointerdown="startDrag" @contextmenu.prevent>
-      <template v-if="!useToolbarTitlebar">
+      <!-- Mobile is one app at a time: no minimize/close, just a way back. -->
+      <button v-if="mobile" class="fwin-back" title="Back" aria-label="Back" @click="$emit('close')">
+        <i class="bi bi-chevron-left"></i>
+      </button>
+      <template v-if="!useToolbarTitlebar || mobile">
         <span class="fwin-icon" :style="{ color: iconColor, background: iconBg }">
           <i class="bi" :class="icon"></i>
         </span>
@@ -499,15 +505,15 @@ function startResize(e: PointerEvent, dir: string) {
       <div ref="actionsHostEl" class="fwin-actions-host"></div>
       <div class="fwin-controls">
         <button ref="menuBtnRef" class="fwin-btn" title="Menu" @mousedown.prevent @click.stop="toggleMenu">
-          <i class="bi bi-list"></i>
+          <i class="bi" :class="mobile ? 'bi-three-dots-vertical' : 'bi-list'"></i>
         </button>
-        <button class="fwin-btn" title="Minimize" @mousedown.prevent @click="requestMinimize">
+        <button v-if="!mobile" class="fwin-btn" title="Minimize" @mousedown.prevent @click="requestMinimize">
           <i class="bi bi-dash-lg"></i>
         </button>
         <button v-if="!mobile" class="fwin-btn" :title="maximized ? 'Restore' : 'Maximize'" @mousedown.prevent @click="requestToggleMaximize">
           <i class="bi" :class="maximized ? 'bi-copy' : 'bi-square'"></i>
         </button>
-        <button class="fwin-btn fwin-btn-close" title="Close" @mousedown.prevent @click="$emit('close')">
+        <button v-if="!mobile" class="fwin-btn fwin-btn-close" title="Close" @mousedown.prevent @click="$emit('close')">
           <i class="bi bi-x-lg"></i>
         </button>
       </div>
@@ -803,6 +809,99 @@ function startResize(e: PointerEvent, dir: string) {
 .fwin-btn-close:hover {
   background: #fee2e2;
   color: #dc2626;
+}
+
+/* ── Mobile app bar ──
+   Row one: back, app title, the app's action buttons, overflow menu.
+   Row two: the app's own toolbar (path bar, tab strip, …) at full width. */
+.is-mobile .fwin-titlebar {
+  flex-wrap: wrap;
+  gap: 0 0.25rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.is-mobile .fwin-titlebar--dark {
+  border-bottom-color: #1a1a1a;
+}
+
+.is-mobile .fwin-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.is-mobile .fwin-title {
+  font-size: 1.05rem;
+  margin-left: 0.35rem;
+}
+
+.is-mobile .fwin-titlebar--dark .fwin-title {
+  color: #f1f5f9;
+}
+
+.is-mobile .fwin-toolbar-host--active {
+  order: 1;
+  flex: 0 0 100%;
+  padding-bottom: 0.25rem;
+}
+
+/* Flat, finger-sized icon buttons — the desktop window-control look (small
+   bevelled circles) doesn't suit an app bar. Covers the app's own teleported
+   action buttons too, whatever class they carry. */
+.is-mobile .fwin-back,
+.is-mobile .fwin-btn,
+.is-mobile .fwin-actions-host :deep(button) {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  color: #1e293b;
+  font-size: 1.15rem;
+}
+
+.is-mobile .fwin-back {
+  margin-left: -0.35rem;
+}
+
+.is-mobile .fwin-back:active,
+.is-mobile .fwin-btn:active,
+.is-mobile .fwin-actions-host :deep(button:active:not(:disabled)) {
+  background: rgba(100, 116, 139, 0.18);
+}
+
+.is-mobile .fwin-actions-host :deep(button:disabled) {
+  opacity: 0.35;
+}
+
+.is-mobile .fwin-titlebar--dark .fwin-back,
+.is-mobile .fwin-titlebar--dark .fwin-btn,
+.is-mobile .fwin-titlebar--dark .fwin-actions-host :deep(button) {
+  background: transparent;
+  color: #f1f5f9;
+}
+
+.is-mobile .fwin-actions-host,
+.is-mobile .fwin-controls {
+  gap: 0;
+}
+
+/* Anchored under row one rather than under the whole (now two-row) bar. */
+.is-mobile .fwin-menu {
+  top: 44px;
+  right: 0.4rem;
+}
+
+.is-mobile .fwin-menu-item {
+  padding: 0.65rem 0.7rem;
+  font-size: 0.9rem;
 }
 
 .fwin-body {
