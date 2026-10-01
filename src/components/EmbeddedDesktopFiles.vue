@@ -7,7 +7,7 @@ import { useSessionEncryptionStore } from '@/stores/sessionEncryption'
 import { useSettingsStore } from '@/stores/settings'
 import { useEntryNavigation } from '@/composables/useEntryNavigation'
 import EmbeddedIndexedFiles from '@/components/EmbeddedIndexedFiles.vue'
-import { floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
+import { floatingWindowActionsKey, floatingWindowMobileKey, floatingWindowToolbarKey } from '@/composables/floatingWindowToolbar'
 import type { FileBrowseResult, FileEntry } from '@/types'
 import { parseFileEntry, createFileBrowser } from '@/utils/fileBrowse'
 import {
@@ -84,6 +84,11 @@ const settingsStore = useSettingsStore()
 // route) — the toolbar then renders inline instead of teleporting.
 const toolbarHostRef = inject(floatingWindowToolbarKey)
 const toolbarTarget = computed(() => toolbarHostRef?.value ?? null)
+// Phone layout: search/upload/settings move up into the window's app bar,
+// leaving the toolbar row to history navigation and the path.
+const actionsHostRef = inject(floatingWindowActionsKey)
+const windowMobile = inject(floatingWindowMobileKey, null)
+const appBarTarget = computed(() => (windowMobile?.value ? actionsHostRef?.value ?? null : null))
 
 const session = shallowRef<Session | null>(null)
 const encryptionKeys = ref<EncryptionKeys | null>(null)
@@ -1222,7 +1227,7 @@ onUnmounted(() => {
     <div class="explorer-shell" ref="explorerShellRef" @scroll="handleScroll">
       <section class="toolbar-card" :class="{ 'toolbar-card--embedded': !!toolbarTarget }">
       <Teleport :to="toolbarTarget ?? 'body'" :disabled="!toolbarTarget">
-        <div class="path-toolbar" :class="{ 'path-toolbar--embedded': !!toolbarTarget }">
+        <div class="path-toolbar" :class="{ 'path-toolbar--embedded': !!toolbarTarget, 'path-toolbar--mobile': !!appBarTarget }">
           <button
             class="tool-btn"
             @click="goBack"
@@ -1247,6 +1252,7 @@ onUnmounted(() => {
           >
             <i class="bi bi-arrow-clockwise"></i>
           </button>
+          <Teleport :to="appBarTarget ?? 'body'" :disabled="!appBarTarget">
           <button
             class="tool-btn"
             :class="{ 'tool-btn--active': fileSearchActive }"
@@ -1274,6 +1280,7 @@ onUnmounted(() => {
           >
             <i class="bi bi-gear"></i>
           </button>
+          </Teleport>
           <input
             ref="uploadInputRef"
             type="file"
@@ -1842,6 +1849,30 @@ onUnmounted(() => {
   }
 }
 
+/* Phone: a row of equal-width tabs, icon over label, so every place fits
+   on screen without scrolling. */
+@media (max-width: 767px) {
+  .places-sidebar {
+    overflow: visible;
+    border-right: none;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 0.35rem;
+  }
+
+  .place-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.4rem 0.2rem;
+    font-size: 0.72rem;
+  }
+
+  .place-btn .bi {
+    font-size: 1.2rem;
+  }
+}
+
 .explorer-shell {
   max-width: none;
   flex: 1;
@@ -2000,6 +2031,11 @@ onUnmounted(() => {
   padding: 0;
   margin-bottom: 0;
   border-radius: 0;
+}
+
+/* Back, forward, refresh, then the path takes whatever is left. */
+.path-toolbar--mobile {
+  grid-template-columns: auto auto auto minmax(0, 1fr);
 }
 
 .path-toolbar--embedded {
