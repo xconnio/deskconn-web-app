@@ -157,12 +157,14 @@ function createTab(entry: TextEntry | null, isPreview: boolean): TabState {
   })
 }
 
-function switchTab(id: number) {
+// focusEditor=false keeps focus where it is, e.g. on the file tree so its
+// arrow-key navigation keeps working after opening a file from it.
+function switchTab(id: number, focusEditor = true) {
   activeTabId.value = id
   nextTick(() => {
     updateAvailableWidth()
     updateLineHeight()
-    activeTextareaEl.value?.focus()
+    if (focusEditor) activeTextareaEl.value?.focus()
   })
 }
 
@@ -259,11 +261,11 @@ function isReplaceableBlankTab(tab: TabState): boolean {
   return !tab.entry && !isDirty(tab)
 }
 
-function openFileInTab(target: TextEntry, pinned: boolean) {
+function openFileInTab(target: TextEntry, pinned: boolean, focusEditor = true) {
   const existing = findTabByPath(target.path)
   if (existing) {
     if (pinned) existing.isPreview = false
-    switchTab(existing.id)
+    switchTab(existing.id, focusEditor)
     return
   }
 
@@ -275,13 +277,13 @@ function openFileInTab(target: TextEntry, pinned: boolean) {
     active.entry = target
     active.isPreview = !pinned
     void loadTabContent(active)
-    switchTab(active.id)
+    switchTab(active.id, focusEditor)
     return
   }
 
   const tab = createTab(target, !pinned)
   tabs.value.push(tab)
-  switchTab(tab.id)
+  switchTab(tab.id, focusEditor)
   void loadTabContent(tab)
 }
 
@@ -459,10 +461,10 @@ function onPickerConfirm(path: string) {
 }
 
 function onTreeOpenFile(entry: { path: string; name: string; size: number }) {
-  openFileInTab(entry, false)
+  openFileInTab(entry, false, false)
 }
 function onTreeOpenFilePinned(entry: { path: string; name: string; size: number }) {
-  openFileInTab(entry, true)
+  openFileInTab(entry, true, false)
 }
 
 // ── Saving ──────────────────────────────────────────────────────────────────
