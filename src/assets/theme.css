@@ -105,6 +105,12 @@ h6 {
   transition: all 0.2s ease;
 }
 
+/* Faint enough that a hint (e.g. the •••• password one) never reads as typed input. */
+.form-control::placeholder {
+  color: #cbd5e1;
+  opacity: 1;
+}
+
 .form-control:focus {
   border-color: var(--theme-primary);
   box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.08);
