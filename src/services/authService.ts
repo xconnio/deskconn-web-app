@@ -245,11 +245,12 @@ export const authService = {
      return await wampService.connectWithCryptosign(authId, privateKey, realm)
   },
 
-  async shellWebRTCDesktop(authID: string, privateKey: string, realm: string) {
+  // Signals over the already-connected routed session, so P2P setup needs no
+  // second router connection.
+  async shellWebRTCDesktop(authID: string, privateKey: string, realm: string, session: WampSession) {
     const procedureWebRTCOffer = 'io.xconn.webrtc.offer'
     const topicAnswererOnCandidate = 'io.xconn.webrtc.answerer.on_candidate'
     const topicOffererOnCandidate = 'io.xconn.webrtc.offerer.on_candidate'
-    const session = await wampService.connectWithCryptosign(authID, privateKey, realm)
 
     const iceServers: RTCIceServer[] = [{ urls: ['stun:stun.l.google.com:19302'] }]
 

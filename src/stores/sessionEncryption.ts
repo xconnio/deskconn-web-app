@@ -11,6 +11,14 @@ const pending = new Map<string, Promise<EncryptionKeys>>()
 // Re-exchange on reconnect, since the backend drops its half on session leave.
 const hookedSessions = new WeakSet<Session>()
 
+async function exchange(session: Session): Promise<EncryptionKeys> {
+  const { publicKey, privateKey } = createX25519KeyPair()
+  const result = await session.call(procedureKeyExchange, [publicKey])
+  const serverPublicKey = result.args?.[0] as Uint8Array
+  if (!serverPublicKey?.length) throw new Error('Invalid key exchange response')
+  return deriveSessionKeys(privateKey, serverPublicKey)
+}
+
 export const useSessionEncryptionStore = defineStore('sessionEncryption', () => {
   async function getOrExchange(session: Session, realm: string): Promise<EncryptionKeys> {
     if (!hookedSessions.has(session)) {
@@ -24,15 +32,10 @@ export const useSessionEncryptionStore = defineStore('sessionEncryption', () => 
     const inFlight = pending.get(realm)
     if (inFlight) return inFlight
 
-    const attempt = (async (): Promise<EncryptionKeys> => {
-      const { publicKey, privateKey } = createX25519KeyPair()
-      const result = await session.call(procedureKeyExchange, [publicKey])
-      const serverPublicKey = result.args?.[0] as Uint8Array
-      if (!serverPublicKey?.length) throw new Error('Invalid key exchange response')
-      const keys = await deriveSessionKeys(privateKey, serverPublicKey)
+    const attempt = exchange(session).then((keys) => {
       cache.set(realm, keys)
       return keys
-    })()
+    })
 
     pending.set(realm, attempt)
     try {
@@ -46,5 +49,18 @@ export const useSessionEncryptionStore = defineStore('sessionEncryption', () => 
     cache.delete(realm)
   }
 
-  return { getOrExchange, invalidate }
+  // deskconnd keys by caller session, so a P2P upgrade needs its own
+  // exchange. Written into the existing object in place so components that
+  // already hold it pick up the new keys without re-fetching.
+  function adopt(realm: string, keys: EncryptionKeys) {
+    const existing = cache.get(realm)
+    if (existing) Object.assign(existing, keys)
+    else cache.set(realm, keys)
+  }
+
+  function isExchanging(realm: string): boolean {
+    return pending.has(realm)
+  }
+
+  return { getOrExchange, invalidate, exchange, adopt, isExchanging }
 })

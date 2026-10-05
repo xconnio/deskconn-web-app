@@ -4,6 +4,7 @@ import type { AppWindow } from '@/composables/useWindowManager'
 import { requestMachinesPicker } from '@/router/index'
 import { openWindowsOverview } from '@/router/navigation'
 import { useAccountPanelStore } from '@/stores/accountPanel'
+import { useSessionCacheStore } from '@/stores/sessionCache'
 
 export interface DockAppDef {
   id: string
@@ -47,16 +48,11 @@ const emit = defineEmits<{
 
 const accountPanelStore = useAccountPanelStore()
 
-// Short badge for the machine-name icon — first letters of up to the first
-// two words (e.g. "Dev Box" -> "DB", "workstation" -> "W").
-const machineInitials = computed(() =>
-  props.desktopName
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join(''),
+const sessionCacheStore = useSessionCacheStore()
+const connectionMode = computed(() =>
+  props.offline ? 'offline' : sessionCacheStore.isP2P(props.realm) ? 'p2p' : 'routed',
 )
+const CONNECTION_LABELS = { p2p: 'p2p', routed: 'routed', offline: 'offline' }
 
 const dockRootRef = ref<HTMLElement | null>(null)
 const iconEls = new Map<string, HTMLElement>()
@@ -186,7 +182,6 @@ const STATIC_TOOLTIP_LABELS: Record<string, string> = {
 const tooltipText = computed(() => {
   const id = hoveredAppId.value
   if (!id) return ''
-  if (id === 'machine-badge') return props.desktopName
   if (id in STATIC_TOOLTIP_LABELS) return STATIC_TOOLTIP_LABELS[id]!
   const app = visibleApps.value.find((a) => a.id === id)
   if (!app) return ''
@@ -496,19 +491,6 @@ onUnmounted(() => {
             <i class="bi bi-person-circle"></i>
           </button>
         </div>
-
-        <div
-          class="dock-icon-wrapper"
-          :ref="(el) => setIconRef('machine-badge', el as Element | null)"
-        >
-          <div
-            class="dock-icon dock-icon-machine-badge"
-            @mouseenter="showTooltip('machine-badge')"
-            @mouseleave="hideTooltip"
-          >
-            {{ machineInitials }}
-          </div>
-        </div>
       </template>
 
       <!-- Mobile: apps live on the desktop as icons instead (.desktop-icon-grid
@@ -532,6 +514,14 @@ onUnmounted(() => {
         {{ tooltipText }}
       </div>
     </Teleport>
+  </div>
+
+  <!-- Floats over the desktop rather than living in the dock, so the name has
+       room to be readable whichever edge the dock sits on. -->
+  <div class="machine-badge" :class="mobile ? 'machine-badge-mobile' : `machine-badge-${position}`">
+    <span class="machine-badge-dot" :class="`machine-badge-dot-${connectionMode}`"></span>
+    <span class="machine-badge-name">{{ desktopName }}</span>
+    <span class="machine-badge-mode">({{ CONNECTION_LABELS[connectionMode] }})</span>
   </div>
 
   <!-- Mobile: pinned apps as desktop icons instead of dock icons — same
@@ -760,13 +750,79 @@ onUnmounted(() => {
   box-shadow: none;
 }
 
-.dock-icon-machine-badge {
-  font-size: 0.95rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.85);
-  background: rgba(255, 255, 255, 0.1);
-  cursor: default;
+.machine-badge {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: min(320px, calc(100% - 2rem));
+  padding: 0.35rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  background: rgba(20, 20, 22, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Sits just above the bottom bar; with a side dock it centres in the
+   remaining desktop area instead (4.5rem = the docks' min size). */
+.machine-badge-bottom {
+  bottom: calc(4.5rem + 0.5rem);
+}
+
+.machine-badge-left {
+  left: calc(50% + 2.25rem);
+}
+
+.machine-badge-right {
+  left: calc(50% - 2.25rem);
+}
+
+/* Above the bottom nav, and under any open app window (those stack from
+   z-index 2, the icon grid is 1). */
+.machine-badge-mobile {
+  bottom: calc(3.2rem + env(safe-area-inset-bottom, 0px) + 0.6rem);
+  z-index: 1;
+}
+
+.machine-badge-dot {
+  flex-shrink: 0;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+}
+
+.machine-badge-dot-p2p {
+  background: #22c55e;
+}
+
+.machine-badge-dot-routed {
+  background: #f59e0b;
+}
+
+.machine-badge-dot-offline {
+  background: #ef4444;
+}
+
+.machine-badge-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.machine-badge-mode {
+  flex-shrink: 0;
+  opacity: 0.6;
 }
 
 .dock-icon-machines,
@@ -1014,7 +1070,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-content: flex-start;
   gap: 1.1rem 0.75rem;
-  padding: 1rem 1rem calc(3.2rem + env(safe-area-inset-bottom, 0px) + 0.75rem);
+  padding: 1rem 1rem calc(3.2rem + env(safe-area-inset-bottom, 0px) + 3.25rem);
   overflow-y: auto;
 }
 
