@@ -119,20 +119,15 @@ const handleSuccessConfirm = () => {
               </div>
             </div>
 
-            <div class="d-flex justify-content-between align-items-center mb-4">
-              <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="rememberMe" />
-                <label class="form-check-label text-muted" for="rememberMe"> Remember me </label>
-              </div>
+            <div class="d-grid gap-2 mt-4">
+              <button type="submit" class="btn btn-primary btn-lg">Login</button>
+            </div>
+            <div class="text-center mt-3">
               <router-link
                 to="/forgot-password"
                 class="text-primary text-decoration-none small fw-bold"
                 >Forgot password?</router-link
               >
-            </div>
-
-            <div class="d-grid gap-2 mt-4">
-              <button type="submit" class="btn btn-primary btn-lg">Login</button>
             </div>
             <div class="text-center mt-4">
               <span class="text-muted">Don't have an account? </span>
