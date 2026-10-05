@@ -2,7 +2,6 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { type WampSession } from '../services/wamp'
 import { authService } from '../services/authService'
-import { registerWebRTCSession } from '../services/rtcRegistry'
 import { SecureStorage } from '../services/storageService'
 import { generateDeviceID, generateKeys } from '../utils/crypto'
 import { type User } from '../types'
@@ -285,34 +284,11 @@ export const useAuthStore = defineStore('auth', () => {
     return await authService.shellDesktop(creds.authId, creds.privateKey, realm)
   }
 
-  async function shellWebRTC(realm: string) {
+  async function shellWebRTC(realm: string, routed: WampSession) {
     const creds = await getDeviceCreds()
     if (!creds) return false
 
-    const [webrtcSession, webrtc] = await authService.shellWebRTCDesktop(
-      creds.authId,
-      creds.privateKey,
-      realm,
-    )
-    registerWebRTCSession(webrtcSession, webrtc)
-    return webrtcSession
-  }
-
-  async function shell(realm: string) {
-    // Try WebRTC with a 10-second timeout, fall back to regular (WebTransport) shell on failure or timeout
-    try {
-      const webrtcResult = await Promise.race([
-        shellWebRTC(realm),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('WebRTC connection timeout')), 10000),
-        ),
-      ])
-      if (webrtcResult) return webrtcResult
-    } catch {
-      // Timed out or connection error — fall through to shellWamp
-    }
-
-    return await shellWamp(realm)
+    return await authService.shellWebRTCDesktop(creds.authId, creds.privateKey, realm, routed)
   }
 
   // Drops a principal key that's no longer good (expired/deleted/rejected)
@@ -449,6 +425,5 @@ export const useAuthStore = defineStore('auth', () => {
     updateProfile,
     shellWamp,
     shellWebRTC,
-    shell,
   }
 })

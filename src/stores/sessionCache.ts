@@ -1,7 +1,25 @@
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import { defineStore } from 'pinia'
 import type { Session } from 'xconn'
+import type { WebRTCSession } from 'xconn-webrtc-js'
+import { registerWebRTCSession } from '../services/rtcRegistry'
 import { useAuthStore } from './auth'
+import { useSessionEncryptionStore } from './sessionEncryption'
+
+const P2P_TIMEOUT_MS = 10_000
+
+// Realm -> the session currently upgraded to P2P. Keyed to the session (not
+// just the realm) so an old session dropping can't clear a newer one's flag.
+const p2pSessions = shallowRef(new Map<string, Session>())
+
+function setP2P(realm: string, session: Session, on: boolean) {
+  const has = p2pSessions.value.get(realm) === session
+  if (on === has) return
+  const next = new Map(p2pSessions.value)
+  if (on) next.set(realm, session)
+  else next.delete(realm)
+  p2pSessions.value = next
+}
 
 // Both live outside the store so they persist across hot reloads / resets
 const cache = new Map<string, Session>()
@@ -42,10 +60,10 @@ export const useSessionCacheStore = defineStore('sessionCache', () => {
 
     const attempt = (async (): Promise<Session | null> => {
       const authStore = useAuthStore()
-      const raw = await authStore.shell(realm)
-      if (!raw) return null
+      const routed = await authStore.shellWamp(realm)
+      if (!routed) return null
 
-      const session = raw as Session
+      const session = upgradable(realm, routed as Session)
       cache.set(realm, session)
 
       session.onDisconnect(async () => {
@@ -91,8 +109,14 @@ export const useSessionCacheStore = defineStore('sessionCache', () => {
     return false
   }
 
+  // Reactive: flips once the background P2P upgrade lands (see upgradable()).
+  function isP2P(realm: string): boolean {
+    return p2pSessions.value.has(realm)
+  }
+
   return {
     acquire,
+    isP2P,
     invalidateAll,
     invalidate,
     isActive,
@@ -102,3 +126,110 @@ export const useSessionCacheStore = defineStore('sessionCache', () => {
     clearUnreachable,
   }
 })
+
+// Routed first so the desktop is usable right away; P2P is negotiated over
+// that same session in the background and swapped in once it's up. Callers
+// keep this one stable object, so the upgrade is invisible to them. The
+// routed session stays open after the swap: it carries the WebRTC signaling
+// and any WebTransport streams opened before the upgrade.
+// ponytail: no fallback to routed if P2P later drops — the whole session
+// disconnects and the next acquire() starts over (routed, then P2P again).
+function upgradable(realm: string, routed: Session): Session {
+  let current = routed
+  let p2p: Session | null = null
+  let closed = false
+  let inflight = 0
+  const callbacks: Array<(reason: string) => Promise<void>> = []
+
+  async function drop(reason: string) {
+    if (closed) return
+    closed = true
+    setP2P(realm, session, false)
+    for (const s of [routed, p2p]) if (s?.isConnected()) s.leave().catch(() => {})
+    for (const cb of callbacks) await cb(reason).catch(() => {})
+  }
+
+  function track<T>(p: Promise<T>): Promise<T> {
+    inflight++
+    return p.finally(() => inflight--)
+  }
+
+  const overrides: Record<string | symbol, unknown> = {
+    call: (...args: Parameters<Session['call']>) => track(current.call(...args)),
+    callProgress: async (...args: Parameters<Session['callProgress']>) => {
+      inflight++
+      try {
+        const result = await current.callProgress(...args)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(result as any).finalResultPromise.catch(() => {}).finally(() => inflight--)
+        return result
+      } catch (err) {
+        inflight--
+        throw err
+      }
+    },
+    isConnected: () => !closed && current.isConnected(),
+    onDisconnect: (cb: (reason: string) => Promise<void>) => { callbacks.push(cb) },
+    leave: () => drop('wamp.close.close_realm'),
+  }
+
+  const session = new Proxy(routed, {
+    get(_, prop) {
+      if (prop in overrides) return overrides[prop]
+      // openStream is a WebTransport-only feature, so it always stays routed.
+      const target = prop === 'openStream' ? routed : current
+      const value = Reflect.get(target, prop)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+
+  routed.onDisconnect(async (reason) => {
+    if (current === routed) await drop(reason)
+  })
+
+  void (async () => {
+    const authStore = useAuthStore()
+    const encryption = useSessionEncryptionStore()
+    const attempt = authStore.shellWebRTC(realm, routed)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('WebRTC connection timeout')), P2P_TIMEOUT_MS)
+    })
+    let webrtc: WebRTCSession
+    try {
+      const result = await Promise.race([attempt, timeout])
+      if (!result) return
+      ;[p2p, webrtc] = result as [Session, WebRTCSession]
+    } catch {
+      // Timed out or failed: stay routed, and close a late P2P session if it shows up.
+      attempt.then((r) => { if (r) r[0].leave().catch(() => {}) }).catch(() => {})
+      return
+    } finally {
+      clearTimeout(timer)
+    }
+
+    const upgraded = p2p
+    try {
+      // Fails on deskconnd builds without key exchange — nothing to re-key then.
+      const keys = await encryption.exchange(upgraded).catch(() => null)
+      // Swap only while nothing is in flight on routed: an encrypted call or
+      // key exchange straddling the swap would decrypt with the wrong keys.
+      while (!closed && (inflight > 0 || encryption.isExchanging(realm))) {
+        await new Promise((r) => setTimeout(r, 50))
+      }
+      if (closed || !upgraded.isConnected()) throw new Error('session closed during upgrade')
+
+      if (keys) encryption.adopt(realm, keys)
+      else encryption.invalidate(realm)
+      registerWebRTCSession(session, webrtc)
+      current = upgraded
+      upgraded.onDisconnect(drop)
+      setP2P(realm, session, true)
+    } catch {
+      p2p = null
+      upgraded.leave().catch(() => {})
+    }
+  })()
+
+  return session
+}
