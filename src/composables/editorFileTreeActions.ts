@@ -13,6 +13,8 @@ export interface EditorFileTreeActions {
   toggleDir(path: string): void
   openFile(entry: FileEntry): void
   openFilePinned(entry: FileEntry): void
+  isSelected(path: string): boolean
+  select(path: string): void
 }
 
 export const editorFileTreeActionsKey: InjectionKey<EditorFileTreeActions> = Symbol('editorFileTreeActions')

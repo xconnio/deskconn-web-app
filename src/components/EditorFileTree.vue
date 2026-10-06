@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, provide, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, provide, reactive, ref, shallowRef, watch } from 'vue'
 import type { Session } from 'xconn'
 import type { FileEntry } from '@/types'
 import type { EncryptionKeys } from '@/utils/encryption'
@@ -79,6 +79,82 @@ async function toggleDir(path: string) {
   }
 }
 
+// ── Keyboard navigation ─────────────────────────────────────────────────────
+const treeEl = ref<HTMLElement | null>(null)
+const selectedPath = ref<string | null>(null)
+
+// Every row currently on screen, top to bottom, with its parent dir — what
+// the arrow keys walk.
+const visibleRows = computed(() => {
+  const rows: { entry: FileEntry; parent: string | null }[] = []
+  const walk = (entries: FileEntry[], parent: string | null) => {
+    for (const entry of entries) {
+      rows.push({ entry, parent })
+      if (entry.is_dir && expanded.has(entry.path)) walk(childrenByPath.get(entry.path) ?? [], entry.path)
+    }
+  }
+  walk(rootEntries.value, null)
+  return rows
+})
+
+async function select(path: string) {
+  selectedPath.value = path
+  await nextTick()
+  const tree = treeEl.value
+  const row = tree?.querySelector(`[data-path="${CSS.escape(path)}"]`)
+  if (!tree || !row) return
+  // Scrolls only the tree itself. scrollIntoView would also nudge every
+  // ancestor (window body, editor panes), which shows up as a jerk.
+  const r = row.getBoundingClientRect()
+  const t = tree.getBoundingClientRect()
+  if (r.top < t.top) tree.scrollTop -= t.top - r.top
+  else if (r.bottom > t.bottom) tree.scrollTop += r.bottom - t.bottom
+}
+
+// Up/Down move, Home/End jump, Right expands (or steps into an expanded dir),
+// Left collapses (or steps out to the parent), Enter toggles a dir / opens a file.
+function onKeydown(e: KeyboardEvent) {
+  // Keys aimed at the Refresh button inside the tree stay with it.
+  if (e.target !== treeEl.value) return
+  const rows = visibleRows.value
+  if (!rows.length) return
+  const i = rows.findIndex((r) => r.entry.path === selectedPath.value)
+  const row = rows[i]
+
+  switch (e.key) {
+    case 'ArrowDown':
+      void select(rows[Math.min(i + 1, rows.length - 1)]!.entry.path)
+      break
+    case 'ArrowUp':
+      void select(rows[Math.max(i - 1, 0)]!.entry.path)
+      break
+    case 'Home':
+      void select(rows[0]!.entry.path)
+      break
+    case 'End':
+      void select(rows[rows.length - 1]!.entry.path)
+      break
+    case 'ArrowRight':
+      if (!row?.entry.is_dir) break
+      if (!expanded.has(row.entry.path)) void toggleDir(row.entry.path)
+      else if (rows[i + 1]?.parent === row.entry.path) void select(rows[i + 1]!.entry.path)
+      break
+    case 'ArrowLeft':
+      if (!row) break
+      if (row.entry.is_dir && expanded.has(row.entry.path)) void toggleDir(row.entry.path)
+      else if (row.parent) void select(row.parent)
+      break
+    case 'Enter':
+      if (!row) break
+      if (row.entry.is_dir) void toggleDir(row.entry.path)
+      else emit('open-file-pinned', row.entry)
+      break
+    default:
+      return
+  }
+  e.preventDefault()
+}
+
 provide(editorFileTreeActionsKey, {
   isExpanded: (path) => expanded.has(path),
   childrenOf: (path) => childrenByPath.get(path),
@@ -87,13 +163,15 @@ provide(editorFileTreeActionsKey, {
   toggleDir,
   openFile: (entry) => emit('open-file', entry),
   openFilePinned: (entry) => emit('open-file-pinned', entry),
+  isSelected: (path) => selectedPath.value === path,
+  select: (path) => void select(path),
 })
 
 const rootStatus = computed(() => statusByPath.value.get(props.rootPath))
 </script>
 
 <template>
-  <div class="file-tree">
+  <div ref="treeEl" class="file-tree" tabindex="0" @keydown="onKeydown">
     <div
       class="tree-root-label"
       :class="{
@@ -133,6 +211,15 @@ const rootStatus = computed(() => statusByPath.value.get(props.rootPath))
   overflow-y: auto;
   overflow-x: hidden;
   background: #21211d;
+}
+
+.file-tree:focus {
+  outline: none;
+}
+/* Brighter while the tree has focus, so it's clear the arrow keys act here. */
+.file-tree:focus :deep(.tree-row-selected) {
+  background: rgba(117, 163, 209, 0.22);
+  box-shadow: inset 1px 0 0 #75a3d1;
 }
 
 .tree-root-label {

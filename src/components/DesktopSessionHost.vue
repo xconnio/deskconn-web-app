@@ -411,9 +411,9 @@ const apps: AppDef[] = [
   {
     id: 'text-editor',
     label: 'Text Editor',
-    icon: 'bi-file-earmark-richtext',
+    icon: 'bi-text-editor',
     iconColor: '#ffffff',
-    iconBg: '#0f766e',
+    iconBg: '#0284c7',
     width: 640,
     height: 420,
     minWidth: 420,
@@ -539,7 +539,7 @@ type PreviewEntry = { path: string; name: string; size: number }
 const PREVIEW_STYLE: Record<FilePreviewType, { icon: string; color: string; bg: string }> = {
   image: { icon: imageViewerApp.icon, color: imageViewerApp.iconColor, bg: imageViewerApp.iconBg },
   video: { icon: videoPlayerApp.icon, color: videoPlayerApp.iconColor, bg: videoPlayerApp.iconBg },
-  text: { icon: 'bi-file-earmark-richtext', color: '#ffffff', bg: '#0f766e' },
+  text: { icon: 'bi-text-editor', color: '#ffffff', bg: '#0284c7' },
   audio: { icon: 'bi-file-earmark-music', color: '#ffffff', bg: '#e11d48' },
   pdf: { icon: 'bi-file-earmark-pdf', color: '#ffffff', bg: '#dc2626' },
   none: { icon: 'bi-file-earmark', color: '#ffffff', bg: '#475569' },

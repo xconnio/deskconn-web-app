@@ -20,7 +20,10 @@ const children = computed(() => actions.childrenOf(props.entry.path))
 const isLoading = computed(() => actions.isLoading(props.entry.path))
 const gitStatus = computed(() => actions.statusOf(props.entry.path))
 
+const isSelected = computed(() => actions.isSelected(props.entry.path))
+
 function onClick() {
+  actions.select(props.entry.path)
   if (props.entry.is_dir) {
     actions.toggleDir(props.entry.path)
   } else {
@@ -40,7 +43,9 @@ function onDblClick() {
       'tree-row-untracked': gitStatus === 'untracked' || gitStatus === 'added',
       'tree-row-modified': gitStatus === 'modified',
       'tree-row-ignored': gitStatus === 'ignored',
+      'tree-row-selected': isSelected,
     }"
+    :data-path="entry.path"
     :style="{ paddingLeft: `${depth * 14 + 8}px` }"
     @click="onClick"
     @dblclick="onDblClick"
@@ -82,6 +87,9 @@ function onDblClick() {
 }
 .tree-row:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+.tree-row-selected {
+  background: rgba(255, 255, 255, 0.1);
 }
 .tree-row-untracked,
 .tree-row-untracked .tree-name {
