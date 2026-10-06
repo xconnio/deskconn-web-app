@@ -541,6 +541,8 @@ function maybeLoadMore() {
 }
 
 function handleScroll() {
+  // Pictures/Documents/Videos share this scroll area but load their own pages.
+  if (activePlace.value !== 'files') return
   const el = explorerShellRef.value
   if (!el) return
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
@@ -1534,6 +1536,7 @@ onUnmounted(() => {
         :realm="realm"
         :category="activePlace"
         :desktop-name="desktopName"
+        :scroll-container="explorerShellRef"
         :focused="focused"
         @open-files="onIndexOpenFiles"
         @preview-file="(session, entry, entries) => emit('preview-file', session, entry, entries)"

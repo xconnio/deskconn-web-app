@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, shallowRef, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, shallowRef, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { type Session } from 'xconn'
 
 import { useSessionCacheStore } from '@/stores/sessionCache'
@@ -40,6 +40,9 @@ const props = defineProps<{
   category: string
   desktopName?: string
   focused?: boolean
+  /** The host's scroll area (Files app): when set, the list grows in place and
+   * scrolls with it, so there's one scrollbar instead of a nested one. */
+  scrollContainer?: HTMLElement | null
 }>()
 
 const emit = defineEmits<{
@@ -251,8 +254,17 @@ async function loadMore() {
   maybeLoadMore()
 }
 
+function scrollEl() {
+  return props.scrollContainer ?? entryListRef.value
+}
+
+watch(() => props.scrollContainer, (el, _, onCleanup) => {
+  el?.addEventListener('scroll', handleScroll, { passive: true })
+  onCleanup(() => el?.removeEventListener('scroll', handleScroll))
+}, { immediate: true })
+
 function maybeLoadMore() {
-  const el = entryListRef.value
+  const el = scrollEl()
   if (!el || !hasMore.value || isLoadingMore.value) return
   if (el.scrollHeight <= el.clientHeight + 200) {
     void loadMore()
@@ -260,7 +272,7 @@ function maybeLoadMore() {
 }
 
 function handleScroll() {
-  const el = entryListRef.value
+  const el = scrollEl()
   if (!el) return
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
     void loadMore()
@@ -402,7 +414,7 @@ onUnmounted(() => {
         v-else
         ref="entryListRef"
         class="entry-list"
-        :class="{ 'grid-view': isGridView }"
+        :class="{ 'grid-view': isGridView, 'entry-list--flow': !!scrollContainer }"
         @scroll="handleScroll"
         @click.self="selectedEntry = null"
       >
@@ -500,6 +512,7 @@ onUnmounted(() => {
 
 /* ── List view ── */
 .entry-list { display: flex; flex-direction: column; gap: 0.75rem; overflow-y: auto; padding: 0.75rem 1rem; flex: 1; }
+.entry-list--flow { overflow-y: visible; flex: none; }
 .entry-row { -webkit-touch-callout: none; display: flex; justify-content: space-between; align-items: center; gap: 1rem; width: 100%; text-align: left; border: 1px solid rgba(113,130,149,0.14); border-radius: 18px; background: #fff; padding: 0.95rem 1rem; cursor: pointer; font-family: inherit; transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease; }
 .entry-row:hover, .entry-row.active { border-color: rgba(0,0,0,0.2); box-shadow: 0 10px 24px rgba(71,85,105,0.08); }
 /* .active already shows selection — suppress the native focus ring, which
